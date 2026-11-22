@@ -1138,6 +1138,25 @@ pre.code-block {
   gap: 13px;
 }
 
+.auth-diagnostic {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.auth-diagnostic-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* ==================== RESPONSIVE DEVICE CLASSES ==================== */
 .mobile-nav {
   display: none;

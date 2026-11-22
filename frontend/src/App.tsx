@@ -46,6 +46,14 @@ export default function App() {
   // Global backend health & cross-module state
   const [backendReady, setBackendReady] = useState<boolean | null>(null);
   const [backendDetail, setBackendDetail] = useState<string>("");
+  const [backendMeta, setBackendMeta] = useState<{
+    errorCode?: string;
+    backend?: string;
+    port?: number | null;
+    usesPooler?: boolean;
+    sslEnforced?: boolean;
+  } | null>(null);
+  const [probingHealth, setProbingHealth] = useState(false);
   const [initialShare, setInitialShare] = useState<{ title: string; text: string; url: string } | null>(null);
   const [pendingNeonPrompt, setPendingNeonPrompt] = useState("");
 
@@ -57,23 +65,50 @@ export default function App() {
     setMoreDrawerOpen(false);
   }
 
+  async function probeBackendReadiness() {
+    setProbingHealth(true);
+    try {
+      const r = await fetch("/health/ready", { cache: "no-store" });
+      const data = await r.json().catch(() => null);
+      const db = data?.database;
+      const isReady = Boolean(r.ok && data?.status === "ready" && db?.healthy !== false);
+      setBackendReady(isReady);
+      if (isReady) {
+        setBackendDetail("");
+        setBackendMeta(null);
+        // Clear any stale database-availability auth error once DB recovers
+        setAuthErr((prev) =>
+          prev && /postgresql|database|ultron_database_url|db_auth_failed/i.test(prev) ? "" : prev
+        );
+      } else {
+        const detail =
+          db?.detail ||
+          data?.error?.message ||
+          (!r.ok ? `Backend readiness probe returned HTTP ${r.status}.` : "Backend database is not ready.");
+        setBackendDetail(detail);
+        setBackendMeta(
+          db
+            ? {
+                errorCode: db.error_code || undefined,
+                backend: db.backend || undefined,
+                port: db.port ?? null,
+                usesPooler: Boolean(db.uses_pooler),
+                sslEnforced: Boolean(db.sslmode_enforced),
+              }
+            : null
+        );
+      }
+    } catch {
+      setBackendReady(false);
+      setBackendDetail("Unable to reach backend /health/ready endpoint.");
+      setBackendMeta(null);
+    } finally {
+      setProbingHealth(false);
+    }
+  }
+
   useEffect(() => {
-    fetch("/health/ready")
-      .then(async (r) => {
-        if (!r.ok) {
-          setBackendReady(false);
-          setBackendDetail(`Backend readiness probe returned HTTP ${r.status}.`);
-          return;
-        }
-        const data = await r.json().catch(() => null);
-        const ready = Boolean(data && data.status === "ready");
-        setBackendReady(ready);
-        setBackendDetail(ready ? "" : data?.database?.detail || "Backend database is not ready.");
-      })
-      .catch(() => {
-        setBackendReady(false);
-        setBackendDetail("Unable to reach backend /health/ready endpoint.");
-      });
+    probeBackendReadiness();
 
     // Capture iOS / PWA Web Share Target query params (BRIDGE)
     const params = new URLSearchParams(window.location.search);
@@ -86,6 +121,18 @@ export default function App() {
       window.history.replaceState({}, "", "/");
     }
   }, []);
+
+  // Auto-recheck readiness on window focus or every 20s while unauthenticated & degraded
+  useEffect(() => {
+    if (user || backendReady !== false) return;
+    const onFocus = () => probeBackendReadiness();
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(() => probeBackendReadiness(), 20000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
+    };
+  }, [user, backendReady]);
 
   // Global keyboard shortcuts (Cmd/Ctrl+K Command Palette & Alt+1..6 quick nav)
   useEffect(() => {
@@ -111,6 +158,10 @@ export default function App() {
 
   async function handleAuth(e: React.FormEvent) {
     e.preventDefault();
+    if (backendReady === false) {
+      await probeBackendReadiness();
+      return;
+    }
     setAuthErr("");
     setAuthSubmitting(true);
     try {
@@ -128,7 +179,15 @@ export default function App() {
       setUser(login.user);
       navigate("command", "home");
     } catch (err: any) {
-      setAuthErr(err.message);
+      const msg = String(err?.message || "Authentication failed.");
+      // If auth failed due to database unavailability, refresh readiness so a single unified panel is shown
+      if (/postgresql|database|ultron_database_url|db_auth_failed/i.test(msg)) {
+        setBackendReady(false);
+        setBackendDetail(msg);
+        setAuthErr("");
+      } else {
+        setAuthErr(msg);
+      }
     } finally {
       setAuthSubmitting(false);
     }
@@ -140,6 +199,17 @@ export default function App() {
   }
 
   if (!user) {
+    const normalizedBackend = backendDetail.trim().toLowerCase();
+    const normalizedAuth = authErr.trim().toLowerCase();
+    const showDistinctAuthErr = Boolean(
+      normalizedAuth &&
+        (!normalizedBackend ||
+          (normalizedAuth !== normalizedBackend &&
+            !normalizedAuth.includes(normalizedBackend) &&
+            !normalizedBackend.includes(normalizedAuth)))
+    );
+    const dbUnavailable = backendReady === false;
+
     return (
       <div className="auth-wrap">
         <div className="auth-shell">
@@ -176,7 +246,10 @@ export default function App() {
                 id="auth-tab-login"
                 type="button"
                 className={`btn btn-sm ${authMode === "login" ? "" : "btn-secondary"}`}
-                onClick={() => setAuthMode("login")}
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthErr("");
+                }}
               >
                 Sign In
               </button>
@@ -184,21 +257,54 @@ export default function App() {
                 id="auth-tab-bootstrap"
                 type="button"
                 className={`btn btn-sm ${authMode === "bootstrap" ? "" : "btn-secondary"}`}
-                onClick={() => setAuthMode("bootstrap")}
+                onClick={() => {
+                  setAuthMode("bootstrap");
+                  setAuthErr("");
+                }}
               >
                 First-Run Owner Setup
               </button>
             </div>
 
-            {backendReady === false && backendDetail && (
-              <div className="alert-box alert-warn">{backendDetail}</div>
+            {dbUnavailable && backendDetail && (
+              <div id="auth-diagnostic-banner" className="alert-box alert-warn auth-diagnostic" role="alert">
+                <div className="row-between" style={{ marginBottom: 6 }}>
+                  <strong className="mono" style={{ fontSize: 11.5 }}>
+                    {backendMeta?.errorCode || "DATABASE_DEGRADED"}
+                  </strong>
+                  <button
+                    id="auth-recheck-btn"
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={probingHealth}
+                    onClick={probeBackendReadiness}
+                  >
+                    {probingHealth ? "Checking..." : "Re-check Status"}
+                  </button>
+                </div>
+                <div className="auth-diagnostic-text">{backendDetail}</div>
+                {backendMeta?.backend && (
+                  <div className="muted mono" style={{ fontSize: 11, marginTop: 6 }}>
+                    {backendMeta.backend.toUpperCase()}
+                    {backendMeta.usesPooler ? " · POOLER" : ""}
+                    {backendMeta.port ? ` · PORT ${backendMeta.port}` : ""}
+                    {backendMeta.sslEnforced ? " · SSL" : ""}
+                  </div>
+                )}
+              </div>
             )}
-            {authErr && <div className="alert-box alert-error">{authErr}</div>}
+
+            {showDistinctAuthErr && (
+              <div id="auth-error-banner" className="alert-box alert-error" role="alert">
+                {authErr}
+              </div>
+            )}
 
             <input
               id="auth-username"
               className="input"
               required
+              disabled={dbUnavailable}
               autoComplete="username"
               placeholder="Username"
               value={username}
@@ -209,6 +315,7 @@ export default function App() {
                 id="auth-email"
                 className="input"
                 required
+                disabled={dbUnavailable}
                 type="email"
                 autoComplete="email"
                 placeholder="Owner Email"
@@ -220,14 +327,24 @@ export default function App() {
               id="auth-password"
               className="input"
               required
+              disabled={dbUnavailable}
               type="password"
               autoComplete={authMode === "bootstrap" ? "new-password" : "current-password"}
               placeholder="Password (min 12 chars for bootstrap)"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <button id="auth-submit" className="btn" type="submit" disabled={authSubmitting}>
-              {authSubmitting
+            <button
+              id="auth-submit"
+              className="btn"
+              type="submit"
+              disabled={authSubmitting || probingHealth || dbUnavailable}
+            >
+              {dbUnavailable
+                ? authMode === "bootstrap"
+                  ? "Owner Setup Unavailable (Database Degraded)"
+                  : "Sign In Unavailable (Database Degraded)"
+                : authSubmitting
                 ? "Verifying..."
                 : authMode === "login"
                 ? "Authenticate"
