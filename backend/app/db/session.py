@@ -9,12 +9,12 @@ from typing import Any
 
 from sqlalchemy import Engine, create_engine, event, select, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings, get_settings
-from app.core.exceptions import DatabaseConfigurationError
+from app.core.exceptions import DatabaseConfigurationError, DatabaseUnavailableError
 from app.core.logging import redact_secrets
 from app.db.models import Base, SchemaMigration, Tenant
 
@@ -31,10 +31,76 @@ MIGRATION_REGISTRY: list[tuple[str, str]] = [
 ]
 
 
-def _is_supabase_pooler_url(url: str) -> bool:
+def _is_supabase_pooler_url(url: str, raw_url: str = "") -> bool:
     parsed = make_url(url)
     host = (parsed.host or "").lower()
-    return parsed.port == 6543 or "pooler.supabase" in host
+    raw_lower = raw_url.lower()
+    return (
+        parsed.port == 6543
+        or "pooler.supabase" in host
+        or "pgbouncer=" in raw_lower
+        or "supa=" in raw_lower
+    )
+
+
+def classify_database_error(exc: Exception, settings: Settings) -> tuple[str, str]:
+    """Return a non-secret `(error_code, redacted_diagnostic_detail)` tuple for runtime DB failures."""
+    if isinstance(exc, DatabaseConfigurationError):
+        return exc.code, exc.message
+
+    raw_msg = redact_secrets(str(exc))
+    lower = raw_msg.lower()
+    diag = settings.database_diagnostics()
+
+    if "invalid uri query parameter" in lower:
+        return (
+            "DB_INVALID_URI_PARAM",
+            f"Unsupported query parameter in ULTRON_DATABASE_URL ({raw_msg[:220]}).",
+        )
+    if (
+        "network is unreachable" in lower
+        or "cannot assign requested address" in lower
+        or "could not translate host name" in lower
+        or "name or service not known" in lower
+    ):
+        if diag.get("port") == 5432 and not diag.get("uses_pooler"):
+            return (
+                "DB_IPV6_DIRECT_PORT_5432",
+                "Cannot reach Supabase direct database host on port 5432 from IPv4 serverless runtime. "
+                "Update ULTRON_DATABASE_URL to the Supabase Transaction Pooler URI (port 6543, *.pooler.supabase.com).",
+            )
+        return (
+            "DB_HOST_UNREACHABLE",
+            "PostgreSQL host is unreachable from this runtime. Verify ULTRON_DATABASE_URL uses the Supabase "
+            "Transaction Pooler host (*.pooler.supabase.com:6543) and that the Supabase project is active.",
+        )
+    if "tenant or user not found" in lower:
+        return (
+            "DB_POOLER_TENANT_USER_NOT_FOUND",
+            "Supabase Transaction Pooler rejected the username. Ensure ULTRON_DATABASE_URL uses the pooled "
+            "username format `postgres.<project-ref>` copied from Supabase -> Connect -> Transaction Pooler.",
+        )
+    if "password authentication failed" in lower or "authentication failed" in lower:
+        return (
+            "DB_AUTH_FAILED",
+            "PostgreSQL authentication failed. Verify the database password in ULTRON_DATABASE_URL "
+            "(URL-encode special characters like @, #, %, / if present).",
+        )
+    if "timeout" in lower or "timed out" in lower or "connection refused" in lower:
+        return (
+            "DB_CONNECTION_TIMEOUT",
+            "PostgreSQL connection timed out or was refused. Confirm the Supabase project is not paused "
+            "and ULTRON_DATABASE_URL uses the Transaction Pooler (port 6543) with SSL.",
+        )
+    if "ssl" in lower and ("required" in lower or "certificate" in lower or "handshake" in lower):
+        return (
+            "DB_SSL_ERROR",
+            f"PostgreSQL SSL/TLS negotiation failed ({raw_msg[:220]}). Ensure sslmode=require is enabled.",
+        )
+    return (
+        "DB_CONNECTION_FAILED",
+        f"Database connection failed ({type(exc).__name__}): {raw_msg[:240]}",
+    )
 
 
 def _build_engine(settings: Settings) -> Engine:
@@ -61,7 +127,7 @@ def _build_engine(settings: Settings) -> Engine:
         parsed = make_url(url)
         connect_args: dict[str, Any] = {"connect_timeout": 10}
         if "psycopg" in (parsed.drivername or "").lower() and (
-            settings.is_vercel or _is_supabase_pooler_url(url)
+            settings.is_vercel or _is_supabase_pooler_url(url, settings.database_url)
         ):
             # Disable psycopg v3 automatic server-side prepared statements for
             # PgBouncer / Supabase Supavisor transaction pooler compatibility.
@@ -186,8 +252,20 @@ def get_session_factory(settings: Settings | None = None) -> sessionmaker[Sessio
 def get_db() -> Generator[Session, None, None]:
     """FastAPI dependency yielding a scoped SQLAlchemy session."""
     cfg = get_settings()
-    ensure_database_initialized(cfg)
-    factory = get_session_factory(cfg)
+    try:
+        ensure_database_initialized(cfg)
+        factory = get_session_factory(cfg)
+    except DatabaseConfigurationError:
+        raise
+    except SQLAlchemyError as exc:
+        err_code, detail = classify_database_error(exc, cfg)
+        raise DatabaseUnavailableError(
+            detail,
+            details={
+                "error_code": err_code,
+                **cfg.database_diagnostics(),
+            },
+        ) from exc
     db = factory()
     try:
         yield db
@@ -195,14 +273,33 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def check_database_health(settings: Settings | None = None) -> tuple[bool, str]:
-    """Execute a lightweight connectivity probe against the configured database."""
+def check_database_health_detailed(settings: Settings | None = None) -> dict[str, Any]:
+    """Execute a lightweight connectivity probe and return structured non-secret diagnostics."""
+    cfg = settings or get_settings()
+    diag = cfg.database_diagnostics()
     try:
-        engine = get_engine(settings)
+        engine = get_engine(cfg)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return True, "ok"
-    except DatabaseConfigurationError as exc:
-        return False, exc.message
+        return {
+            "healthy": True,
+            "backend": cfg.database_backend,
+            "error_code": None,
+            "detail": "ok",
+            **diag,
+        }
     except Exception as exc:
-        return False, redact_secrets(str(exc))
+        err_code, detail = classify_database_error(exc, cfg)
+        return {
+            "healthy": False,
+            "backend": cfg.database_backend,
+            "error_code": err_code,
+            "detail": detail,
+            **diag,
+        }
+
+
+def check_database_health(settings: Settings | None = None) -> tuple[bool, str]:
+    """Execute a lightweight connectivity probe against the configured database."""
+    report = check_database_health_detailed(settings)
+    return bool(report["healthy"]), str(report["detail"])

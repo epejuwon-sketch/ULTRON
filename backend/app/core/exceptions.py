@@ -88,6 +88,11 @@ class DatabaseConfigurationError(ConfigurationError):
     code = "DATABASE_CONFIGURATION_ERROR"
 
 
+class DatabaseUnavailableError(UltronError):
+    status_code = 503
+    code = "DATABASE_UNAVAILABLE"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Install consistent JSON error handlers on the FastAPI application."""
 

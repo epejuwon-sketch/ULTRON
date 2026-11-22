@@ -68,11 +68,29 @@ export default function App() {
   const [initialShare, setInitialShare] = useState<{ title: string; text: string; url: string } | null>(null);
   const [pendingJarvisPrompt, setPendingJarvisPrompt] = useState("");
   const [backendReady, setBackendReady] = useState<boolean | null>(null);
+  const [backendDetail, setBackendDetail] = useState<string>("");
 
   useEffect(() => {
     fetch("/health/ready")
-      .then((r) => setBackendReady(r.ok))
-      .catch(() => setBackendReady(false));
+      .then(async (r) => {
+        if (!r.ok) {
+          setBackendReady(false);
+          setBackendDetail(`Backend readiness probe returned HTTP ${r.status}.`);
+          return;
+        }
+        const data = await r.json().catch(() => null);
+        const ready = Boolean(data && data.status === "ready");
+        setBackendReady(ready);
+        if (!ready) {
+          setBackendDetail(data?.database?.detail || "Backend database is not ready.");
+        } else {
+          setBackendDetail("");
+        }
+      })
+      .catch(() => {
+        setBackendReady(false);
+        setBackendDetail("Unable to reach backend /health/ready endpoint.");
+      });
     // Capture iOS / PWA Web Share Target query params (BRIDGE)
     const params = new URLSearchParams(window.location.search);
     const title = params.get("share_title") || "";
@@ -125,6 +143,9 @@ export default function App() {
             <button type="button" className={`btn btn-sm ${authMode === "login" ? "" : "btn-secondary"}`} onClick={() => setAuthMode("login")}>Sign In</button>
             <button type="button" className={`btn btn-sm ${authMode === "bootstrap" ? "" : "btn-secondary"}`} onClick={() => setAuthMode("bootstrap")}>First-Run Owner Setup</button>
           </div>
+          {backendReady === false && backendDetail && (
+            <div className="alert-box alert-error">{backendDetail}</div>
+          )}
           {authErr && <div className="alert-box alert-error">{authErr}</div>}
           <input className="input" required placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
           {authMode === "bootstrap" && (

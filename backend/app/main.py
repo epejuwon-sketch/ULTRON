@@ -9,12 +9,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import DatabaseConfigurationError, register_exception_handlers
 from app.core.logging import configure_logging, request_id_ctx
 from app.core.rate_limit import build_rate_limiter
-from app.db.session import init_database
+from app.db.session import classify_database_error, init_database
 from app.routers import (
     aegis,
     agents,
@@ -68,10 +69,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cfg.database_backend,
                 rate_limiter.backend_name,
             )
-        except DatabaseConfigurationError as exc:
+        except (DatabaseConfigurationError, SQLAlchemyError) as exc:
+            err_code, detail = classify_database_error(exc, cfg)
             logger.error(
-                "ULTRON OS 2026 started in degraded mode — database configuration error: %s",
-                exc.message,
+                "ULTRON OS 2026 started in degraded mode (%s): %s",
+                err_code,
+                detail,
             )
         yield
 

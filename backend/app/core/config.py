@@ -20,6 +20,24 @@ from app.core.exceptions import DatabaseConfigurationError
 _DEV_EPHEMERAL_JWT = secrets.token_urlsafe(48)
 _DEV_EPHEMERAL_VAULT = secrets.token_urlsafe(48)
 _LOCAL_PG_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_NON_LIBPQ_QUERY_PARAMS = frozenset(
+    {
+        "pgbouncer",
+        "connection_limit",
+        "pool_timeout",
+        "schema",
+        "supa",
+        "prisma",
+        "statement_cache_size",
+    }
+)
+
+
+def _strip_matching_quotes(value: str) -> str:
+    s = value.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in {"'", '"'}:
+        return s[1:-1].strip()
+    return s
 
 
 def normalize_database_url(
@@ -33,13 +51,16 @@ def normalize_database_url(
 
     - Rejects missing URLs and SQLite URLs whenever `allow_sqlite` is False (production,
       staging, and Vercel preview/production deployments).
+    - Strips accidental surrounding quotes (common when pasting from mobile devices).
     - Normalizes `postgres://`, `postgresql://`, and `postgresql+psycopg2://` to
       `postgresql+psycopg://` to match the installed `psycopg` v3 driver.
+    - Strips non-libpq Supabase/Prisma/Vercel pooler query flags (`pgbouncer`, `supa`,
+      `connection_limit`, etc.) that cause `psycopg.ProgrammingError: invalid URI query parameter`.
     - Adds `sslmode=require` for remote PostgreSQL hosts (such as Supabase) unless
       `sslmode` is already specified.
     - Never includes raw credentials in raised error messages.
     """
-    cleaned = raw_url.strip()
+    cleaned = _strip_matching_quotes(raw_url)
     if not cleaned:
         if not allow_sqlite:
             raise DatabaseConfigurationError(
@@ -118,9 +139,32 @@ def normalize_database_url(
             details={"required_env_var": "ULTRON_DATABASE_URL"},
         )
 
+    # Strip non-libpq query parameters (e.g. ?pgbouncer=true, ?supa=base-pooler.x)
+    # that Supabase/Prisma URLs often include but psycopg v3/libpq rejects at connect time.
+    if parsed.query:
+        filtered_query = {
+            k: v for k, v in parsed.query.items() if k.strip().lower() not in _NON_LIBPQ_QUERY_PARAMS
+        }
+        parsed = parsed.set(query=filtered_query)
+
     host_lower = parsed.host.strip().lower()
     if host_lower not in _LOCAL_PG_HOSTS and "sslmode" not in parsed.query:
         parsed = parsed.update_query_dict({"sslmode": "require"})
+
+    # Validate final libpq URI parameters with psycopg v3 if installed (never echoing secrets).
+    try:
+        import psycopg.conninfo
+
+        libpq_url = parsed.set(drivername="postgresql").render_as_string(hide_password=False)
+        psycopg.conninfo.conninfo_to_dict(libpq_url)
+    except ImportError:
+        pass
+    except Exception as exc:
+        raise DatabaseConfigurationError(
+            "ULTRON_DATABASE_URL contains an unsupported PostgreSQL URI parameter or syntax error. "
+            "Remove unsupported query parameters and verify URL encoding of the password.",
+            details={"required_env_var": "ULTRON_DATABASE_URL", "reason": type(exc).__name__},
+        ) from exc
 
     return parsed.render_as_string(hide_password=False)
 
@@ -141,6 +185,8 @@ class Settings(BaseSettings):
     )
     vercel: str = Field(default="", alias="VERCEL")
     vercel_env: str = Field(default="", alias="VERCEL_ENV")
+    vercel_url: str = Field(default="", alias="VERCEL_URL")
+    vercel_branch_url: str = Field(default="", alias="VERCEL_BRANCH_URL")
     app_name: str = Field(default="ULTRON OS 2026 Backend", alias="ULTRON_APP_NAME")
     app_version: str = Field(default="2026.4.0", alias="ULTRON_APP_VERSION")
     host: str = Field(default="127.0.0.1", alias="ULTRON_HOST")
@@ -298,7 +344,14 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        for host in (self.vercel_url.strip(), self.vercel_branch_url.strip()):
+            if not host:
+                continue
+            origin = host if host.startswith(("http://", "https://")) else f"https://{host}"
+            if origin not in origins:
+                origins.append(origin)
+        return origins
 
     @property
     def effective_database_url(self) -> str:
@@ -321,7 +374,7 @@ class Settings(BaseSettings):
     @property
     def database_backend(self) -> str:
         """Return active database backend label without raising or exposing credentials."""
-        raw = self.database_url.strip().lower()
+        raw = _strip_matching_quotes(self.database_url).lower()
         if not raw:
             return "unconfigured" if self.is_deployed_environment else "sqlite"
         if raw.startswith("postgresql") or raw.startswith("postgres://"):
@@ -329,6 +382,43 @@ class Settings(BaseSettings):
         if raw.startswith("sqlite"):
             return "unconfigured" if self.is_deployed_environment else "sqlite"
         return "invalid"
+
+    def database_diagnostics(self) -> dict[str, Any]:
+        """Return strictly non-secret database connection metadata for readiness diagnostics."""
+        backend = self.database_backend
+        pool_strategy = (
+            "sqlite_local"
+            if backend == "sqlite"
+            else ("null_pool_serverless" if self.is_vercel else "queue_pool")
+        )
+        info: dict[str, Any] = {
+            "uses_pooler": False,
+            "port": None,
+            "sslmode_enforced": False,
+            "pool_strategy": pool_strategy,
+        }
+        if backend != "postgresql":
+            return info
+        try:
+            normalized = self.effective_database_url
+            parsed = make_url(normalized)
+            host_lower = (parsed.host or "").lower()
+            raw_lower = self.database_url.lower()
+            info["port"] = parsed.port or 5432
+            info["uses_pooler"] = (
+                parsed.port == 6543
+                or "pooler.supabase" in host_lower
+                or "pgbouncer=" in raw_lower
+                or "supa=" in raw_lower
+            )
+            info["sslmode_enforced"] = str(parsed.query.get("sslmode", "")).lower() in {
+                "require",
+                "verify-ca",
+                "verify-full",
+            }
+        except Exception:
+            pass
+        return info
 
     def safe_summary(self) -> dict[str, Any]:
         """Return non-sensitive runtime configuration metadata safe for diagnostics."""

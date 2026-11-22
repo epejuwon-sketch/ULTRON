@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.core.config import Settings, get_settings
 from app.core.permissions import Principal
-from app.db.session import check_database_health
+from app.db.session import check_database_health_detailed
 from app.integrations.registry import IntegrationRegistry
 from app.routers.deps import require_perm
 
@@ -27,10 +27,10 @@ def health_live(settings: Settings = Depends(get_settings)) -> dict:
 @router.get("/health/ready")
 def health_ready(settings: Settings = Depends(get_settings)) -> dict:
     """Readiness probe verifying active database connectivity and safe config summary."""
-    db_ok, db_detail = check_database_health(settings)
+    db_report = check_database_health_detailed(settings)
     return {
-        "status": "ready" if db_ok else "degraded",
-        "database": {"healthy": db_ok, "backend": settings.database_backend, "detail": db_detail},
+        "status": "ready" if db_report["healthy"] else "degraded",
+        "database": db_report,
         "config": settings.safe_summary(),
     }
 
@@ -38,13 +38,13 @@ def health_ready(settings: Settings = Depends(get_settings)) -> dict:
 @router.get("/health")
 def health_root(settings: Settings = Depends(get_settings)) -> dict:
     """Combined health overview with honest static integration configuration state."""
-    db_ok, db_detail = check_database_health(settings)
+    db_report = check_database_health_detailed(settings)
     integrations = IntegrationRegistry(settings).get_static_status()
     return {
-        "status": "ok" if db_ok else "degraded",
+        "status": "ok" if db_report["healthy"] else "degraded",
         "service": settings.app_name,
         "version": settings.app_version,
-        "database": {"healthy": db_ok, "backend": settings.database_backend, "detail": db_detail},
+        "database": db_report,
         "integrations": integrations,
     }
 

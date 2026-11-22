@@ -340,3 +340,126 @@ def test_deployed_storage_adapter_rejects_local_disk_and_logs_redact_pg_password
     scrubbed = redact_secrets(sample)
     assert "TopSecretPass!42" not in scrubbed
     assert "postgres.abc:[REDACTED]@db.abc.supabase.co:5432/postgres" in scrubbed
+
+
+def test_supabase_pooler_query_params_and_quoted_urls_normalize_for_psycopg() -> None:
+    import psycopg.conninfo
+
+    quoted_with_prisma_params = (
+        '"postgresql://postgres.projref:MyPass99@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
+        '?pgbouncer=true&connection_limit=1&supa=base-pooler.x&schema=public"'
+    )
+    normalized = normalize_database_url(
+        quoted_with_prisma_params,
+        allow_sqlite=False,
+        env_label="production",
+        is_vercel=True,
+    )
+    assert normalized.startswith("postgresql+psycopg://")
+    assert "pgbouncer" not in normalized
+    assert "supa=" not in normalized
+    assert "connection_limit" not in normalized
+    assert "sslmode=require" in normalized
+
+    # Confirm psycopg v3 libpq parser accepts the resulting URL cleanly
+    libpq_uri = normalized.replace("postgresql+psycopg://", "postgresql://", 1)
+    parsed_info = psycopg.conninfo.conninfo_to_dict(libpq_uri)
+    assert parsed_info["host"] == "aws-0-us-east-1.pooler.supabase.com"
+    assert parsed_info["port"] == "6543"
+    assert parsed_info["sslmode"] == "require"
+
+
+def test_postgresql_runtime_failure_degrades_cleanly_without_crashing_lifespan_or_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import psycopg
+
+    attempted_mkdirs = _forbid_mkdir(monkeypatch)
+    monkeypatch.setenv("ULTRON_ENV", "development")
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_ENV", "preview")
+    monkeypatch.setenv("VERCEL_URL", "ultron-abc123.vercel.app")
+    monkeypatch.setenv("VERCEL_BRANCH_URL", "ultron-git-feat-ultron-os-2026-backend-juwon2.vercel.app")
+    monkeypatch.setenv(
+        "ULTRON_DATABASE_URL",
+        "postgresql://postgres:VerySecretPassword!@db.projref.supabase.co:5432/postgres",
+    )
+
+    get_settings.cache_clear()
+    reset_engine()
+
+    def _failing_creator():
+        raise psycopg.OperationalError(
+            "connection failed: postgresql://postgres:VerySecretPassword!@db.projref.supabase.co:5432/postgres: Network is unreachable"
+        )
+
+    real_failing_engine = create_engine(
+        "postgresql+psycopg://",
+        creator=_failing_creator,
+        poolclass=NullPool,
+        future=True,
+    )
+    monkeypatch.setattr(db_session, "_build_engine", lambda _cfg: real_failing_engine)
+
+    try:
+        cfg = get_settings()
+        assert "https://ultron-abc123.vercel.app" in cfg.cors_origin_list
+        assert "https://ultron-git-feat-ultron-os-2026-backend-juwon2.vercel.app" in cfg.cors_origin_list
+
+        app = create_app(cfg)
+        with TestClient(app) as tc:
+            live = tc.get("/health/live")
+            assert live.status_code == 200
+            assert live.json()["status"] == "ok"
+
+            ready = tc.get("/health/ready")
+            assert ready.status_code == 200
+            body = ready.json()
+            assert body["status"] == "degraded"
+            assert body["database"]["healthy"] is False
+            assert body["database"]["backend"] == "postgresql"
+            assert body["database"]["error_code"] == "DB_IPV6_DIRECT_PORT_5432"
+            assert "6543" in body["database"]["detail"]
+            assert "VerySecretPassword!" not in str(body)
+
+            boot = tc.post(
+                "/api/v1/auth/bootstrap-owner",
+                json={
+                    "username": "owner_fail",
+                    "email": "owner@ultron.dev",
+                    "password": "StrongOwnerPassword!2026",
+                },
+            )
+            assert boot.status_code == 503, boot.text
+            err = boot.json()["error"]
+            assert err["code"] == "DATABASE_UNAVAILABLE"
+            assert err["details"]["error_code"] == "DB_IPV6_DIRECT_PORT_5432"
+            assert "VerySecretPassword!" not in boot.text
+
+        assert attempted_mkdirs == []
+    finally:
+        reset_engine()
+        get_settings.cache_clear()
+
+
+def test_classify_database_error_diagnoses_supabase_auth_and_pooler_errors() -> None:
+    cfg = Settings(
+        ULTRON_ENV="production",
+        VERCEL="1",
+        VERCEL_ENV="preview",
+        ULTRON_JWT_SECRET=_PROD_JWT,
+        ULTRON_VAULT_MASTER_KEY=_PROD_VAULT,
+        ULTRON_DATABASE_URL="postgresql://postgres.projref:Secret123@aws-0-us-east-1.pooler.supabase.com:6543/postgres",
+    )
+    code1, msg1 = db_session.classify_database_error(
+        Exception("FATAL: Tenant or user not found"), cfg
+    )
+    assert code1 == "DB_POOLER_TENANT_USER_NOT_FOUND"
+    assert "postgres.<project-ref>" in msg1
+
+    code2, msg2 = db_session.classify_database_error(
+        Exception("FATAL: password authentication failed for user postgres"), cfg
+    )
+    assert code2 == "DB_AUTH_FAILED"
+    assert "URL-encode" in msg2
+
