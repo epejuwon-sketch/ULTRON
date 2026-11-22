@@ -62,7 +62,16 @@ export function ProvenanceBar({ provenance }: { provenance?: ProvenanceInfo | nu
 export function SourcesList({
   sources,
 }: {
-  sources?: Array<{ title?: string; url?: string; domain?: string; snippet?: string; retrieved_at?: string }>;
+  sources?: Array<{
+    title?: string;
+    url?: string;
+    domain?: string;
+    category?: string;
+    page_fetched?: boolean;
+    snippet?: string;
+    page_excerpt?: string;
+    retrieved_at?: string;
+  }>;
 }) {
   if (!sources || sources.length === 0) return null;
   return (
@@ -82,17 +91,29 @@ export function SourcesList({
             color: "inherit",
             display: "flex",
             flexDirection: "column",
-            gap: 3,
+            gap: 4,
             padding: "8px 10px",
           }}
         >
-          <div className="row-between">
+          <div className="row-between" style={{ flexWrap: "wrap", gap: 6 }}>
             <strong style={{ fontSize: 13 }}>{s.title || s.domain || s.url}</strong>
-            <ExternalLink size={12} className="muted" />
+            <div className="row" style={{ gap: 5 }}>
+              {s.category && (
+                <span className="pill mono" style={{ fontSize: 10 }}>
+                  {s.category.replace(/_/g, " ").toUpperCase()}
+                </span>
+              )}
+              {s.page_fetched && (
+                <span className="pill pill-cyan mono" style={{ fontSize: 10 }}>
+                  FULL PAGE EXTRACTED
+                </span>
+              )}
+              <ExternalLink size={12} className="muted" />
+            </div>
           </div>
-          {s.snippet && (
+          {(s.page_excerpt || s.snippet) && (
             <div className="muted" style={{ fontSize: 12 }}>
-              {s.snippet}
+              {(s.page_excerpt || s.snippet || "").slice(0, 320)}
             </div>
           )}
           <div className="muted mono" style={{ fontSize: 11 }}>

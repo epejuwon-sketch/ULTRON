@@ -121,31 +121,65 @@ def test_lamborghini_aventador_svj_natural_language_and_live_research_flow(
 
     captured_gemini_payloads: list[dict[str, Any]] = []
 
-    def fake_run_research(prompt: str, *, settings, max_results: int = 5, http_client=None) -> dict[str, Any]:
+    def fake_run_research(
+        prompt: str,
+        *,
+        settings,
+        max_results: int = 8,
+        is_pricing_query: bool = False,
+        fetch_source_pages: bool = True,
+        http_client=None,
+    ) -> dict[str, Any]:
         return {
             "query": prompt,
-            "provider": "duckduckgo_public_web",
+            "core_subject": "Lamborghini Aventador SVJ",
+            "provider": "duckduckgo_web",
             "retrieved_at": "2026-11-22T20:00:00+00:00",
+            "independent_domains_count": 3,
+            "pages_fetched_count": 2,
+            "nigeria_market_evidence": {
+                "checked": True,
+                "verified_local_listings_found": False,
+                "candidate_sources_inspected": 2,
+                "note": "No confirmed active Nigerian dealer listings or verified completed sales were found for this specific model in the live retrieval.",
+            },
             "verified_sources": [
                 {
-                    "title": "Car and Driver — Lamborghini Aventador SVJ Review & MSRP",
-                    "url": "https://www.caranddriver.com/lamborghini/aventador-svj",
-                    "domain": "caranddriver.com",
-                    "snippet": "Original US MSRP started at $517,770 for the Coupe and $573,966 for the Roadster.",
+                    "title": "Lamborghini Aventador SVJ | Official Lamborghini History",
+                    "url": "https://www.lamborghini.com/en-en/history/aventador-svj",
+                    "domain": "lamborghini.com",
+                    "category": "manufacturer_msrp",
+                    "snippet": "Official Lamborghini Aventador SVJ V12 770 CV specification and launch details.",
+                    "page_excerpt": "Original US MSRP started at $517,770 for the Coupe and $573,966 for the Roadster.",
+                    "page_fetched": True,
                     "credibility": "established_source",
                     "retrieved_at": "2026-11-22T20:00:00+00:00",
                 },
                 {
-                    "title": "Bring a Trailer — Lamborghini Aventador SVJ Auction Results",
-                    "url": "https://bringatrailer.com/lamborghini/aventador-svj/",
-                    "domain": "bringatrailer.com",
-                    "snippet": "Recent US auction sales typically range between $625,000 and $860,000 USD depending on mileage and Roadster trim.",
+                    "title": "DriveIndex — Lamborghini Aventador LP770-4 SVJ Roadster Auction Results",
+                    "url": "https://driveindex.com/cars/lamborghini/aventador-lp770-4-svj-roadster/auction-results",
+                    "domain": "driveindex.com",
+                    "category": "completed_auction_results",
+                    "snippet": "Verified Lamborghini Aventador SVJ Roadster auction sales and hammer prices.",
+                    "page_excerpt": "5 verified auction sales tracked, sold prices from $805,000 to $1,550,000 USD with a median completed sale of $1,263,000 USD.",
+                    "page_fetched": True,
+                    "credibility": "established_source",
+                    "retrieved_at": "2026-11-22T20:00:00+00:00",
+                },
+                {
+                    "title": "Used Lamborghini Aventador SVJ for Sale — Autotrader",
+                    "url": "https://www.autotrader.com/cars-for-sale/lamborghini/aventador/svj",
+                    "domain": "autotrader.com",
+                    "category": "current_dealer_listings",
+                    "snippet": "Active US dealer asking prices range from $869,995 to $1,899,990 USD depending on Coupe/Roadster trim and mileage.",
+                    "page_excerpt": "",
+                    "page_fetched": False,
                     "credibility": "established_source",
                     "retrieved_at": "2026-11-22T20:00:00+00:00",
                 },
             ],
             "provenance": {
-                "source": "duckduckgo_public_web",
+                "source": "duckduckgo_web, wikipedia_api",
                 "retrieved_at": "2026-11-22T20:00:00+00:00",
                 "verification_status": "LIVE_VERIFIED",
                 "cache_status": "live",
@@ -156,11 +190,11 @@ def test_lamborghini_aventador_svj_natural_language_and_live_research_flow(
     monkeypatch.setattr("app.services.neon_router.run_grounded_web_research", fake_run_research, raising=False)
 
     natural_answer = (
-        "The Lamborghini Aventador SVJ (produced for 2019–2021) trades well above its original factory price in the US market (USD, checked November 2026):\n\n"
-        "- Original Manufacturer MSRP: $517,770 USD for the Coupe and $573,966 USD for the Roadster before options.\n"
-        "- Current Dealer & Used Asking Prices: Listings generally range from $620,000 to $900,000+ USD depending on mileage, specification, and Roadster vs. Coupe.\n"
-        "- Historical Auction Sales: Verified US auction results commonly fall between $625,000 and $860,000 USD.\n"
-        "- Estimated Market Value: Around $675,000 to $775,000 USD for well-documented, low-mileage examples."
+        "The Lamborghini Aventador SVJ (produced for 2019–2021) trades well above its original factory price in the US and European markets (checked November 2026):\n\n"
+        "- Original Manufacturer MSRP: $517,770 USD for the Coupe and $573,966 USD for the Roadster before options (lamborghini.com).\n"
+        "- Current Dealer & Used Asking Prices: Active dealer listings generally ask $850,000 to $1.5M in Europe and $869,995 to $1.9M USD in the US depending on mileage and Roadster vs. Coupe specification (autotrader.com). Note that these are asking prices rather than completed sales.\n"
+        "- Documented Completed Auction Sales: Verified completed auction sales range from $660,000 to $1,550,000 USD, with SVJ Roadster auction results showing a median sold price of $1,263,000 USD across 5 verified sales (driveindex.com).\n"
+        "- Nigerian Market Evidence: No confirmed active Nigerian dealer listings or verified local completed sales were found in this live retrieval; third-party NGN directory figures are unverified currency conversions rather than confirmed local inventory."
     )
 
     def fake_gemini_request(self, method: str, url: str, *, params=None, json_body=None, timeout_seconds=None, max_retries=None):
@@ -198,7 +232,7 @@ def test_lamborghini_aventador_svj_natural_language_and_live_research_flow(
     reply = body["reply"]["output"]
     assert "Original Manufacturer MSRP" in reply
     assert "$517,770" in reply
-    assert "Dealer" in reply and "Auction" in reply and "Estimated Market Value" in reply
+    assert "Asking Prices" in reply and "Completed Auction Sales" in reply and "Nigerian Market Evidence" in reply
     # Zero raw JSON, Python dict, traceback, or HTML tags in user-facing reply
     assert not reply.lstrip().startswith("{")
     assert "Traceback" not in reply
@@ -208,13 +242,15 @@ def test_lamborghini_aventador_svj_natural_language_and_live_research_flow(
     assert body["provenance"]["verification_status"] == "LIVE_VERIFIED"
     assert body["provenance"]["retrieved_at"]
     assert body["provenance"]["execution_id"]
-    assert len(body["research_sources"]) == 2
+    assert len(body["research_sources"]) == 3
 
-    # Verify Gemini actually received pricing guidance and live sources
+    # Verify Gemini actually received pricing guidance, full page extracted evidence, and Nigerian market check
     assert len(captured_gemini_payloads) == 1
     sys_text = captured_gemini_payloads[0]["systemInstruction"]["parts"][0]["text"]
-    assert "original manufacturer MSRP" in sys_text
-    assert "bringatrailer.com" in sys_text
+    assert "Original Manufacturer MSRP" in sys_text
+    assert "Full Page Extracted Evidence:" in sys_text
+    assert "NIGERIA LOCAL MARKET CHECK" in sys_text
+    assert "Available live market results WERE successfully retrieved above" in sys_text
 
 
 def test_file_hub_two_way_multimodal_neon_and_tenant_isolation(
@@ -450,4 +486,136 @@ def test_shared_auth_refresh_rotation_and_consistent_gemini_status(
     assert h["integrations"]["capabilities"]["gemini"]["configured"] is True
     assert rdy["config"]["integrations_configured"]["gemini"] is True
     assert diag["configured"] is True
+
+
+def test_live_research_pipeline_multi_source_and_page_extraction_not_unavailable():
+    """Regression test: prove conversational pricing questions normalize queries, search multiple facets,
+    fetch full source pages, and never falsely report available results as unavailable.
+    """
+    from app.integrations.web_research import WebResearchClient, extract_core_subject
+    from app.services.research_intelligence import build_natural_language_guidance
+
+    assert extract_core_subject("How much does a Lamborghini Aventador SVJ cost?") == "Lamborghini Aventador SVJ"
+
+    # Simulate realistic DuckDuckGo HTML responses across the 4 facets + full webpage HTML responses
+    facet_pages = {
+        "Lamborghini Aventador SVJ MSRP": """
+            <html><body>
+              <div class="result">
+                <a class="result__a" href="https://www.lamborghini.com/en-en/history/aventador-svj">Lamborghini Aventador SVJ | Lamborghini.com</a>
+                <a class="result__snippet">Official V12 770 CV specification and launch history.</a>
+              </div>
+              <div class="result">
+                <a class="result__a" href="https://hyper.luxe/price/lamborghini/aventador-svj-coupe-price/">Lamborghini Aventador SVJ Coupe Price</a>
+                <a class="result__snippet">Advertised at $850K to $1.5M in Europe and $1.1M to $1.9M in the US against an original MSRP of $517,770.</a>
+              </div>
+            </body></html>
+        """,
+        "Lamborghini Aventador SVJ auction results": """
+            <html><body>
+              <div class="result">
+                <a class="result__a" href="https://driveindex.com/cars/lamborghini/aventador-lp770-4-svj-roadster/auction-results">Aventador SVJ Roadster Auction Results | DriveIndex</a>
+                <a class="result__snippet">Tracked 5 verified auction sales from $805,000 to $1,550,000.</a>
+              </div>
+            </body></html>
+        """,
+        "Lamborghini Aventador SVJ for sale price": """
+            <html><body>
+              <div class="result">
+                <a class="result__a" href="https://www.autotrader.com/cars-for-sale/lamborghini/aventador/svj">Used Lamborghini Aventador SVJ for Sale - Autotrader</a>
+                <a class="result__snippet">Search from 33 Used Lamborghini Aventador cars for sale.</a>
+              </div>
+            </body></html>
+        """,
+        "Lamborghini Aventador SVJ price Nigeria NGN": """
+            <html><body>
+              <div class="result">
+                <a class="result__a" href="https://www.autogiz.com/ng/car-prices/lamborghini-aventador-115.php">Lamborghini Aventador Car Prices In Nigeria</a>
+                <a class="result__snippet">Automated directory estimate in NGN.</a>
+              </div>
+            </body></html>
+        """,
+    }
+
+    source_page_bodies = {
+        "https://www.lamborghini.com/en-en/history/aventador-svj": """
+            <html><head><title>Aventador SVJ</title></head>
+            <body><p>The Lamborghini Aventador SVJ launched with an original base MSRP of $517,770 USD for the Coupe.</p></body></html>
+        """,
+        "https://hyper.luxe/price/lamborghini/aventador-svj-coupe-price/": """
+            <html><head><title>SVJ Coupe Price</title></head>
+            <body><p>Original MSRP $517,770. Asking prices sit at $1.1M to $1.9M USD while transactional sales sit around $660,000 to $715,931 USD.</p></body></html>
+        """,
+        "https://driveindex.com/cars/lamborghini/aventador-lp770-4-svj-roadster/auction-results": """
+            <html><head><title>DriveIndex SVJ Auction Results</title></head>
+            <body><p>DriveIndex has tracked 5 verified auction sales with sold prices from $805,000 to $1,550,000 USD and a median sale of $1,263,000 USD.</p></body></html>
+        """,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url_str = str(request.url)
+        if "duckduckgo.com" in url_str:
+            body_text = request.content.decode("utf-8", errors="ignore")
+            for q_key, html_doc in facet_pages.items():
+                from urllib.parse import quote_plus
+
+                if quote_plus(q_key) in body_text or q_key in body_text:
+                    return httpx.Response(200, text=html_doc, headers={"content-type": "text/html"})
+            # Conversational un-normalized query with '?' returns 202 empty stub (reproducing the exact DDG failure)
+            return httpx.Response(202, text="<html><body></body></html>", headers={"content-type": "text/html"})
+        if "en.wikipedia.org" in url_str:
+            # Verify Wikimedia User-Agent compliance
+            assert "ULTRON-OS-2026" in request.headers.get("User-Agent", "")
+            return httpx.Response(
+                200,
+                json={"query": {"search": [{"title": "Lamborghini Aventador", "snippet": "V12 flagship sports car."}]}},
+            )
+        if url_str in source_page_bodies:
+            return httpx.Response(200, text=source_page_bodies[url_str], headers={"content-type": "text/html"})
+        return httpx.Response(404, text="Not found")
+
+    mock_http = httpx.Client(transport=httpx.MockTransport(handler))
+    settings = get_settings()
+    research_client = WebResearchClient(settings, http_client=mock_http)
+    # Bypass DNS check on mock URLs during unit test
+    research_client.fetch_and_extract = lambda url, max_chars=4000: {
+        "url": url,
+        "domain": url.split("/")[2],
+        "retrieved": url in source_page_bodies,
+        "status_code": 200 if url in source_page_bodies else 404,
+        "content_type": "text/html",
+        "title": "Fetched Page",
+        "extracted_text": source_page_bodies.get(url, ""),
+        "retrieved_at": "2026-11-22T20:05:00+00:00",
+    }
+
+    bundle = research_client.search(
+        "How much does a Lamborghini Aventador SVJ cost?",
+        max_results=8,
+        is_pricing_query=True,
+        fetch_source_pages=True,
+    )
+
+    # Prove available live results are NEVER reported as unavailable
+    assert bundle["provenance"]["verification_status"] == "LIVE_VERIFIED"
+    assert len(bundle["verified_sources"]) >= 5
+    assert bundle["independent_domains_count"] >= 5
+    assert bundle["pages_fetched_count"] >= 2
+
+    categories = {s["category"] for s in bundle["verified_sources"]}
+    assert "manufacturer_msrp" in categories
+    assert "completed_auction_results" in categories
+    assert "current_dealer_listings" in categories
+
+    # Prove Nigerian market evidence is honestly marked unverified when only generic NGN directory pages exist
+    assert bundle["nigeria_market_evidence"]["checked"] is True
+    assert bundle["nigeria_market_evidence"]["verified_local_listings_found"] is False
+
+    guidance = build_natural_language_guidance(is_pricing_query=True, research_bundle=bundle)
+    assert "Available live market results WERE successfully retrieved above" in guidance
+    assert "returned no reachable sources" not in guidance
+    assert "Full Page Extracted Evidence:" in guidance
+    assert "$517,770" in guidance
+    assert "$1,263,000" in guidance
+
 

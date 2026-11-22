@@ -94,12 +94,20 @@ def run_grounded_web_research(
     prompt: str,
     *,
     settings: Settings,
-    max_results: int = 5,
+    max_results: int = 8,
+    is_pricing_query: bool = False,
+    fetch_source_pages: bool = True,
     http_client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """Execute live multi-source web research for a user question, returning verified citations and provenance."""
+    """Execute live multi-source web research for a user question, retrieving actual source pages and verified citations."""
     client = WebResearchClient(settings, http_client=http_client)
-    return client.search(query=prompt.strip()[:260], max_results=max_results)
+    return client.search(
+        query=prompt.strip()[:260],
+        max_results=max_results,
+        is_pricing_query=is_pricing_query,
+        fetch_source_pages=fetch_source_pages,
+        max_pages_to_fetch=4 if is_pricing_query else 3,
+    )
 
 
 def build_natural_language_guidance(
@@ -124,22 +132,42 @@ def build_natural_language_guidance(
         lines.extend(
             [
                 "PRICING & VALUATION ACCURACY RULES:",
-                "- Clearly distinguish: (1) original manufacturer MSRP / launch price, (2) current used-market / dealer asking prices, (3) historical auction/completed sale results, and (4) estimated market value ranges.",
-                "- Always specify the currency (e.g., USD, EUR, GBP), geographic market/location where relevant, and the date/timeframe of the figures.",
-                "- Explain key factors driving variance (mileage, trim/edition such as Coupe vs. Roadster, provenance, condition, region/import duties) and state uncertainty candidly.",
+                "- Clearly distinguish and separate:",
+                "  (1) Original Manufacturer MSRP / launch price (prioritize official manufacturer and established automotive/industry test sources),",
+                "  (2) Current Dealer & Used-Market Asking Prices (active listings — explicitly note these are asking prices, not confirmed sale prices),",
+                "  (3) Documented Completed Auction & Transactional Sales (verified sold/hammer prices and median transactional benchmarks), and",
+                "  (4) Estimated Market Value Ranges across trims (e.g., Coupe vs. Roadster / special editions).",
+                "- Always specify the currency (e.g., USD, EUR, GBP), geographic market/location, and the retrieval date/timeframe of the figures.",
+                "- Explain key factors driving variance (mileage, Coupe vs. Roadster/63 Edition, provenance, condition, region/import duties).",
+                "- NIGERIAN MARKET HONESTY RULE: If verified active Nigerian dealer listings or confirmed local sales are unavailable in the retrieved sources, explicitly report that verified Nigerian market evidence is unavailable rather than inventing local NGN prices or treating automated currency-conversion directory pages as confirmed local inventory.",
             ]
         )
     if research_bundle is not None:
         sources = research_bundle.get("verified_sources") or []
         retrieved_at = research_bundle.get("retrieved_at") or datetime.now(timezone.utc).isoformat()
+        ng_evidence = research_bundle.get("nigeria_market_evidence") or {}
         if sources:
-            lines.append(f"VERIFIED LIVE WEB SOURCES (retrieved {retrieved_at}):")
-            for idx, src in enumerate(sources[:5], start=1):
-                lines.append(
-                    f"  [{idx}] {src.get('title')} ({src.get('domain')}) — {src.get('url')} | Excerpt: {src.get('snippet')}"
-                )
             lines.append(
-                "- Ground factual and pricing claims in these verified sources, cite the source names/links naturally, and note the retrieval date."
+                f"VERIFIED LIVE WEB SOURCES & EXTRACTED PAGE EVIDENCE (retrieved {retrieved_at} across "
+                f"{research_bundle.get('independent_domains_count', len(sources))} independent domains; "
+                f"{research_bundle.get('pages_fetched_count', 0)} full source pages fetched):"
+            )
+            for idx, src in enumerate(sources[:8], start=1):
+                cat = src.get("category") or "web_source"
+                cred = src.get("credibility") or "web_source"
+                ts = src.get("retrieved_at") or retrieved_at
+                line = (
+                    f"  [{idx}] [{cat.upper()} | {cred}] {src.get('title')} ({src.get('domain')}) — {src.get('url')} "
+                    f"(retrieved {ts}) | Search Snippet: {src.get('snippet')}"
+                )
+                if src.get("page_excerpt"):
+                    line += f" | Full Page Extracted Evidence: {src.get('page_excerpt')}"
+                lines.append(line)
+            if ng_evidence.get("checked"):
+                lines.append(f"  [NIGERIA LOCAL MARKET CHECK]: {ng_evidence.get('note')}")
+            lines.append(
+                "- CRITICAL: Available live market results WERE successfully retrieved above. Do NOT claim that live market data could not be retrieved. "
+                "Synthesize the specific figures from these sources in natural language, distinguish asking prices from completed sales, include the source links and retrieval timestamps, and state clearly when Nigerian market evidence is unavailable."
             )
         else:
             lines.append(

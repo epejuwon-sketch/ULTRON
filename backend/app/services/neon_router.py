@@ -306,10 +306,13 @@ def invoke_agent_reasoning(
         "reason": "disabled_or_structured",
     }
     if research_intent["needs_research"]:
+        is_pricing = bool(research_intent.get("is_pricing_query"))
         research_bundle = run_grounded_web_research(
             clean_prompt,
             settings=settings,
-            max_results=5,
+            max_results=8 if is_pricing else 5,
+            is_pricing_query=is_pricing,
+            fetch_source_pages=True,
             http_client=research_http_client,
         )
 
