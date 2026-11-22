@@ -69,7 +69,7 @@ def test_monitoring_notifications_and_14_capability_registry(client: TestClient,
     overview = client.get("/api/v1/monitoring/overview", headers=auth_headers["owner"]).json()
     assert overview["database"]["healthy"] is True
     assert overview["agents"]["total_registered"] == 60
-    assert len(overview["applied_migrations"]) == 3
+    assert len(overview["applied_migrations"]) == 4
 
     prom = client.get("/api/v1/monitoring/metrics", headers=auth_headers["owner"])
     assert prom.status_code == 200
@@ -144,3 +144,8 @@ def test_deployment_configuration_files_valid() -> None:
     assert (root / "cloudflare" / "worker.ts").exists()
     assert (root / "backend" / "migrations" / "supabase" / "001_initial_schema.sql").exists()
     assert (root / "backend" / "migrations" / "supabase" / "002_full_backend_schema.sql").exists()
+    assert (root / "backend" / "migrations" / "supabase" / "003_ecosystem_and_devices.sql").exists()
+    assert (root / "backend" / "migrations" / "supabase" / "004_full_platform_features.sql").exists()
+    assert (root / "frontend" / "package.json").exists()
+    assert (root / "frontend" / "public" / "manifest.webmanifest").exists()
+    assert (root / "frontend" / "public" / "sw.js").exists()

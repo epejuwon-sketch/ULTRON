@@ -186,6 +186,36 @@ def api_poll_device_tasks(
     return {"total": len(tasks), "tasks": tasks}
 
 
+from app.services.orbit_location_service import (
+    create_location_alert,
+    list_device_locations,
+    list_location_alerts,
+    report_device_location,
+    set_location_sharing_state,
+)
+
+
+class ReportLocationRequest(BaseModel):
+    latitude: float = Field(ge=-90.0, le=90.0)
+    longitude: float = Field(ge=-180.0, le=180.0)
+    accuracy_meters: float = Field(default=0.0, ge=0.0)
+    city: str = Field(default="", max_length=120)
+    country: str = Field(default="", max_length=120)
+    label: str = Field(default="", max_length=160)
+
+
+class LocationControlRequest(BaseModel):
+    action: str = Field(pattern="^(PAUSE|RESUME|REVOKE)$")
+
+
+class CreateLocationAlertRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    center_lat: float = Field(ge=-90.0, le=90.0)
+    center_lng: float = Field(ge=-180.0, le=180.0)
+    radius_meters: float = Field(default=500.0, ge=50.0, le=50000.0)
+    trigger_on: str = Field(default="ENTER", pattern="^(ENTER|EXIT)$")
+
+
 @router.post("/{device_id}/tasks/{device_task_id}/report")
 def api_report_device_task(
     device_id: str,
@@ -205,3 +235,78 @@ def api_report_device_task(
         result=body.result,
         error_detail=body.error_detail,
     )
+
+
+@router.post("/{device_id}/location", status_code=status.HTTP_201_CREATED)
+def api_report_device_location(
+    device_id: str,
+    body: ReportLocationRequest,
+    x_device_token: str = Header(default="", alias="X-Device-Token"),
+    db: Session = Depends(get_db),
+) -> dict:
+    device = authenticate_device_token(db, raw_token=x_device_token)
+    if device.device_id != device_id:
+        raise AuthorizationError("Device token does not match target device_id.")
+    return report_device_location(
+        db,
+        device=device,
+        latitude=body.latitude,
+        longitude=body.longitude,
+        accuracy_meters=body.accuracy_meters,
+        city=body.city,
+        country=body.country,
+        label=body.label,
+    )
+
+
+@router.get("/locations")
+def api_list_locations(
+    device_id: str | None = None,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = list_device_locations(db, tenant_id=principal.tenant_id, device_id=device_id)
+    return {
+        "total": len(items),
+        "locations": items,
+        "empty_state": None if items else "No authorized device locations recorded yet.",
+    }
+
+
+@router.post("/{device_id}/location/control")
+def api_location_control(
+    device_id: str,
+    body: LocationControlRequest,
+    principal: Principal = Depends(require_perm("devices:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return set_location_sharing_state(db, principal=principal, device_id=device_id, action=body.action)
+
+
+@router.post("/{device_id}/location/alerts", status_code=status.HTTP_201_CREATED)
+def api_create_location_alert(
+    device_id: str,
+    body: CreateLocationAlertRequest,
+    principal: Principal = Depends(require_perm("devices:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return create_location_alert(
+        db,
+        principal=principal,
+        device_id=device_id,
+        name=body.name,
+        center_lat=body.center_lat,
+        center_lng=body.center_lng,
+        radius_meters=body.radius_meters,
+        trigger_on=body.trigger_on,
+    )
+
+
+@router.get("/location/alerts")
+def api_list_location_alerts(
+    device_id: str | None = None,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = list_location_alerts(db, tenant_id=principal.tenant_id, device_id=device_id)
+    return {"total": len(items), "alerts": items}

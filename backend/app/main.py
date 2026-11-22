@@ -16,13 +16,21 @@ from app.core.logging import configure_logging, request_id_ctx
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.db.session import init_database
 from app.routers import (
+    aegis,
     agents,
     approvals,
     argon,
+    atlas,
     audit,
     auth,
+    bridge,
+    caravan,
+    creative,
     devices,
+    evolve,
+    files,
     finance,
+    forge,
     github,
     google,
     health,
@@ -32,9 +40,12 @@ from app.routers import (
     neon,
     notifications,
     projects,
+    pulse,
+    sentinel,
     settings as settings_router,
     tasks,
     tools,
+    turbo,
     vault,
     ws,
 )
@@ -59,9 +70,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description=(
             "Unified autonomous multi-agent intelligence operating system backend: "
             "NEON intelligence engine (Gemini primary), ARGON orchestration & ApprovalGate governance, "
-            "60 specialist agents, multi-tier versioned memory, unified OAuth 2.0 IntegrationManager, "
-            "Google Ecosystem, GitHub Engineering, Web Research, Multi-Device Mesh, Financial Command Center, "
-            "Developer Infrastructure, and Supabase/Vercel/Cloudflare integrations."
+            "AEGIS autonomous security, EVOLVE controlled self-development, SENTINEL WebAuthn Passkeys, "
+            "60 specialist agents, multi-tier versioned memory, VAULT secret interception, "
+            "ORBIT multi-device & location mesh, ATLAS personal/world intelligence, FILE HUB, "
+            "FORGE & Live Preview, Creative Studio, BRIDGE, PULSE, CARAVAN BI, TURBO benchmarks, "
+            "Financial Command Center, and Supabase/Vercel/Cloudflare/Google/GitHub integrations."
         ),
         lifespan=lifespan,
     )
@@ -80,6 +93,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "X-Request-ID",
             "Idempotency-Key",
             "X-Device-Token",
+            "X-Reauth-Token",
         ],
     )
 
@@ -129,7 +143,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-RateLimit-Limit"] = str(rate_limiter.limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        if not request.url.path.endswith("/preview"):
+            response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
@@ -137,6 +152,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application.include_router(health.router)
     application.include_router(auth.router)
+    application.include_router(sentinel.router)
+    application.include_router(aegis.router)
+    application.include_router(evolve.router)
     application.include_router(integrations.router)
     application.include_router(google.router)
     application.include_router(github.router)
@@ -151,6 +169,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(vault.router)
     application.include_router(audit.router)
     application.include_router(finance.router)
+    application.include_router(atlas.router)
+    application.include_router(files.router)
+    application.include_router(forge.router)
+    application.include_router(creative.router)
+    application.include_router(bridge.router)
+    application.include_router(pulse.router)
+    application.include_router(caravan.router)
+    application.include_router(turbo.router)
     application.include_router(projects.router)
     application.include_router(notifications.router)
     application.include_router(settings_router.router)

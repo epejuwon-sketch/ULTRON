@@ -31,13 +31,56 @@ def build_agent_manifest(agent: AgentRecord, settings: Settings) -> dict[str, An
     total_runs = agent.tasks_completed + agent.tasks_failed
     success_rate = round((agent.tasks_completed / total_runs) * 100.0, 2) if total_runs else 100.0
 
+    tools_list = json.loads(agent.tools_json or "[]")
+    requires_gate = agent.permission_scope in {"TIER_3_GATED", "TIER_1_EXEC", "TIER_1_SEC"}
+    default_contract = {
+        "version": "2026.4",
+        "isolation": "TENANT_SCOPED_STATELESS_CONTEXT",
+        "requires_verification": True,
+        "approval_policy": "APPROVAL_GATE_REQUIRED_FOR_MUTATIONS" if requires_gate else "STANDARD_RBAC_AND_AEGIS",
+        "input_schema": {
+            "type": "object",
+            "required": ["prompt"],
+            "properties": {
+                "prompt": {"type": "string", "description": f"Task directive for {agent.name} ({agent.domain})"},
+                "context": {"type": "object", "description": "Tenant-scoped execution context"},
+                "reasoning_tier": {"type": "integer", "minimum": 1, "maximum": 5, "default": agent.default_reasoning_tier},
+            },
+        },
+        "output_schema": {
+            "type": "object",
+            "required": ["agent_id", "domain", "execution_mode", "output"],
+            "properties": {
+                "agent_id": {"type": "string", "const": agent.agent_id},
+                "domain": {"type": "string", "const": agent.domain},
+                "execution_mode": {"type": "string"},
+                "output": {"type": "string"},
+                "structured_output": {"type": ["object", "null"]},
+            },
+        },
+        "execution_workflow": [
+            "1_VAULT_SECRET_INTERCEPTION",
+            "2_RBAC_AND_TENANT_VALIDATION",
+            f"3_DOMAIN_EXECUTION_{agent.domain.upper().replace(' ', '_').replace('/', '_')}",
+            "4_AEGIS_AND_ARGON_VERIFICATION",
+        ],
+        "quality_benchmarks": {
+            "honest_capability_reporting": True,
+            "zero_fabricated_telemetry": True,
+            "domain_alignment": agent.domain,
+            "authorized_tools_count": len(tools_list),
+        },
+    }
+    if custom:
+        default_contract.update(custom)
+
     return {
         "agent_id": agent.agent_id,
         "name": agent.name,
         "tier": agent.tier,
         "domain": agent.domain,
         "role_description": agent.role_description,
-        "tools": json.loads(agent.tools_json or "[]"),
+        "tools": tools_list,
         "permission_scope": agent.permission_scope,
         "capability_state": agent.capability_state,
         "default_reasoning_tier": agent.default_reasoning_tier,
@@ -51,11 +94,7 @@ def build_agent_manifest(agent: AgentRecord, settings: Settings) -> dict[str, An
             "avg_latency_ms": avg_latency,
             "last_active": agent.last_active.isoformat(),
         },
-        "contract": custom or {
-            "version": "2026.2",
-            "isolation": "TENANT_SCOPED_STATELESS_CONTEXT",
-            "requires_verification": True,
-        },
+        "contract": default_contract,
     }
 
 

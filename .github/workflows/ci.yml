@@ -38,3 +38,23 @@ jobs:
 
       - name: Verify desktop device agent module
         run: python -m py_compile device_agent/ultron_desktop_agent.py
+
+  frontend-pwa-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: TypeScript check & Vite production build
+        run: npm run build

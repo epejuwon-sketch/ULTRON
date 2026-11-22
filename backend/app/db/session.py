@@ -20,6 +20,7 @@ MIGRATION_REGISTRY: list[tuple[str, str]] = [
     ("001", "001_initial_schema.sql"),
     ("002", "002_full_backend_schema.sql"),
     ("003", "003_ecosystem_and_devices.sql"),
+    ("004", "004_full_platform_features.sql"),
 ]
 
 

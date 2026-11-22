@@ -1,0 +1,702 @@
+import React, { useEffect, useState } from "react";
+import { apiFetch } from "../lib/api";
+
+/* 1. JARVIS Conversation & Natural-Language Orchestration + BRIDGE Share Intake */
+export function JarvisView({ initialShare }: { initialShare?: { title: string; text: string; url: string } | null }) {
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [activeId, setActiveId] = useState<string>("");
+  const [messages, setMessages] = useState<any[]>([]);
+  const [input, setInput] = useState("");
+  const [orchestrateMode, setOrchestrateMode] = useState(false);
+  const [warning, setWarning] = useState<string>("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadConversations() {
+    try {
+      const res = await apiFetch<any>("/api/v1/neon/conversations");
+      setConversations(res.conversations || []);
+      if (!activeId && res.conversations?.length) {
+        setActiveId(res.conversations[0].conversation_id);
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function loadMessages(cid: string) {
+    if (!cid) return;
+    try {
+      const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}`);
+      setMessages(res.messages || []);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    loadConversations();
+  }, []);
+
+  useEffect(() => {
+    if (activeId) loadMessages(activeId);
+  }, [activeId]);
+
+  useEffect(() => {
+    if (initialShare && (initialShare.url || initialShare.text || initialShare.title)) {
+      apiFetch<any>("/api/v1/bridge/share", {
+        method: "POST",
+        body: {
+          title: initialShare.title,
+          url: initialShare.url,
+          shared_text: initialShare.text,
+          source_app: "pwa_share_target",
+        },
+      })
+        .then((res) => {
+          setWarning(`BRIDGE received shared item (AEGIS verdict: ${res.aegis_url_verdict}).`);
+          if (res.conversation_id) {
+            setActiveId(res.conversation_id);
+            loadConversations();
+          }
+        })
+        .catch((e) => setError(`BRIDGE blocked share: ${e.message}`));
+    }
+  }, [initialShare]);
+
+  async function createNewChat() {
+    setError("");
+    const res = await apiFetch<any>("/api/v1/neon/conversations", {
+      method: "POST",
+      body: { title: `JARVIS Session ${new Date().toLocaleTimeString()}`, agent_id: "AGT-01" },
+    });
+    setActiveId(res.conversation_id);
+    await loadConversations();
+  }
+
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    if (!input.trim()) return;
+    setLoading(true);
+    setError("");
+    setWarning("");
+    try {
+      if (orchestrateMode) {
+        const res = await apiFetch<any>("/api/v1/orchestrate", {
+          method: "POST",
+          body: { objective: input, execute_immediately: true },
+        });
+        setMessages((prev) => [
+          ...prev,
+          { message_id: `u_${Date.now()}`, role: "user", content: input },
+          {
+            message_id: `a_${Date.now()}`,
+            role: "assistant",
+            content: `[ARGON ${res.routing?.selected_agent_id} | Tier ${res.routing?.reasoning_tier}] Status: ${res.task?.status}\n${JSON.stringify(res.task?.summary || res.routing, null, 2)}`,
+          },
+        ]);
+      } else {
+        let cid = activeId;
+        if (!cid) {
+          const created = await apiFetch<any>("/api/v1/neon/conversations", {
+            method: "POST",
+            body: { title: input.slice(0, 48), agent_id: "AGT-01" },
+          });
+          cid = created.conversation_id;
+          setActiveId(cid);
+          await loadConversations();
+        }
+        const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}/messages`, {
+          method: "POST",
+          body: { content: input },
+        });
+        if (res.secret_interception?.warnings?.length) {
+          setWarning(res.secret_interception.warnings.join(" "));
+        }
+        await loadMessages(cid);
+      }
+      setInput("");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">
+        <span>JARVIS Command Interface (NEON + ARGON)</span>
+        <div className="row">
+          <button className="btn btn-secondary btn-sm" onClick={() => setOrchestrateMode((v) => !v)}>
+            Mode: {orchestrateMode ? "ARGON Orchestrate" : "NEON Chat"}
+          </button>
+          <button className="btn btn-sm" onClick={createNewChat}>New Session</button>
+        </div>
+      </div>
+
+      {conversations.length > 0 && !orchestrateMode && (
+        <div className="row" style={{ marginBottom: 10 }}>
+          <select className="select" style={{ maxWidth: 320 }} value={activeId} onChange={(e) => setActiveId(e.target.value)}>
+            {conversations.map((c) => (
+              <option key={c.conversation_id} value={c.conversation_id}>{c.title} ({c.agent_id})</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {warning && <div className="alert-box alert-warn" style={{ marginBottom: 10 }}>{warning}</div>}
+      {error && <div className="alert-box alert-error" style={{ marginBottom: 10 }}>{error}</div>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 280, maxHeight: 440, overflowY: "auto", marginBottom: 12 }}>
+        {messages.length === 0 ? (
+          <div className="muted">No messages yet. Any API key, password, or raw card number entered here is intercepted by VAULT before reaching external models.</div>
+        ) : (
+          messages.map((m) => (
+            <div key={m.message_id} className="list-item" style={{ borderColor: m.role === "user" ? "#0891b2" : "#2c3b52" }}>
+              <div className="row-between">
+                <span className={`pill ${m.role === "user" ? "pill-cyan" : "pill-green"}`}>{m.role.toUpperCase()}</span>
+                {m.model && <span className="muted">{m.model}</span>}
+              </div>
+              <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.5 }}>{m.content}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <form onSubmit={handleSend} className="row">
+        <input
+          className="input"
+          style={{ flex: 1 }}
+          placeholder={orchestrateMode ? "Give ARGON an autonomous multi-agent objective..." : "Speak or type to JARVIS..."}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+        />
+        <button className="btn" type="submit" disabled={loading}>{loading ? "Processing..." : "Send"}</button>
+      </form>
+    </div>
+  );
+}
+
+/* 2. Voice Interaction (Web Speech API + Interruptible TTS + Live Indicator) */
+export function VoiceView() {
+  const [listening, setListening] = useState(false);
+  const [continuous, setContinuous] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [reply, setReply] = useState("");
+  const [statusMsg, setStatusMsg] = useState("Microphone idle.");
+  const [error, setError] = useState("");
+
+  function stopSpeaking() {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+  }
+
+  function speakText(text: string) {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.rate = 1.05;
+      window.speechSynthesis.speak(utter);
+    }
+  }
+
+  function toggleListening() {
+    setError("");
+    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) {
+      setError("Web Speech Recognition is not supported in this browser. Type your transcript below to test the live voice pipeline.");
+      return;
+    }
+    if (listening) {
+      setListening(false);
+      setStatusMsg("Stopped listening.");
+      return;
+    }
+    stopSpeaking();
+    const rec = new SpeechRec();
+    rec.continuous = continuous;
+    rec.interimResults = false;
+    rec.lang = "en-US";
+    rec.onstart = () => {
+      setListening(true);
+      setStatusMsg("LIVE MICROPHONE ACTIVE — Recording speech...");
+    };
+    rec.onresult = async (ev: any) => {
+      const spoken = ev.results[ev.results.length - 1][0].transcript;
+      setTranscript(spoken);
+      await sendVoiceTurn(spoken);
+    };
+    rec.onerror = (ev: any) => {
+      setError(`Microphone error: ${ev.error}`);
+      setListening(false);
+    };
+    rec.onend = () => {
+      setListening(false);
+      setStatusMsg("Microphone idle.");
+    };
+    rec.start();
+  }
+
+  async function sendVoiceTurn(textToSend?: string) {
+    const clean = (textToSend ?? transcript).trim();
+    if (!clean) return;
+    setError("");
+    try {
+      const res = await apiFetch<any>("/api/v1/creative/voice/turn", {
+        method: "POST",
+        body: { transcript: clean, mode: continuous ? "continuous" : "push_to_talk" },
+      });
+      setReply(res.spoken_reply);
+      speakText(res.spoken_reply);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">
+        <span>Voice Command Interface (AGT-46)</span>
+        <span className={`pill ${listening ? "pill-danger" : "pill-cyan"}`}>
+          {listening ? "MIC RECORDING" : "IDLE"}
+        </span>
+      </div>
+      <div className="row" style={{ marginBottom: 12 }}>
+        <button className="btn" onClick={toggleListening}>{listening ? "Stop Microphone" : "Start Voice Capture"}</button>
+        <button className="btn btn-secondary" onClick={() => setContinuous((v) => !v)}>
+          Mode: {continuous ? "Continuous" : "Push-to-Talk"}
+        </button>
+        <button className="btn btn-danger btn-sm" onClick={stopSpeaking}>Interrupt TTS</button>
+      </div>
+      <div className="muted" style={{ marginBottom: 10 }}>{statusMsg}</div>
+      {error && <div className="alert-box alert-error" style={{ marginBottom: 10 }}>{error}</div>}
+      <div className="row" style={{ marginBottom: 12 }}>
+        <input className="input" style={{ flex: 1 }} value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder="Spoken transcript (or type to test voice turn)..." />
+        <button className="btn" onClick={() => sendVoiceTurn()}>Send Voice Turn</button>
+      </div>
+      {reply && (
+        <div className="list-item">
+          <span className="pill pill-green">JARVIS VOICE RESPONSE</span>
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 13.5 }}>{reply}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* 3. Agent Centre (All 60 Specialist Agents) */
+export function AgentsView() {
+  const [agents, setAgents] = useState<any[]>([]);
+  const [filter, setFilter] = useState("");
+  const [selected, setSelected] = useState<any>(null);
+  const [prompt, setPrompt] = useState("");
+  const [output, setOutput] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    apiFetch<any>("/api/v1/agents")
+      .then((res) => setAgents(res.agents || []))
+      .catch((e) => setError(e.message));
+  }, []);
+
+  async function inspectManifest(aid: string) {
+    setOutput(null);
+    const m = await apiFetch<any>(`/api/v1/agents/${aid}/manifest`);
+    setSelected(m);
+  }
+
+  async function invokeSelected() {
+    if (!selected || !prompt.trim()) return;
+    setError("");
+    try {
+      const res = await apiFetch<any>(`/api/v1/agents/${selected.agent_id}/invoke`, {
+        method: "POST",
+        body: { prompt },
+      });
+      setOutput(res);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  const visible = agents.filter(
+    (a) =>
+      a.agent_id.toLowerCase().includes(filter.toLowerCase()) ||
+      a.name.toLowerCase().includes(filter.toLowerCase()) ||
+      a.domain.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  return (
+    <div className="grid-2">
+      <div className="card">
+        <div className="card-title">
+          <span>Specialist Agent Registry ({agents.length} Agents)</span>
+        </div>
+        <input className="input" style={{ marginBottom: 12 }} placeholder="Filter by ID, name, or domain..." value={filter} onChange={(e) => setFilter(e.target.value)} />
+        {error && <div className="alert-box alert-error">{error}</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 520, overflowY: "auto" }}>
+          {visible.map((a) => (
+            <div key={a.agent_id} className="list-item" style={{ cursor: "pointer" }} onClick={() => inspectManifest(a.agent_id)}>
+              <div className="row-between">
+                <strong>{a.agent_id} — {a.name}</strong>
+                <span className="pill pill-cyan">T{a.default_reasoning_tier}</span>
+              </div>
+              <div className="muted">{a.domain} · {a.permission_scope}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-title"><span>Agent Manifest & Direct Invoke</span></div>
+        {!selected ? (
+          <div className="muted">Select any specialist agent from AGT-01 to AGT-60 to inspect its contract and invoke it.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="row-between">
+              <strong>{selected.agent_id} · {selected.name}</strong>
+              <span className="pill pill-green">{selected.execution_backing}</span>
+            </div>
+            <div className="muted">{selected.role_description}</div>
+            <div className="row">
+              {(selected.tools || []).map((t: string) => <span key={t} className="pill">{t}</span>)}
+            </div>
+            <textarea className="textarea" rows={3} placeholder={`Send directive to ${selected.agent_id}...`} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+            <button className="btn" onClick={invokeSelected}>Invoke {selected.agent_id}</button>
+            {output && <pre className="code-block">{JSON.stringify(output, null, 2)}</pre>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* 4. Agent Activity & ApprovalGate */
+export function ActivityView() {
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [approvals, setApprovals] = useState<any[]>([]);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      const [tRes, aRes] = await Promise.all([
+        apiFetch<any>("/api/v1/tasks"),
+        apiFetch<any>("/api/v1/approvals"),
+      ]);
+      setTasks(tRes.tasks || []);
+      setApprovals(aRes.approvals || []);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function decide(approvalId: string, decision: "APPROVED" | "REJECTED") {
+    try {
+      await apiFetch(`/api/v1/approvals/${approvalId}/decide`, {
+        method: "POST",
+        body: { decision, note: `Decided in ULTRON PWA (${decision})` },
+      });
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <div className="grid-2">
+      <div className="card">
+        <div className="card-title">
+          <span>ApprovalGate Queue ({approvals.filter((a) => a.status === "PENDING").length} Pending)</span>
+          <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
+        </div>
+        {error && <div className="alert-box alert-error">{error}</div>}
+        {approvals.length === 0 ? (
+          <div className="muted">No approval requests recorded yet.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {approvals.map((a) => (
+              <div key={a.approval_id} className="list-item">
+                <div className="row-between">
+                  <strong>{a.action_type}</strong>
+                  <span className={`pill ${a.status === "PENDING" ? "pill-warn" : a.status === "APPROVED" ? "pill-green" : "pill-danger"}`}>{a.status}</span>
+                </div>
+                <div className="muted">{a.reason}</div>
+                {a.status === "PENDING" && (
+                  <div className="row">
+                    <button className="btn btn-sm" onClick={() => decide(a.approval_id, "APPROVED")}>Approve</button>
+                    <button className="btn btn-danger btn-sm" onClick={() => decide(a.approval_id, "REJECTED")}>Reject</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-title"><span>ARGON Task Execution Activity ({tasks.length})</span></div>
+        {tasks.length === 0 ? (
+          <div className="muted">No ARGON tasks created yet. Use JARVIS in ARGON Orchestrate mode to start a task.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {tasks.map((t) => (
+              <div key={t.task_id} className="list-item">
+                <div className="row-between">
+                  <strong>{t.title || t.objective?.slice(0, 60)}</strong>
+                  <span className="pill pill-cyan">{t.status}</span>
+                </div>
+                <div className="muted">Agent: {t.assigned_agent_id} · Risk: {t.risk_level}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* 5. File Hub */
+export function FileHubView() {
+  const [files, setFiles] = useState<any[]>([]);
+  const [genName, setGenName] = useState("report.md");
+  const [genContent, setGenContent] = useState("# ULTRON Report\nGenerated from File Hub.");
+  const [detail, setDetail] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      const res = await apiFetch<any>("/api/v1/files");
+      setFiles(res.files || []);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setError("");
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const res = await apiFetch<any>("/api/v1/files/upload", { method: "POST", body: fd, isFormData: true });
+      setDetail(res);
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  async function handleGenerate(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      await apiFetch("/api/v1/files/generate", {
+        method: "POST",
+        body: { filename: genName, content: genContent, mime_type: "text/markdown" },
+      });
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <div className="grid-2">
+      <div className="card">
+        <div className="card-title"><span>File Hub — Upload & Generate</span></div>
+        {error && <div className="alert-box alert-error" style={{ marginBottom: 10 }}>{error}</div>}
+        <label className="btn" style={{ marginBottom: 14, width: "100%" }}>
+          Upload File (Scanned by AEGIS + VAULT)
+          <input type="file" style={{ display: "none" }} onChange={handleUpload} />
+        </label>
+        <form onSubmit={handleGenerate} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <input className="input" value={genName} onChange={(e) => setGenName(e.target.value)} placeholder="Filename" />
+          <textarea className="textarea" rows={3} value={genContent} onChange={(e) => setGenContent(e.target.value)} />
+          <button className="btn btn-secondary" type="submit">Generate & Store File</button>
+        </form>
+      </div>
+
+      <div className="card">
+        <div className="card-title"><span>Stored Files ({files.length})</span></div>
+        {files.length === 0 ? (
+          <div className="muted">No files uploaded or generated yet.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {files.map((f) => (
+              <div key={f.file_id} className="list-item">
+                <div className="row-between">
+                  <strong>{f.filename}</strong>
+                  <span className={`pill ${f.scan_status === "CLEAN" ? "pill-green" : "pill-warn"}`}>{f.scan_status}</span>
+                </div>
+                <div className="muted">{f.direction} · {f.size_bytes} bytes · Secrets redacted: {f.secrets_redacted}</div>
+                <div className="row">
+                  <button className="btn btn-secondary btn-sm" onClick={async () => setDetail(await apiFetch(`/api/v1/files/${f.file_id}`))}>Inspect</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {detail && (
+          <div style={{ marginTop: 12 }}>
+            <div className="muted">Extracted Content ({detail.filename}):</div>
+            <pre className="code-block">{detail.extracted_text || "(binary/empty)"}</pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* 6. Forge Workspace & 7. Live Preview */
+export function ForgeView({ onOpenPreview }: { onOpenPreview: (forgeId: string) => void }) {
+  const [projects, setProjects] = useState<any[]>([]);
+  const [name, setName] = useState("Caravan Mobile Portal");
+  const [template, setTemplate] = useState("react_vite");
+  const [prompt, setPrompt] = useState("Build a responsive founder dashboard with real status indicators.");
+  const [selected, setSelected] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    try {
+      const res = await apiFetch<any>("/api/v1/forge/projects");
+      setProjects(res.projects || []);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function generate(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      const res = await apiFetch<any>("/api/v1/forge/projects", {
+        method: "POST",
+        body: { name, template, prompt },
+      });
+      setSelected(res);
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <div className="grid-2">
+      <div className="card">
+        <div className="card-title"><span>FORGE Multi-File Project Generator</span></div>
+        {error && <div className="alert-box alert-error">{error}</div>}
+        <form onSubmit={generate} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Project Name" />
+          <select className="select" value={template} onChange={(e) => setTemplate(e.target.value)}>
+            <option value="react_vite">React + Vite App</option>
+            <option value="web_app">Responsive Web App</option>
+            <option value="dashboard">Analytics Dashboard</option>
+            <option value="landing_page">Landing Page</option>
+            <option value="fastapi_service">FastAPI Microservice</option>
+          </select>
+          <textarea className="textarea" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+          <button className="btn" type="submit">Generate & AEGIS Verify</button>
+        </form>
+      </div>
+
+      <div className="card">
+        <div className="card-title"><span>FORGE Projects ({projects.length})</span></div>
+        {projects.length === 0 ? (
+          <div className="muted">No FORGE projects generated yet.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {projects.map((p) => (
+              <div key={p.forge_id} className="list-item">
+                <div className="row-between">
+                  <strong>{p.name}</strong>
+                  <span className={`pill ${p.status === "VERIFIED" ? "pill-green" : "pill-danger"}`}>{p.status}</span>
+                </div>
+                <div className="muted">{p.template} · {p.file_list?.length || 0} files</div>
+                <div className="row">
+                  <button className="btn btn-sm" onClick={() => onOpenPreview(p.forge_id)}>Open Live Preview</button>
+                  <button className="btn btn-secondary btn-sm" onClick={async () => setSelected(await apiFetch(`/api/v1/forge/projects/${p.forge_id}`))}>Inspect Files</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {selected && (
+          <div style={{ marginTop: 12 }}>
+            <div className="muted">Build & AEGIS Logs:</div>
+            <pre className="code-block">{(selected.build_logs || []).join("\n")}</pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function PreviewView({ forgeId }: { forgeId: string }) {
+  const [projects, setProjects] = useState<any[]>([]);
+  const [activeId, setActiveId] = useState(forgeId);
+  const [project, setProject] = useState<any>(null);
+  const [viewport, setViewport] = useState<"mobile" | "tablet" | "desktop">("mobile");
+
+  useEffect(() => {
+    apiFetch<any>("/api/v1/forge/projects").then((res) => {
+      const list = res.projects || [];
+      setProjects(list);
+      if (!activeId && list.length) setActiveId(list[0].forge_id);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (forgeId) setActiveId(forgeId);
+  }, [forgeId]);
+
+  useEffect(() => {
+    if (activeId) {
+      apiFetch<any>(`/api/v1/forge/projects/${activeId}`).then(setProject).catch(() => setProject(null));
+    }
+  }, [activeId]);
+
+  const width = viewport === "mobile" ? 390 : viewport === "tablet" ? 768 : "100%";
+
+  return (
+    <div className="card">
+      <div className="card-title">
+        <span>Sandboxed Live Preview</span>
+        <div className="row">
+          <select className="select" style={{ width: 200 }} value={activeId} onChange={(e) => setActiveId(e.target.value)}>
+            <option value="">Select FORGE project...</option>
+            {projects.map((p) => <option key={p.forge_id} value={p.forge_id}>{p.name}</option>)}
+          </select>
+          <button className={`btn btn-sm ${viewport === "mobile" ? "" : "btn-secondary"}`} onClick={() => setViewport("mobile")}>iPhone</button>
+          <button className={`btn btn-sm ${viewport === "tablet" ? "" : "btn-secondary"}`} onClick={() => setViewport("tablet")}>Tablet</button>
+          <button className={`btn btn-sm ${viewport === "desktop" ? "" : "btn-secondary"}`} onClick={() => setViewport("desktop")}>Desktop</button>
+        </div>
+      </div>
+
+      {!project?.preview_html ? (
+        <div className="muted">Generate a verified project in FORGE Workspace to render its sandboxed Live Preview.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
+          <iframe
+            title="ULTRON Live Preview"
+            sandbox="allow-scripts"
+            srcDoc={project.preview_html}
+            style={{ width, maxWidth: "100%", height: 500, border: "1px solid #334155", borderRadius: 12, background: "#0f172a" }}
+          />
+          <div style={{ width: "100%" }}>
+            <div className="muted">Verification & Build Logs:</div>
+            <pre className="code-block">{(project.build_logs || []).join("\n")}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

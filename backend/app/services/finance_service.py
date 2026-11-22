@@ -10,8 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import ValidationError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.permissions import Principal
+from app.core.secret_interceptor import contains_raw_payment_card_or_cvv
 from app.db.models import (
     AuditLogRecord,
     FinancialBudget,
@@ -19,6 +20,7 @@ from app.db.models import (
     FinancialReserve,
     FinancialTransaction,
     LLMUsageLog,
+    PaymentMethodRecord,
 )
 from app.db.repositories import append_audit_log
 from app.services.approval_service import create_approval_request, serialize_approval
@@ -37,6 +39,8 @@ VALID_ENTRY_TYPES = frozenset(
 )
 
 OUTFLOW_TYPES = frozenset({"EXPENSE", "API_SPEND", "HOSTING", "PROJECT_COST", "OWNER_DISTRIBUTION"})
+VALID_CARD_BRANDS = frozenset({"VISA", "MASTERCARD", "VERVE", "AMEX"})
+VALID_FINANCE_SCOPES = frozenset({"PERSONAL", "BUSINESS"})
 
 
 def record_transaction(
@@ -50,6 +54,7 @@ def record_transaction(
     currency: str = "USD",
     counterparty: str = "",
     project_id: str | None = None,
+    scope: str = "BUSINESS",
     settings: Settings,
 ) -> dict[str, Any]:
     """Record a financial entry. Owner distributions or outflows above soft limit require ApprovalGate."""
@@ -58,6 +63,11 @@ def record_transaction(
         raise ValidationError(f"Unsupported financial entry_type '{etype}'.")
     if amount_usd <= 0:
         raise ValidationError("amount_usd must be positive.")
+    clean_scope = scope.strip().upper()
+    if clean_scope not in VALID_FINANCE_SCOPES:
+        raise ValidationError("scope must be PERSONAL or BUSINESS.")
+    if contains_raw_payment_card_or_cvv(description) or contains_raw_payment_card_or_cvv(counterparty):
+        raise ValidationError("Raw payment card numbers or CVV values are strictly prohibited in financial records.")
 
     requires_gate = (
         etype == "OWNER_DISTRIBUTION"
@@ -74,6 +84,7 @@ def record_transaction(
         currency=currency.strip().upper(),
         counterparty=counterparty.strip(),
         description=description.strip(),
+        scope=clean_scope,
         status="PENDING_APPROVAL" if requires_gate else "RECORDED",
         created_by=principal.username,
     )
@@ -169,6 +180,7 @@ def list_transactions(
     tenant_id: str,
     entry_type: str | None = None,
     project_id: str | None = None,
+    scope: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     stmt = select(FinancialTransaction).where(FinancialTransaction.tenant_id == tenant_id)
@@ -176,6 +188,8 @@ def list_transactions(
         stmt = stmt.where(FinancialTransaction.entry_type == entry_type.upper())
     if project_id:
         stmt = stmt.where(FinancialTransaction.project_id == project_id)
+    if scope:
+        stmt = stmt.where(FinancialTransaction.scope == scope.strip().upper())
     rows = db.execute(stmt.order_by(FinancialTransaction.created_at.desc()).limit(limit)).scalars().all()
     return [_serialize_tx(r) for r in rows]
 
@@ -308,18 +322,28 @@ def list_reserves(db: Session, *, tenant_id: str) -> list[dict[str, Any]]:
     return [_serialize_reserve(r) for r in rows]
 
 
-def generate_financial_report(db: Session, *, tenant_id: str) -> dict[str, Any]:
+def generate_financial_report(db: Session, *, tenant_id: str, scope: str | None = None) -> dict[str, Any]:
     """Compute P&L, API/hosting/project spend breakdown, reserves, and investment totals."""
-    txs = db.execute(
-        select(FinancialTransaction).where(
-            FinancialTransaction.tenant_id == tenant_id,
-            FinancialTransaction.status.in_(["RECORDED", "APPROVED"]),
-        )
-    ).scalars().all()
+    stmt = select(FinancialTransaction).where(
+        FinancialTransaction.tenant_id == tenant_id,
+        FinancialTransaction.status.in_(["RECORDED", "APPROVED"]),
+    )
+    if scope:
+        stmt = stmt.where(FinancialTransaction.scope == scope.strip().upper())
+    txs = db.execute(stmt).scalars().all()
 
     by_type: dict[str, float] = {k: 0.0 for k in VALID_ENTRY_TYPES}
+    by_scope: dict[str, dict[str, float]] = {
+        "PERSONAL": {"revenue_usd": 0.0, "expenses_usd": 0.0},
+        "BUSINESS": {"revenue_usd": 0.0, "expenses_usd": 0.0},
+    }
     for t in txs:
         by_type[t.entry_type] = round(by_type.get(t.entry_type, 0.0) + t.amount_usd, 2)
+        sc = t.scope if t.scope in by_scope else "BUSINESS"
+        if t.entry_type == "REVENUE":
+            by_scope[sc]["revenue_usd"] = round(by_scope[sc]["revenue_usd"] + t.amount_usd, 2)
+        elif t.entry_type in OUTFLOW_TYPES:
+            by_scope[sc]["expenses_usd"] = round(by_scope[sc]["expenses_usd"] + t.amount_usd, 2)
 
     llm_api_spend = float(
         db.execute(
@@ -355,6 +379,7 @@ def generate_financial_report(db: Session, *, tenant_id: str) -> dict[str, Any]:
 
     return {
         "tenant_id": tenant_id,
+        "scope_filter": scope.upper() if scope else "ALL",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_revenue_usd": total_revenue,
         "total_expenses_usd": total_expenses,
@@ -362,11 +387,175 @@ def generate_financial_report(db: Session, *, tenant_id: str) -> dict[str, Any]:
         "net_income_usd": net_income,
         "owner_distributions_usd": by_type["OWNER_DISTRIBUTION"],
         "breakdown_by_entry_type": by_type,
+        "breakdown_by_scope": by_scope,
         "total_reserves_usd": round(sum(r["balance_usd"] for r in reserves), 2),
         "total_investments_cost_basis_usd": round(sum(i["cost_basis_usd"] for i in investments), 2),
         "total_investments_current_value_usd": round(sum(i["current_value_usd"] for i in investments), 2),
         "pending_approval_transactions": pending_approvals,
         "live_payment_rail_connected": False,
+    }
+
+
+def add_payment_method(
+    db: Session,
+    *,
+    principal: Principal,
+    provider: str,
+    provider_token_ref: str,
+    brand: str,
+    last4: str,
+    exp_month: int,
+    exp_year: int,
+    cardholder_label: str = "",
+    currency: str = "NGN",
+    scope: str = "PERSONAL",
+    is_preferred: bool = False,
+) -> dict[str, Any]:
+    """Store a tokenized payment method (masked last4 only — strictly rejects raw PAN or CVV)."""
+    # Hard security guard against raw card numbers or CVV being passed in any field
+    for val in (provider_token_ref, cardholder_label, last4):
+        if contains_raw_payment_card_or_cvv(val):
+            raise ValidationError("Raw payment card numbers (PAN) or CVV values are strictly rejected. Supply only provider token references and last4.")
+    if not last4.isdigit() or len(last4) != 4:
+        raise ValidationError("last4 must be exactly 4 digits.")
+    clean_brand = brand.strip().upper()
+    if clean_brand not in VALID_CARD_BRANDS:
+        raise ValidationError(f"Unsupported card brand '{clean_brand}'. Supported: VISA, MASTERCARD, VERVE, AMEX.")
+    clean_scope = scope.strip().upper()
+    if clean_scope not in VALID_FINANCE_SCOPES:
+        raise ValidationError("scope must be PERSONAL or BUSINESS.")
+
+    if is_preferred:
+        existing = db.execute(
+            select(PaymentMethodRecord).where(
+                PaymentMethodRecord.tenant_id == principal.tenant_id,
+                PaymentMethodRecord.scope == clean_scope,
+            )
+        ).scalars().all()
+        for pm in existing:
+            pm.is_preferred = False
+
+    rec = PaymentMethodRecord(
+        payment_method_id=f"pm_{uuid.uuid4().hex[:14]}",
+        tenant_id=principal.tenant_id,
+        provider=provider.strip().lower(),
+        provider_token_ref=provider_token_ref.strip(),
+        brand=clean_brand,
+        last4=last4,
+        exp_month=int(exp_month),
+        exp_year=int(exp_year),
+        cardholder_label=cardholder_label.strip()[:160],
+        currency=currency.strip().upper()[:12],
+        scope=clean_scope,
+        is_preferred=is_preferred,
+        status="ACTIVE",
+        created_by=principal.username,
+    )
+    db.add(rec)
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="FINANCE_PAYMENT_METHOD_ADDED",
+        resource=rec.payment_method_id,
+        outcome=f"{clean_brand} ****{last4} ({clean_scope})",
+    )
+    db.commit()
+    db.refresh(rec)
+    return _serialize_payment_method(rec)
+
+
+def list_payment_methods(
+    db: Session, *, tenant_id: str, scope: str | None = None
+) -> list[dict[str, Any]]:
+    stmt = select(PaymentMethodRecord).where(
+        PaymentMethodRecord.tenant_id == tenant_id,
+        PaymentMethodRecord.status == "ACTIVE",
+    )
+    if scope:
+        stmt = stmt.where(PaymentMethodRecord.scope == scope.strip().upper())
+    rows = db.execute(stmt.order_by(PaymentMethodRecord.is_preferred.desc(), PaymentMethodRecord.created_at.desc())).scalars().all()
+    return [_serialize_payment_method(r) for r in rows]
+
+
+def set_preferred_payment_method(
+    db: Session, *, principal: Principal, payment_method_id: str
+) -> dict[str, Any]:
+    target = db.execute(
+        select(PaymentMethodRecord).where(
+            PaymentMethodRecord.payment_method_id == payment_method_id,
+            PaymentMethodRecord.tenant_id == principal.tenant_id,
+            PaymentMethodRecord.status == "ACTIVE",
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise NotFoundError(f"Payment method '{payment_method_id}' not found.")
+
+    siblings = db.execute(
+        select(PaymentMethodRecord).where(
+            PaymentMethodRecord.tenant_id == principal.tenant_id,
+            PaymentMethodRecord.scope == target.scope,
+        )
+    ).scalars().all()
+    for pm in siblings:
+        pm.is_preferred = pm.payment_method_id == target.payment_method_id
+    db.commit()
+    db.refresh(target)
+    return _serialize_payment_method(target)
+
+
+def delete_payment_method(
+    db: Session, *, principal: Principal, payment_method_id: str
+) -> dict[str, Any]:
+    target = db.execute(
+        select(PaymentMethodRecord).where(
+            PaymentMethodRecord.payment_method_id == payment_method_id,
+            PaymentMethodRecord.tenant_id == principal.tenant_id,
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise NotFoundError(f"Payment method '{payment_method_id}' not found.")
+    target.status = "REMOVED"
+    target.is_preferred = False
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="FINANCE_PAYMENT_METHOD_REMOVED",
+        resource=target.payment_method_id,
+        outcome=f"{target.brand} ****{target.last4}",
+    )
+    db.commit()
+    return {"payment_method_id": target.payment_method_id, "status": "REMOVED"}
+
+
+def generate_cashflow_forecast(db: Session, *, tenant_id: str, months: int = 3) -> dict[str, Any]:
+    """Compute a conservative linear cash-flow projection strictly from recorded ledger data."""
+    report = generate_financial_report(db, tenant_id=tenant_id)
+    rev = report["total_revenue_usd"]
+    exp = report["total_expenses_usd"]
+    net = report["net_income_usd"]
+    reserves = report["total_reserves_usd"]
+    runway_months = round(reserves / exp, 2) if exp > 0 else None
+    projections = []
+    running_balance = reserves
+    for m in range(1, max(1, min(12, months)) + 1):
+        running_balance = round(running_balance + net, 2)
+        projections.append(
+            {
+                "month_offset": m,
+                "projected_revenue_usd": rev,
+                "projected_expenses_usd": exp,
+                "projected_net_usd": net,
+                "projected_reserve_balance_usd": running_balance,
+            }
+        )
+    return {
+        "basis": "RECORDED_LEDGER_DATA_ONLY",
+        "current_reserves_usd": reserves,
+        "monthly_net_baseline_usd": net,
+        "estimated_runway_months": runway_months,
+        "projections": projections,
     }
 
 
@@ -406,10 +595,29 @@ def _serialize_tx(t: FinancialTransaction) -> dict[str, Any]:
         "currency": t.currency,
         "counterparty": t.counterparty,
         "description": t.description,
+        "scope": t.scope,
         "status": t.status,
         "approval_id": t.approval_id,
         "created_by": t.created_by,
         "created_at": t.created_at.isoformat(),
+    }
+
+
+def _serialize_payment_method(pm: PaymentMethodRecord) -> dict[str, Any]:
+    return {
+        "payment_method_id": pm.payment_method_id,
+        "provider": pm.provider,
+        "brand": pm.brand,
+        "masked_number": f"**** **** **** {pm.last4}",
+        "last4": pm.last4,
+        "exp_month": pm.exp_month,
+        "exp_year": pm.exp_year,
+        "cardholder_label": pm.cardholder_label,
+        "currency": pm.currency,
+        "scope": pm.scope,
+        "is_preferred": pm.is_preferred,
+        "status": pm.status,
+        "created_at": pm.created_at.isoformat(),
     }
 
 

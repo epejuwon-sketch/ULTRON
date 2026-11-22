@@ -9,17 +9,40 @@
         "maxLambdaSize": "15mb",
         "runtime": "python3.12"
       }
+    },
+    {
+      "src": "frontend/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
     }
   ],
   "routes": [
     {
-      "src": "/(.*)",
+      "src": "/(api|health|docs|openapi\\.json|redoc)(.*)",
       "dest": "api/index.py",
       "headers": {
         "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
         "Referrer-Policy": "strict-origin-when-cross-origin",
-        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+        "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload"
+      }
+    },
+    {
+      "src": "/(assets/.*|manifest\\.webmanifest|sw\\.js|icon\\.svg)",
+      "dest": "/frontend/$1",
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+      }
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/frontend/index.html",
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
         "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload"
       }
     }

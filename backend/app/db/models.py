@@ -386,6 +386,7 @@ class FinancialTransaction(Base):
     currency: Mapped[str] = mapped_column(String(12), nullable=False, default="USD")
     counterparty: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="BUSINESS", index=True)  # PERSONAL | BUSINESS
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="RECORDED")  # RECORDED | PENDING_APPROVAL | APPROVED | REJECTED
     approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -610,4 +611,354 @@ class DeviceTaskRecord(Base):
     created_by: Mapped[str] = mapped_column(String(120), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# AEGIS — Autonomous Security & Defence Engine
+# ---------------------------------------------------------------------------
+class SecurityScanRecord(Base):
+    __tablename__ = "security_scans"
+
+    scan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    scan_type: Mapped[str] = mapped_column(String(48), nullable=False, default="FULL")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="COMPLETED")
+    risk_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # 0 (safe) - 100 (critical)
+    findings_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    findings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    checks_run_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    triggered_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class SecurityIncidentRecord(Base):
+    __tablename__ = "security_incidents"
+
+    incident_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    scan_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, default="MEDIUM", index=True)  # LOW | MEDIUM | HIGH | CRITICAL
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    details_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN", index=True)  # OPEN | REMEDIATED | WAITING_FOR_APPROVAL | DISMISSED
+    remediation_action: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class FileIntegrityBaselineRecord(Base):
+    __tablename__ = "file_integrity_baselines"
+    __table_args__ = (UniqueConstraint("tenant_id", "relative_path", name="uq_fim_tenant_path"),)
+
+    baseline_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    relative_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    sha256_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# EVOLVE — Controlled Self-Development Engine
+# ---------------------------------------------------------------------------
+class EvolutionProposalRecord(Base):
+    __tablename__ = "evolution_proposals"
+
+    proposal_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    capability_gap: Mapped[str] = mapped_column(Text, nullable=False)
+    target_module: Mapped[str] = mapped_column(String(200), nullable=False)
+    plan_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    patch_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="IDENTIFIED", index=True)
+    # IDENTIFIED | PLANNED | DEVELOPED | TESTED | AEGIS_VERIFIED | WAITING_FOR_APPROVAL | PROMOTED | ROLLED_BACK
+    test_results_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    aegis_scan_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rollback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proposed_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# SENTINEL — Passkeys / WebAuthn (Face ID Platform Authenticator) & Recovery
+# ---------------------------------------------------------------------------
+class WebAuthnCredentialRecord(Base):
+    __tablename__ = "webauthn_credentials"
+
+    credential_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)
+    device_label: Mapped[str] = mapped_column(String(160), nullable=False)
+    public_key_b64: Mapped[str] = mapped_column(Text, nullable=False)
+    sign_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    transports_json: Mapped[str] = mapped_column(Text, nullable=False, default='["internal"]')
+    authenticator_type: Mapped[str] = mapped_column(String(32), nullable=False, default="platform")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class WebAuthnChallengeRecord(Base):
+    __tablename__ = "webauthn_challenges"
+
+    challenge_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)  # REGISTRATION | AUTHENTICATION | REAUTH
+    challenge_b64: Mapped[str] = mapped_column(String(160), nullable=False)
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class RecoveryCodeRecord(Base):
+    __tablename__ = "recovery_codes"
+
+    code_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# ORBIT — Authorized Device Location & Geofence Alerts
+# ---------------------------------------------------------------------------
+class DeviceLocationRecord(Base):
+    __tablename__ = "device_locations"
+
+    location_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(String(64), ForeignKey("devices.device_id", ondelete="CASCADE"), nullable=False, index=True)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    accuracy_meters: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    city: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    country: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    label: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+
+
+class LocationAlertRecord(Base):
+    __tablename__ = "location_alerts"
+
+    alert_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(String(64), ForeignKey("devices.device_id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    center_lat: Mapped[float] = mapped_column(Float, nullable=False)
+    center_lng: Mapped[float] = mapped_column(Float, nullable=False)
+    radius_meters: Mapped[float] = mapped_column(Float, nullable=False, default=500.0)
+    trigger_on: Mapped[str] = mapped_column(String(16), nullable=False, default="ENTER")  # ENTER | EXIT
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# ATLAS — Orders, Personal Tasks & World Intelligence / Daily Briefing
+# ---------------------------------------------------------------------------
+class OrderRecord(Base):
+    __tablename__ = "orders"
+
+    order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    vendor: Mapped[str] = mapped_column(String(160), nullable=False)
+    item_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    currency: Mapped[str] = mapped_column(String(12), nullable=False, default="USD")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PLACED", index=True)
+    # PLACED | PROCESSING | SHIPPED | IN_TRANSIT | OUT_FOR_DELIVERY | DELIVERED | DELAYED | RETURNED | CANCELLED
+    carrier: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    tracking_number: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    tracking_source: Mapped[str] = mapped_column(String(64), nullable=False, default="USER_RECORDED")
+    estimated_delivery: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payment_method_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    events_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class IntelligenceTopicRecord(Base):
+    __tablename__ = "intelligence_topics"
+    __table_args__ = (UniqueConstraint("tenant_id", "slug", name="uq_intel_topic_slug"),)
+
+    topic_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    region: Mapped[str] = mapped_column(String(64), nullable=False, default="GLOBAL")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class IntelligenceBriefingRecord(Base):
+    __tablename__ = "intelligence_briefings"
+
+    briefing_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    briefing_date: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    topics_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    sections_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    sources_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="READY")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# FINANCE — Tokenized Payment Methods (NEVER stores raw PAN or CVV)
+# ---------------------------------------------------------------------------
+class PaymentMethodRecord(Base):
+    __tablename__ = "payment_methods"
+
+    payment_method_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)  # paystack | flutterwave | stripe | bank_token
+    provider_token_ref: Mapped[str] = mapped_column(String(160), nullable=False)
+    brand: Mapped[str] = mapped_column(String(24), nullable=False)  # VISA | MASTERCARD | VERVE | AMEX
+    last4: Mapped[str] = mapped_column(String(4), nullable=False)
+    exp_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    exp_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    cardholder_label: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    currency: Mapped[str] = mapped_column(String(12), nullable=False, default="NGN")
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="PERSONAL")  # PERSONAL | BUSINESS
+    is_preferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# FILE HUB — Two-Way Secure File Intake, Extraction & Generation
+# ---------------------------------------------------------------------------
+class FileRecord(Base):
+    __tablename__ = "files"
+
+    file_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(120), nullable=False, default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sha256_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, default="UPLOAD")  # UPLOAD | GENERATED
+    storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    scan_status: Mapped[str] = mapped_column(String(32), nullable=False, default="CLEAN")  # CLEAN | QUARANTINED | REDACTED
+    secrets_redacted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    untrusted_content_tagged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    extracted_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# FORGE & LIVE PREVIEW — Complete Multi-File Project Generator
+# ---------------------------------------------------------------------------
+class ForgeProjectRecord(Base):
+    __tablename__ = "forge_projects"
+
+    forge_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    template: Mapped[str] = mapped_column(String(64), nullable=False)  # web_app | landing_page | dashboard | fastapi_service | react_vite
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="GENERATED")  # GENERATED | VERIFIED | FAILED
+    files_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    preview_html: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    build_logs_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    test_results_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    aegis_verdict_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    archive_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# BRIDGE — iPhone PWA Share-to-JARVIS Intake
+# ---------------------------------------------------------------------------
+class SharedItemRecord(Base):
+    __tablename__ = "shared_items"
+
+    share_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    source_app: Mapped[str] = mapped_column(String(80), nullable=False, default="ios_share_sheet")
+    title: Mapped[str] = mapped_column(String(240), nullable=False, default="")
+    url: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    shared_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    aegis_url_verdict: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")  # SAFE | BLOCKED | UNVERIFIED
+    extracted_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# PULSE — Live Data-Backed Generated Web Pages
+# ---------------------------------------------------------------------------
+class PulsePageRecord(Base):
+    __tablename__ = "pulse_pages"
+
+    page_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    slug: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    page_type: Mapped[str] = mapped_column(String(48), nullable=False)  # ORDERS | FINANCE | CARAVAN | AGENTS | PROJECTS | RESEARCH | BRIEFING
+    data_bindings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    layout_spec_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# CARAVAN — Business Intelligence Analytics (Zero Fabricated Metrics)
+# ---------------------------------------------------------------------------
+class BusinessAnalyticsEventRecord(Base):
+    __tablename__ = "business_analytics_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    venture: Mapped[str] = mapped_column(String(80), nullable=False, default="CARAVAN", index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)  # SIGNUP | ACTIVE_USER | REVENUE | GRANT_APPLICATION | CONVERSION
+    country: Mapped[str] = mapped_column(String(80), nullable=False, default="UNKNOWN")
+    city: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    acquisition_source: Mapped[str] = mapped_column(String(80), nullable=False, default="DIRECT")
+    amount_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    count_value: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+
+
+# ---------------------------------------------------------------------------
+# CREATIVE STUDIO — Media & Multimodal Production Jobs
+# ---------------------------------------------------------------------------
+class MediaJobRecord(Base):
+    __tablename__ = "media_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    media_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # IMAGE | VIDEO | AUDIO | 3D | PRESENTATION | GRAPHIC
+    agent_id: Mapped[str] = mapped_column(String(16), nullable=False, default="AGT-13")
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="gemini-nano-banana-2.1")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")  # COMPLETED | REQUIRES_PROVIDER_CONFIG | FAILED
+    output_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
 

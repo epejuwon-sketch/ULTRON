@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError
 from app.core.permissions import Principal
+from app.core.secret_interceptor import intercept_and_redact_secrets
 from app.core.security import classify_risk_level, sanitize_prompt_input
 from app.db.models import AgentRecord, ConversationMessageRecord, ConversationRecord, LLMUsageLog
 from app.integrations.gemini import GeminiClient
@@ -194,6 +195,15 @@ def invoke_agent_reasoning(
         raise NotFoundError(f"Agent '{agent_id}' not found in catalog.")
 
     clean_prompt = sanitize_prompt_input(prompt, reject_injection=True)
+    interception = intercept_and_redact_secrets(
+        clean_prompt,
+        db=db if tenant_id else None,
+        principal=None,
+        settings=settings,
+        source_context=f"neon:{agent_id}",
+        auto_vault=False,
+    )
+    clean_prompt = interception.sanitized_text
     tier = max(1, min(5, int(reasoning_tier or agent.default_reasoning_tier)))
     tier_meta = get_reasoning_tiers(settings)[tier]
     primary_model = tier_meta["primary_model"]
@@ -412,7 +422,16 @@ def send_conversation_message(
     if conv is None:
         raise NotFoundError(f"Conversation '{conversation_id}' not found.")
 
-    clean_content = sanitize_prompt_input(content, reject_injection=True)
+    raw_clean = sanitize_prompt_input(content, reject_injection=True)
+    interception = intercept_and_redact_secrets(
+        raw_clean,
+        db=db,
+        principal=principal,
+        settings=settings,
+        source_context=f"conversation:{conversation_id}",
+        auto_vault=True,
+    )
+    clean_content = interception.sanitized_text
     history_rows = db.execute(
         select(ConversationMessageRecord)
         .where(ConversationMessageRecord.conversation_id == conversation_id)
@@ -457,6 +476,12 @@ def send_conversation_message(
         "conversation_id": conversation_id,
         "user_message_id": user_msg.message_id,
         "assistant_message_id": asst_msg.message_id,
+        "sanitized_user_message": clean_content,
+        "secret_interception": {
+            "secrets_vaulted": interception.secrets_vaulted,
+            "payment_data_blocked": interception.payment_data_blocked,
+            "warnings": interception.warnings,
+        },
         "reply": reply,
     }
 

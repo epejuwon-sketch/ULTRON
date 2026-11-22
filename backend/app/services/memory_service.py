@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, NotFoundError
 from app.core.permissions import Principal, Role
+from app.core.secret_interceptor import intercept_and_redact_secrets
 from app.core.security import sanitize_prompt_input
 from app.db.models import MemoryRecord, UserPreferenceRecord
 from app.db.repositories import append_audit_log
@@ -98,8 +99,17 @@ def store_memory(
     ttl_seconds: int | None = None,
     settings: Settings,
 ) -> dict[str, Any]:
-    """Store a version-1 tenant-scoped memory record with embedding and retention TTL."""
-    clean_content = sanitize_prompt_input(content, reject_injection=True)
+    """Store a version-1 tenant-scoped memory record with embedding, secret redaction, and retention TTL."""
+    raw_clean = sanitize_prompt_input(content, reject_injection=True)
+    interception = intercept_and_redact_secrets(
+        raw_clean,
+        db=db,
+        principal=principal,
+        settings=settings,
+        source_context=f"memory:{namespace}",
+        auto_vault=True,
+    )
+    clean_content = interception.sanitized_text
     m_type = memory_type.upper()
     if m_type not in VALID_MEMORY_TYPES:
         m_type = "EPISODIC"
@@ -107,6 +117,9 @@ def store_memory(
     embedding, embed_provider = _embed_with_honest_provider(clean_content, settings)
     meta = dict(metadata or {})
     meta["embedding_provider"] = embed_provider
+    if interception.redaction_count > 0:
+        meta["secrets_vaulted"] = interception.secrets_vaulted
+        meta["payment_data_blocked"] = interception.payment_data_blocked
 
     effective_ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_RETENTION_SECONDS.get(m_type)
     expires_at = (

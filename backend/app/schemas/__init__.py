@@ -215,6 +215,20 @@ class RecordTransactionRequest(BaseModel):
     currency: str = Field(default="USD", max_length=12)
     counterparty: str = Field(default="", max_length=160)
     project_id: str | None = None
+    scope: Literal["PERSONAL", "BUSINESS"] = "BUSINESS"
+
+
+class CreatePaymentMethodRequest(BaseModel):
+    provider: Literal["paystack", "flutterwave", "stripe", "bank_token"]
+    provider_token_ref: str = Field(min_length=6, max_length=160)
+    brand: Literal["VISA", "MASTERCARD", "VERVE", "AMEX"]
+    last4: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
+    exp_month: int = Field(ge=1, le=12)
+    exp_year: int = Field(ge=2025, le=2050)
+    cardholder_label: str = Field(default="", max_length=160)
+    currency: str = Field(default="NGN", max_length=12)
+    scope: Literal["PERSONAL", "BUSINESS"] = "PERSONAL"
+    is_preferred: bool = False
 
 
 class CreateBudgetRequest(BaseModel):
