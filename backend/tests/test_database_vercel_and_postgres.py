@@ -461,5 +461,65 @@ def test_classify_database_error_diagnoses_supabase_auth_and_pooler_errors() -> 
         Exception("FATAL: password authentication failed for user postgres"), cfg
     )
     assert code2 == "DB_AUTH_FAILED"
-    assert "URL-encode" in msg2
+    assert "ULTRON_DATABASE_URL" in msg2
+
+    bracket_cfg = Settings(
+        ULTRON_ENV="production",
+        VERCEL="1",
+        VERCEL_ENV="preview",
+        ULTRON_JWT_SECRET=_PROD_JWT,
+        ULTRON_VAULT_MASTER_KEY=_PROD_VAULT,
+        ULTRON_DATABASE_URL="postgresql://postgres.projref:[ActualPass123]@aws-0-us-east-1.pooler.supabase.com:6543/postgres",
+    )
+    assert bracket_cfg.database_diagnostics()["password_wrapped_in_brackets"] is True
+    code3, msg3 = db_session.classify_database_error(
+        Exception("FATAL: password authentication failed for user postgres.projref"), bracket_cfg
+    )
+    assert code3 == "DB_AUTH_FAILED"
+    assert "brackets" in msg3
+    assert "ActualPass123" not in msg3
+
+
+def test_unencoded_pg_password_chars_and_placeholder_detection() -> None:
+    import psycopg.conninfo
+
+    # Unencoded @, #, /, ?, and bare % are safely percent-encoded without breaking host parsing
+    raw_special = (
+        "postgresql://postgres.projref:My@Pass#12/34?50%@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
+    )
+    norm_special = normalize_database_url(raw_special, allow_sqlite=False, is_vercel=True)
+    ci = psycopg.conninfo.conninfo_to_dict(norm_special.replace("postgresql+psycopg://", "postgresql://", 1))
+    assert ci["host"] == "aws-0-us-east-1.pooler.supabase.com"
+    assert ci["port"] == "6543"
+    assert ci["password"] == "My@Pass#12/34?50%"
+
+    # Already-encoded %40%23 is NOT double-encoded
+    raw_encoded = (
+        "postgresql://postgres.projref:Already%40Encoded%231@aws-0-us-east-1.pooler.supabase.com:6543/postgres"
+    )
+    norm_encoded = normalize_database_url(raw_encoded, allow_sqlite=False, is_vercel=True)
+    ci_enc = psycopg.conninfo.conninfo_to_dict(norm_encoded.replace("postgresql+psycopg://", "postgresql://", 1))
+    assert ci_enc["password"] == "Already@Encoded#1"
+
+    # Literal Supabase placeholder rejected immediately
+    with pytest.raises(DatabaseConfigurationError, match="YOUR-PASSWORD"):
+        normalize_database_url(
+            "postgresql://postgres.projref:[YOUR-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres",
+            allow_sqlite=False,
+            is_vercel=True,
+        )
+
+
+def test_pulse_page_data_binding_uses_concrete_page_id(client: TestClient, auth_headers: dict) -> None:
+    resp = client.post(
+        "/api/v1/pulse/pages",
+        headers=auth_headers["operator"],
+        json={"title": "Live Ops Telemetry", "page_type": "AGENTS"},
+    )
+    assert resp.status_code == 201, resp.text
+    page = resp.json()
+    assert page["page_id"].startswith("pls_")
+    assert page["data_bindings"] == [f"/api/v1/pulse/pages/{page['page_id']}/live"]
+    assert "{page_id}" not in page["data_bindings"][0]
+
 

@@ -638,9 +638,10 @@ def create_pulse_page(
         raise ValidationError(f"Unsupported PULSE page_type '{ptype}'. Allowed: {', '.join(sorted(VALID_PULSE_TYPES))}")
 
     clean_slug = (slug or title.lower().replace(" ", "-"))[:120]
-    bindings = [f"/api/v1/pulse/pages/{{page_id}}/live"]
+    page_id = f"pls_{uuid.uuid4().hex[:14]}"
+    bindings = [f"/api/v1/pulse/pages/{page_id}/live"]
     page = PulsePageRecord(
-        page_id=f"pls_{uuid.uuid4().hex[:14]}",
+        page_id=page_id,
         tenant_id=principal.tenant_id,
         slug=clean_slug,
         title=title.strip()[:200],

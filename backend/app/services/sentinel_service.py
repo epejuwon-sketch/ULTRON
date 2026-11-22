@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.exceptions import AuthenticationError, ConflictError, NotFoundError
 from app.core.permissions import Principal
-from app.db.models import RecoveryCodeRecord, User, WebAuthnChallengeRecord, WebAuthnCredentialRecord
+from app.db.models import RecoveryCodeRecord, WebAuthnChallengeRecord, WebAuthnCredentialRecord
 from app.db.repositories import append_audit_log
 
 

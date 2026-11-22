@@ -81,10 +81,16 @@ def classify_database_error(exc: Exception, settings: Settings) -> tuple[str, st
             "username format `postgres.<project-ref>` copied from Supabase -> Connect -> Transaction Pooler.",
         )
     if "password authentication failed" in lower or "authentication failed" in lower:
+        if diag.get("password_wrapped_in_brackets"):
+            return (
+                "DB_AUTH_FAILED",
+                "PostgreSQL authentication failed: the password in ULTRON_DATABASE_URL is wrapped in '[' and ']' "
+                "brackets (from Supabase's '[YOUR-PASSWORD]' template). Remove the surrounding '[' and ']' brackets and redeploy.",
+            )
         return (
             "DB_AUTH_FAILED",
-            "PostgreSQL authentication failed. Verify the database password in ULTRON_DATABASE_URL "
-            "(URL-encode special characters like @, #, %, / if present).",
+            "PostgreSQL authentication failed. Verify the database password in ULTRON_DATABASE_URL matches your "
+            "Supabase Database Password (Settings -> Database -> Reset database password if needed) and redeploy.",
         )
     if "timeout" in lower or "timed out" in lower or "connection refused" in lower:
         return (

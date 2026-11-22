@@ -7,9 +7,11 @@ serialized into logs or status responses.
 
 from __future__ import annotations
 
+import re
 import secrets
 from functools import lru_cache
 from typing import Any, Literal
+from urllib.parse import quote
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,13 +33,66 @@ _NON_LIBPQ_QUERY_PARAMS = frozenset(
         "statement_cache_size",
     }
 )
+_PG_URI_SPLIT_RE = re.compile(
+    r"^(postgresql(?:\+[a-z0-9_]+)?://)([^:/@\s]+):(.+)@([A-Za-z0-9._-]+(?::\d+)?(?:/[^?#\s]*)?(?:\?[^#\s]*)?)$",
+    re.IGNORECASE,
+)
+_PCT_ESCAPED_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_PLACEHOLDER_PASSWORDS = frozenset(
+    {
+        "[your-password]",
+        "your-password",
+        "your_password",
+        "<your-password>",
+        "<password>",
+        "[password]",
+    }
+)
 
 
 def _strip_matching_quotes(value: str) -> str:
-    s = value.strip()
+    s = value.replace("\u200b", "").replace("\ufeff", "").strip()
     if len(s) >= 2 and s[0] == s[-1] and s[0] in {"'", '"'}:
         return s[1:-1].strip()
     return s
+
+
+def _encode_unencoded_pg_password(candidate: str) -> str:
+    """Safely percent-encode unencoded reserved characters in a PostgreSQL URI password.
+
+    Splits on the LAST `@` before `host[:port][/db][?query]` so passwords containing
+    literal `@`, `#`, `?`, `/`, spaces, or unescaped `%` do not break SQLAlchemy/libpq
+    URI parsing, while preserving already percent-encoded `%XX` sequences intact.
+    """
+    match = _PG_URI_SPLIT_RE.match(candidate)
+    if not match:
+        return candidate
+
+    scheme, user, raw_pwd, host_and_rest = match.groups()
+    if raw_pwd.strip().lower() in _PLACEHOLDER_PASSWORDS:
+        raise DatabaseConfigurationError(
+            "ULTRON_DATABASE_URL still contains the placeholder password '[YOUR-PASSWORD]'. "
+            "Replace it with your actual Supabase database password (without square brackets).",
+            details={"required_env_var": "ULTRON_DATABASE_URL", "error_code": "DB_PLACEHOLDER_PASSWORD"},
+        )
+
+    # Encode only segments outside valid %XX escapes so already-encoded passwords are never double-encoded.
+    needs_encoding = any(ch in raw_pwd for ch in ("@", "#", "?", "/", " ", "\t")) or bool(
+        re.search(r"%(?![0-9A-Fa-f]{2})", raw_pwd)
+    )
+    if not needs_encoding:
+        return candidate
+
+    parts: list[str] = []
+    pos = 0
+    for esc in _PCT_ESCAPED_RE.finditer(raw_pwd):
+        if esc.start() > pos:
+            parts.append(quote(raw_pwd[pos : esc.start()], safe="!$&'()*+,;=.-_~"))
+        parts.append(esc.group(0))
+        pos = esc.end()
+    if pos < len(raw_pwd):
+        parts.append(quote(raw_pwd[pos:], safe="!$&'()*+,;=.-_~"))
+    return f"{scheme}{user}:{''.join(parts)}@{host_and_rest}"
 
 
 def normalize_database_url(
@@ -51,7 +106,9 @@ def normalize_database_url(
 
     - Rejects missing URLs and SQLite URLs whenever `allow_sqlite` is False (production,
       staging, and Vercel preview/production deployments).
-    - Strips accidental surrounding quotes (common when pasting from mobile devices).
+    - Strips accidental surrounding quotes and invisible mobile paste characters.
+    - Rejects literal `[YOUR-PASSWORD]` placeholders and safely percent-encodes unencoded
+      reserved characters (`@`, `#`, `?`, `/`, bare `%`) in PostgreSQL passwords.
     - Normalizes `postgres://`, `postgresql://`, and `postgresql+psycopg2://` to
       `postgresql+psycopg://` to match the installed `psycopg` v3 driver.
     - Strips non-libpq Supabase/Prisma/Vercel pooler query flags (`pgbouncer`, `supa`,
@@ -123,6 +180,8 @@ def normalize_database_url(
                 "required_env_var": "ULTRON_DATABASE_URL",
             },
         )
+
+    candidate = _encode_unencoded_pg_password(candidate)
 
     try:
         parsed = make_url(candidate)
@@ -396,6 +455,7 @@ class Settings(BaseSettings):
             "port": None,
             "sslmode_enforced": False,
             "pool_strategy": pool_strategy,
+            "password_wrapped_in_brackets": False,
         }
         if backend != "postgresql":
             return info
@@ -416,6 +476,8 @@ class Settings(BaseSettings):
                 "verify-ca",
                 "verify-full",
             }
+            pwd = parsed.password or ""
+            info["password_wrapped_in_brackets"] = len(pwd) >= 3 and pwd.startswith("[") and pwd.endswith("]")
         except Exception:
             pass
         return info
