@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Environment & Secrets (NEVER commit real secrets)
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Local SQLite runtime databases
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Node / Cloudflare Wrangler / Vercel
+node_modules/
+.vercel/
+.wrangler/
+dist/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

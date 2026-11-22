@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ultron-os-2026"
+version = "2026.1.0"
+description = "ULTRON OS 2026 — Modular autonomous multi-agent intelligence operating system backend (NEON, ARGON, ApprovalGate, Supabase, Gemini, Vercel, Cloudflare)."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-dotenv>=1.0.1",
+    "sqlalchemy>=2.0.35",
+    "argon2-cffi>=23.1.0",
+    "cryptography>=43.0.0",
+    "PyJWT>=2.9.0",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.12",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2.0"]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.7.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["backend/tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
