@@ -116,3 +116,98 @@ def test_neon_multi_provider_failover_chain() -> None:
     assert result["text"] == "Failover succeeded via OpenAI"
     assert len(errors) == 1
     assert errors[0]["provider"] == "gemini"
+
+
+def test_gemini_intra_model_fallback_and_safe_error_diagnostics() -> None:
+    cfg = Settings(
+        ULTRON_ENV="test",
+        GEMINI_API_KEY="AIzaSyFakeSecretKeyDoNotLeak999999999",
+    )
+    called_models: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        # Path format: /v1beta/models/<model>:generateContent
+        model_seg = req.url.path.split("/models/")[-1].split(":")[0]
+        called_models.append(model_seg)
+        if model_seg == "gemini-4-argon":
+            return httpx.Response(
+                403,
+                json={
+                    "error": {
+                        "code": 403,
+                        "status": "PERMISSION_DENIED",
+                        "message": "Model gemini-4-argon requires paid tier billing.",
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": "internal thought", "thought": True},
+                                {"text": "NEON Gemini connection successful."},
+                            ]
+                        }
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 6, "totalTokenCount": 18},
+            },
+        )
+
+    gemini_provider = GeminiLLMProvider(cfg, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result, errors = execute_with_failover(
+        settings=cfg,
+        prompt="Run a live Gemini connection test.",
+        system_instruction="Executive assistant",
+        primary_model="gemini-4-argon",
+        max_retries_per_provider=1,
+        providers=[gemini_provider],
+    )
+    assert result is not None
+    assert result["provider"] == "gemini"
+    assert result["model"] == "gemini-4-hydrogen"
+    assert result["text"] == "NEON Gemini connection successful."
+    assert called_models == ["gemini-4-argon", "gemini-4-hydrogen"]
+    assert len(errors) == 1
+    assert errors[0]["http_status"] == "403"
+    assert errors[0]["google_status"] == "PERMISSION_DENIED"
+    assert "AIzaSyFakeSecretKey" not in errors[0]["error"]
+
+
+def test_gemini_invalid_key_stops_immediately_without_leaking_secret() -> None:
+    secret_key = "AIzaSySecretKeyNeverEcho1234567890"
+    cfg = Settings(ULTRON_ENV="test", GEMINI_API_KEY=secret_key)
+    calls = {"n": 0}
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": 400,
+                    "status": "INVALID_ARGUMENT",
+                    "message": f"API_KEY_INVALID for key {secret_key}",
+                }
+            },
+        )
+
+    gemini_provider = GeminiLLMProvider(cfg, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result, errors = execute_with_failover(
+        settings=cfg,
+        prompt="Ping",
+        system_instruction=None,
+        primary_model="gemini-4-argon",
+        max_retries_per_provider=1,
+        providers=[gemini_provider],
+    )
+    assert result is None
+    assert calls["n"] == 1
+    assert len(errors) == 1
+    assert errors[0]["http_status"] == "400"
+    assert errors[0]["google_status"] == "INVALID_ARGUMENT"
+    assert secret_key not in errors[0]["error"]
+

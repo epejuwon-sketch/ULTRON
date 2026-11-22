@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Generator
 from typing import Any
@@ -11,7 +12,24 @@ import httpx
 
 from app.core.config import Settings
 from app.core.exceptions import IntegrationError
+from app.core.logging import redact_secrets
 from app.integrations.base import HonestCapabilityState, IntegrationStatus, classify_http_error
+
+logger = logging.getLogger("ultron.gemini")
+
+
+def _extract_safe_google_error(resp: httpx.Response) -> tuple[str, str]:
+    """Extract non-secret Google API `(status_code_name, redacted_message)` from an error response."""
+    try:
+        payload = resp.json()
+        err = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(err, dict):
+            g_status = str(err.get("status") or "").strip()
+            g_msg = redact_secrets(str(err.get("message") or "").strip())[:220]
+            return g_status, g_msg
+    except Exception:
+        pass
+    return "", ""
 
 
 class GeminiClient:
@@ -59,7 +77,7 @@ class GeminiClient:
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
         timeout_seconds: float = 20.0,
-        max_retries: int = 2,
+        max_retries: int = 1,
     ) -> httpx.Response:
         last_exc: Exception | None = None
         for attempt in range(max_retries + 1):
@@ -107,7 +125,9 @@ class GeminiClient:
         endpoint = f"{self.base_url}/models"
         resp = self._request_with_retry("GET", endpoint, params={"pageSize": page_size}, timeout_seconds=timeout_seconds, max_retries=1)
         if resp.status_code >= 400:
-            raise IntegrationError(f"Gemini model discovery failed: {classify_http_error(resp.status_code)}")
+            g_status, g_msg = _extract_safe_google_error(resp)
+            suffix = f" ({g_status}: {g_msg})" if g_status or g_msg else ""
+            raise IntegrationError(f"Gemini model discovery failed: {classify_http_error(resp.status_code)}{suffix}")
         raw_models = resp.json().get("models", [])
         return [
             {
@@ -140,6 +160,8 @@ class GeminiClient:
                     latency_ms=latency_ms,
                     detail=f"Gemini API live check passed ({len(models)} models discovered).",
                 )
+            g_status, g_msg = _extract_safe_google_error(resp)
+            extra = f" [{g_status}] {g_msg}" if (g_status or g_msg) else ""
             return IntegrationStatus(
                 provider="gemini",
                 configured=True,
@@ -147,7 +169,7 @@ class GeminiClient:
                 live_verified=False,
                 endpoint=endpoint,
                 latency_ms=latency_ms,
-                detail=classify_http_error(resp.status_code),
+                detail=f"{classify_http_error(resp.status_code)}{extra}",
             )
         except IntegrationError as exc:
             return IntegrationStatus(
@@ -183,9 +205,13 @@ class GeminiClient:
         if multimodal_parts:
             parts.extend(multimodal_parts)
 
+        # Gemini 4 models include thinking tokens inside maxOutputTokens; ensure enough headroom for visible text.
+        effective_max_tokens = (
+            max(max_output_tokens, 2048) if target_model.startswith("gemini-4") else max_output_tokens
+        )
         gen_cfg: dict[str, Any] = {
             "temperature": temperature,
-            "maxOutputTokens": max_output_tokens,
+            "maxOutputTokens": effective_max_tokens,
         }
         if response_mime_type:
             gen_cfg["responseMimeType"] = response_mime_type
@@ -204,9 +230,31 @@ class GeminiClient:
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         if resp.status_code >= 400:
+            category = classify_http_error(resp.status_code)
+            g_status, g_msg = _extract_safe_google_error(resp)
+            logger.warning(
+                "Gemini generateContent failed: model=%s http_status=%s category=%s google_status=%s latency_ms=%d detail=%s",
+                target_model,
+                resp.status_code,
+                category,
+                g_status or "UNKNOWN",
+                latency_ms,
+                g_msg or "none",
+            )
+            detail_parts = [f"model={target_model}"]
+            if g_status:
+                detail_parts.append(f"google_status={g_status}")
+            if g_msg:
+                detail_parts.append(g_msg)
             raise IntegrationError(
-                f"Gemini generateContent failed: {classify_http_error(resp.status_code)}",
-                details={"status_code": resp.status_code, "model": target_model},
+                f"Gemini generateContent failed: {category} ({'; '.join(detail_parts)})",
+                details={
+                    "status_code": resp.status_code,
+                    "category": category,
+                    "google_status": g_status,
+                    "model": target_model,
+                    "safe_detail": g_msg,
+                },
             )
 
         data = resp.json()
@@ -215,6 +263,8 @@ class GeminiClient:
         function_calls: list[dict[str, Any]] = []
         if candidates:
             for part in candidates[0].get("content", {}).get("parts", []):
+                if part.get("thought") is True:
+                    continue
                 if "text" in part:
                     text_parts.append(part["text"])
                 if "functionCall" in part:

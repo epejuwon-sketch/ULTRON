@@ -276,10 +276,22 @@ def invoke_agent_reasoning(
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     if failover_errors:
+        import logging
+
+        last_err = failover_errors[-1]
+        safe_reason = f"{last_err.get('provider', 'llm')}/{last_err.get('model', primary_model)}: {last_err.get('error', 'unknown')}"
+        logging.getLogger("ultron.neon").warning(
+            "NEON degraded fallback after upstream provider errors: agent=%s tier=%s attempts=%d errors=%s",
+            agent.agent_id,
+            tier,
+            len(failover_errors),
+            failover_errors,
+        )
         exec_mode = "degraded_fallback_after_provider_error"
         output_text = (
             f"[{agent.agent_id} | {agent.name}] Upstream LLM providers failed "
-            f"({len(failover_errors)} attempts). Structured directive captured for '{agent.domain}': {clean_prompt}"
+            f"({len(failover_errors)} attempts; last error: {safe_reason}). "
+            f"Structured directive captured for '{agent.domain}': {clean_prompt}"
         )
     else:
         exec_mode = "local_deterministic_fallback"

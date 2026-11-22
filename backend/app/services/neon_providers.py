@@ -14,9 +14,12 @@ from app.integrations.gemini import GeminiClient
 
 # Estimated USD per 1M tokens (input, output) for cost monitoring & budgeting
 MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
-    "gemini-3.5-flash-lite": (0.075, 0.30),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
     "gemini-3.8-flash": (0.20, 0.80),
-    "gemini-4-argon": (1.25, 8.00),
+    "gemini-4-hydrogen": (1.50, 7.50),
+    "gemini-4-neon": (3.00, 15.00),
+    "gemini-4-argon": (2.00, 10.00),
+    "gemini-4-carbon": (2.00, 10.00),
     "gemini-2.5-flash-lite": (0.075, 0.30),
     "gemini-2.0-flash-lite": (0.075, 0.30),
     "gemini-2.0-flash": (0.10, 0.40),
@@ -372,6 +375,24 @@ def get_model_capability_registry(settings: Settings) -> list[dict[str, Any]]:
     ]
 
 
+def _build_gemini_model_candidates(primary_model: str, settings: Settings) -> list[str]:
+    """Build a deduplicated Gemini model fallback chain prioritizing primary -> free+paid models."""
+    ordered = [
+        primary_model,
+        "gemini-4-hydrogen",
+        settings.gemini_model_standard,
+        settings.gemini_model_fast,
+    ]
+    seen: set[str] = set()
+    result: list[str] = []
+    for m in ordered:
+        clean = (m or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            result.append(clean)
+    return result
+
+
 def execute_with_failover(
     *,
     settings: Settings,
@@ -384,7 +405,7 @@ def execute_with_failover(
     timeout_seconds: float = 20.0,
     providers: list[BaseLLMProvider] | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
-    """Execute prompt across configured providers in priority order with retry & failover."""
+    """Execute prompt across configured providers in priority order with intra-Gemini model fallback & failover."""
     chain = providers or [
         GeminiLLMProvider(settings),
         OpenAILLMProvider(settings),
@@ -395,6 +416,41 @@ def execute_with_failover(
     errors: list[dict[str, str]] = []
 
     for provider in configured_chain:
+        if provider.provider_name == "gemini" and max_retries_per_provider >= 1:
+            candidate_models = _build_gemini_model_candidates(primary_model, settings)
+            for idx, target_model in enumerate(candidate_models):
+                try:
+                    result = provider.generate(
+                        prompt=prompt,
+                        system_instruction=system_instruction,
+                        model=target_model,
+                        temperature=temperature,
+                        max_output_tokens=max_output_tokens,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    return result, errors
+                except Exception as exc:
+                    details = getattr(exc, "details", {}) if isinstance(exc, IntegrationError) else {}
+                    status_code = details.get("status_code") if isinstance(details, dict) else None
+                    google_status = str(details.get("google_status") or "") if isinstance(details, dict) else ""
+                    err_entry: dict[str, str] = {
+                        "provider": provider.provider_name,
+                        "model": target_model,
+                        "attempt": str(idx + 1),
+                        "error": str(exc),
+                    }
+                    if status_code is not None:
+                        err_entry["http_status"] = str(status_code)
+                    if google_status:
+                        err_entry["google_status"] = google_status
+                    errors.append(err_entry)
+                    # Stop trying other Gemini models immediately if the API key itself is invalid (401/API_KEY_INVALID)
+                    if status_code == 401 or "API_KEY_INVALID" in str(exc):
+                        break
+                    if idx + 1 < len(candidate_models):
+                        time.sleep(0.15)
+            continue
+
         target_model = primary_model if provider.provider_name == "gemini" else provider.default_model()
         for attempt in range(max_retries_per_provider + 1):
             try:
