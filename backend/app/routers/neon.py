@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -19,14 +19,16 @@ from app.schemas import (
 from app.services.neon_router import (
     create_conversation,
     get_conversation,
+    get_gemini_diagnostics,
     get_model_capability_registry,
     get_reasoning_tiers,
     get_usage_summary,
     invoke_agent_reasoning,
     list_conversations,
     route_objective,
+    run_gemini_verification_suite,
     send_conversation_message,
-    stream_neon_events,
+    stream_live_neon_events,
 )
 from app.services.tool_service import execute_tool
 
@@ -48,6 +50,36 @@ def api_neon_tiers(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     return {"tiers": list(get_reasoning_tiers(settings).values())}
+
+
+@router.get("/gemini/diagnostics")
+def api_neon_gemini_diagnostics(
+    discover: bool = Query(default=False),
+    principal: Principal = Depends(require_perm("agents:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Return honest Gemini primary intelligence diagnostics, 5-tier model matrix, and optional live catalog discovery."""
+    return get_gemini_diagnostics(
+        db,
+        tenant_id=principal.tenant_id,
+        settings=settings,
+        discover_live=discover,
+    )
+
+
+@router.post("/gemini/verify-suite")
+def api_neon_gemini_verify_suite(
+    principal: Principal = Depends(require_perm("agents:invoke")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Execute safe live verification across all 5 reasoning tiers, structured JSON, tool calling, streaming, fallback, and ApprovalGate."""
+    return run_gemini_verification_suite(
+        db,
+        principal=principal,
+        settings=settings,
+    )
 
 
 @router.post("/route")
@@ -114,23 +146,26 @@ def api_neon_stream(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
-    """Stream NEON reasoning events over Server-Sent Events (`text/event-stream`)."""
+    """Stream NEON reasoning events over Server-Sent Events (`text/event-stream`), using live Gemini streaming when available."""
     routing = route_objective(body.prompt, settings=settings, preferred_agent_id=body.agent_id)
-    result = invoke_agent_reasoning(
-        db,
-        agent_id=body.agent_id or routing["selected_agent_id"],
-        prompt=body.prompt,
-        settings=settings,
-        context=body.context,
-        reasoning_tier=body.reasoning_tier or routing["reasoning_tier"],
-        response_format=body.response_format,
-        temperature=body.temperature,
-        max_output_tokens=body.max_output_tokens,
-        tenant_id=principal.tenant_id,
-        actor=principal.username,
+    target_agent = body.agent_id or routing["selected_agent_id"]
+    tier = body.reasoning_tier or routing["reasoning_tier"]
+    return StreamingResponse(
+        stream_live_neon_events(
+            db,
+            agent_id=target_agent,
+            prompt=body.prompt,
+            settings=settings,
+            context=body.context,
+            reasoning_tier=tier,
+            response_format=body.response_format,
+            temperature=body.temperature,
+            max_output_tokens=body.max_output_tokens,
+            tenant_id=principal.tenant_id,
+            actor=principal.username,
+        ),
+        media_type="text/event-stream",
     )
-    db.commit()
-    return StreamingResponse(stream_neon_events(result), media_type="text/event-stream")
 
 
 @router.post("/conversations", status_code=status.HTTP_201_CREATED)

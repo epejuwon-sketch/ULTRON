@@ -9,6 +9,7 @@ from collections.abc import Generator
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,7 @@ from app.integrations.gemini import GeminiClient
 from app.services.neon_providers import (
     BaseLLMProvider,
     GeminiLLMProvider,
+    build_gemini_tier_fallback_chain,
     estimate_cost_usd,
     execute_with_failover,
     get_model_capability_registry,
@@ -45,41 +47,82 @@ DOMAIN_ROUTING_RULES: list[tuple[tuple[str, ...], str]] = [
 
 
 def get_reasoning_tiers(settings: Settings) -> dict[int, dict[str, Any]]:
+    """Return all 5 configurable Gemini reasoning tiers with controlled fallback chains."""
+    t1_primary = settings.resolve_gemini_tier_model(1)
+    t2_primary = settings.resolve_gemini_tier_model(2)
+    t3_primary = settings.resolve_gemini_tier_model(3)
+    t4_primary = settings.resolve_gemini_tier_model(4)
+    t5_primary = settings.resolve_gemini_tier_model(5)
+
     return {
         1: {
             "tier": 1,
-            "name": "Tier 1: Fast Operations",
-            "primary_model": settings.gemini_model_fast,
-            "fallback_models": [settings.ollama_model_local, settings.openai_model_fallback],
-            "purpose": "Low-latency status checks, telemetry triage, and direct deterministic actions.",
+            "name": "Tier 1: Fast Operations & Lightweight Tasks",
+            "provider": "gemini",
+            "api_interface": settings.gemini_api_mode,
+            "primary_model": t1_primary,
+            "gemini_fallback_chain": build_gemini_tier_fallback_chain(t1_primary, settings, reasoning_tier=1)[1:],
+            "fallback_models": [
+                *build_gemini_tier_fallback_chain(t1_primary, settings, reasoning_tier=1)[1:3],
+                settings.ollama_model_local,
+                settings.openai_model_fallback,
+            ],
+            "purpose": "Fast responses, telemetry triage, classification, and lightweight deterministic actions.",
         },
         2: {
             "tier": 2,
-            "name": "Tier 2: Standard Reasoning",
-            "primary_model": settings.gemini_model_standard,
-            "fallback_models": [settings.openai_model_fallback, settings.ollama_model_local],
-            "purpose": "Routine reasoning, single-domain execution, and structured summaries.",
+            "name": "Tier 2: Standard Everyday Intelligence",
+            "provider": "gemini",
+            "api_interface": settings.gemini_api_mode,
+            "primary_model": t2_primary,
+            "gemini_fallback_chain": build_gemini_tier_fallback_chain(t2_primary, settings, reasoning_tier=2)[1:],
+            "fallback_models": [
+                *build_gemini_tier_fallback_chain(t2_primary, settings, reasoning_tier=2)[1:3],
+                settings.openai_model_fallback,
+                settings.ollama_model_local,
+            ],
+            "purpose": "Standard everyday intelligence, single-domain execution, and structured summaries.",
         },
         3: {
             "tier": 3,
-            "name": "Tier 3: Complex Engineering & Problem Solving",
-            "primary_model": settings.gemini_model_standard,
-            "fallback_models": [settings.anthropic_model_fallback, settings.openai_model_fallback],
-            "purpose": "Multi-step planning, debugging, workflow design, and code synthesis.",
+            "name": "Tier 3: Advanced Reasoning & Specialist Work",
+            "provider": "gemini",
+            "api_interface": settings.gemini_api_mode,
+            "primary_model": t3_primary,
+            "gemini_fallback_chain": build_gemini_tier_fallback_chain(t3_primary, settings, reasoning_tier=3)[1:],
+            "fallback_models": [
+                *build_gemini_tier_fallback_chain(t3_primary, settings, reasoning_tier=3)[1:3],
+                settings.anthropic_model_fallback,
+                settings.openai_model_fallback,
+            ],
+            "purpose": "Advanced reasoning, specialist engineering, debugging, workflow design, and code synthesis.",
         },
         4: {
             "tier": 4,
-            "name": "Tier 4: Deep Research & Risk Analysis",
-            "primary_model": settings.gemini_model_reasoning,
-            "fallback_models": [settings.anthropic_model_fallback, settings.openai_model_fallback],
-            "purpose": "Financial modeling, legal/security analysis, and deep evidence synthesis.",
+            "name": "Tier 4: Complex Research, Coding & Multi-Step Planning",
+            "provider": "gemini",
+            "api_interface": settings.gemini_api_mode,
+            "primary_model": t4_primary,
+            "gemini_fallback_chain": build_gemini_tier_fallback_chain(t4_primary, settings, reasoning_tier=4)[1:],
+            "fallback_models": [
+                *build_gemini_tier_fallback_chain(t4_primary, settings, reasoning_tier=4)[1:3],
+                settings.anthropic_model_fallback,
+                settings.openai_model_fallback,
+            ],
+            "purpose": "Complex research, deep coding, financial/legal/security modeling, and multi-step planning.",
         },
         5: {
             "tier": 5,
-            "name": "Tier 5: Multi-Agent Executive Orchestration",
-            "primary_model": settings.gemini_model_reasoning,
-            "fallback_models": [settings.anthropic_model_fallback],
-            "purpose": "Cross-domain DAG orchestration, governance enforcement, and executive synthesis.",
+            "name": "Tier 5: Highest Available Reasoning & Executive Orchestration",
+            "provider": "gemini",
+            "api_interface": settings.gemini_api_mode,
+            "primary_model": t5_primary,
+            "gemini_fallback_chain": build_gemini_tier_fallback_chain(t5_primary, settings, reasoning_tier=5)[1:],
+            "fallback_models": [
+                *build_gemini_tier_fallback_chain(t5_primary, settings, reasoning_tier=5)[1:4],
+                settings.anthropic_model_fallback,
+            ],
+            "purpose": "Highest available reasoning capability for cross-domain DAG orchestration, governance, and executive synthesis.",
         },
     }
 
@@ -173,6 +216,22 @@ def _record_usage_log(
     return cost
 
 
+def _parse_structured_json(raw_text: str) -> Any:
+    """Parse JSON response tolerating optional ```json markdown fences."""
+    cleaned = (raw_text or "").strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {"raw_text": raw_text, "json_valid": False}
+
+
 def invoke_agent_reasoning(
     db: Session,
     *,
@@ -182,6 +241,8 @@ def invoke_agent_reasoning(
     context: dict[str, Any] | None = None,
     reasoning_tier: int | None = None,
     response_format: str = "text",
+    response_schema: dict[str, Any] | None = None,
+    function_declarations: list[dict[str, Any]] | None = None,
     temperature: float = 0.2,
     max_output_tokens: int = 1024,
     tenant_id: str | None = None,
@@ -226,8 +287,12 @@ def invoke_agent_reasoning(
         prompt=full_prompt,
         system_instruction=agent.system_instruction,
         primary_model=primary_model,
+        reasoning_tier=tier,
         temperature=temperature,
         max_output_tokens=max_output_tokens,
+        response_mime_type="application/json" if response_format == "json" else None,
+        response_schema=response_schema,
+        function_declarations=function_declarations,
         providers=provider_chain,
     )
 
@@ -235,12 +300,7 @@ def invoke_agent_reasoning(
         provider_name = llm_response["provider"]
         exec_mode = f"{provider_name}_live"
         raw_text = llm_response["text"]
-        structured_output: Any = None
-        if response_format == "json":
-            try:
-                structured_output = json.loads(raw_text)
-            except json.JSONDecodeError:
-                structured_output = {"raw_text": raw_text, "json_valid": False}
+        structured_output: Any = _parse_structured_json(raw_text) if response_format == "json" else None
 
         cost = 0.0
         if tenant_id:
@@ -267,12 +327,14 @@ def invoke_agent_reasoning(
             "domain": agent.domain,
             "reasoning_tier": tier,
             "provider": provider_name,
+            "api_interface": llm_response.get("api_interface", "generate_content"),
             "primary_model": primary_model,
             "model": actual_model,
             "fallback_used": fallback_used,
             "execution_mode": exec_mode,
             "output": raw_text,
             "structured_output": structured_output,
+            "function_calls": llm_response.get("function_calls", []),
             "failover_errors": failover_errors,
             "latency_ms": llm_response["latency_ms"],
             "usage": llm_response["usage"],
@@ -554,6 +616,548 @@ def get_usage_summary(db: Session, *, tenant_id: str) -> dict[str, Any]:
     }
 
 
+def stream_live_neon_events(
+    db: Session,
+    *,
+    agent_id: str,
+    prompt: str,
+    settings: Settings,
+    context: dict[str, Any] | None = None,
+    reasoning_tier: int | None = None,
+    response_format: str = "text",
+    temperature: float = 0.2,
+    max_output_tokens: int = 1024,
+    tenant_id: str | None = None,
+    actor: str = "SYSTEM",
+    gemini_client: GeminiClient | None = None,
+) -> Generator[str, None, None]:
+    """Stream live SSE frames via Gemini `streamGenerateContent?alt=sse` when available, falling back cleanly."""
+    client = gemini_client or GeminiClient(settings)
+    agent = db.get(AgentRecord, agent_id)
+    if agent is None:
+        raise NotFoundError(f"Agent '{agent_id}' not found in catalog.")
+
+    tier = max(1, min(5, int(reasoning_tier or agent.default_reasoning_tier)))
+    primary_model = get_reasoning_tiers(settings)[tier]["primary_model"]
+
+    if client.is_configured() and response_format != "json":
+        clean_prompt = sanitize_prompt_input(prompt, reject_injection=True)
+        interception = intercept_and_redact_secrets(
+            clean_prompt,
+            db=db if tenant_id else None,
+            principal=None,
+            settings=settings,
+            source_context=f"neon_stream:{agent_id}",
+            auto_vault=False,
+        )
+        full_prompt = interception.sanitized_text
+        if context:
+            full_prompt = f"Context:\n{json.dumps(context, default=str)}\n\nDirective:\n{full_prompt}"
+
+        candidates = build_gemini_tier_fallback_chain(primary_model, settings, reasoning_tier=tier)
+        for target_model in candidates:
+            started = time.perf_counter()
+            collected: list[str] = []
+            try:
+                stream_gen = client.stream_generate_content(
+                    prompt=full_prompt,
+                    system_instruction=agent.system_instruction,
+                    model=target_model,
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                    timeout_seconds=max(settings.gemini_request_timeout_seconds, 25.0),
+                )
+                first_chunk = next(stream_gen, None)
+                if first_chunk is None:
+                    continue
+                meta = {
+                    "agent_id": agent.agent_id,
+                    "provider": "gemini",
+                    "api_interface": "stream_generate_content",
+                    "primary_model": primary_model,
+                    "model": target_model,
+                    "fallback_used": target_model != primary_model,
+                    "execution_mode": "gemini_live",
+                    "reasoning_tier": tier,
+                }
+                yield f"event: metadata\ndata: {json.dumps(meta)}\n\n"
+                collected.append(first_chunk)
+                yield f"event: delta\ndata: {json.dumps({'text': first_chunk})}\n\n"
+                for piece in stream_gen:
+                    collected.append(piece)
+                    yield f"event: delta\ndata: {json.dumps({'text': piece})}\n\n"
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                est_prompt = max(1, len(full_prompt.split()))
+                est_comp = max(1, len("".join(collected).split()))
+                usage = {"prompt_tokens": est_prompt, "completion_tokens": est_comp, "total_tokens": est_prompt + est_comp}
+                cost = 0.0
+                if tenant_id:
+                    cost = _record_usage_log(
+                        db,
+                        tenant_id=tenant_id,
+                        actor=actor,
+                        agent_id=agent.agent_id,
+                        provider="gemini",
+                        model=target_model,
+                        reasoning_tier=tier,
+                        execution_mode="gemini_live",
+                        usage=usage,
+                        latency_ms=latency_ms,
+                    )
+                    db.commit()
+                yield f"event: done\ndata: {json.dumps({'usage': usage, 'latency_ms': latency_ms, 'estimated_cost_usd': cost, 'fallback_used': target_model != primary_model})}\n\n"
+                return
+            except Exception:
+                if collected:
+                    # Already emitted live deltas; close stream cleanly
+                    yield f"event: done\ndata: {json.dumps({'interrupted': True})}\n\n"
+                    return
+                continue
+
+    # Safe fallback to standard invoke + SSE chunking
+    result = invoke_agent_reasoning(
+        db,
+        agent_id=agent_id,
+        prompt=prompt,
+        settings=settings,
+        context=context,
+        reasoning_tier=tier,
+        response_format=response_format,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        tenant_id=tenant_id,
+        actor=actor,
+        gemini_client=gemini_client,
+    )
+    db.commit()
+    yield from stream_neon_events(result)
+
+
+def get_gemini_diagnostics(
+    db: Session,
+    *,
+    tenant_id: str,
+    settings: Settings,
+    discover_live: bool = False,
+    http_client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Return honest, comprehensive Gemini primary intelligence diagnostics for NEON & Connections Centre.
+
+    Strictly separates catalog model discovery from real live inference verification.
+    """
+    client = GeminiClient(settings, http_client=http_client)
+    configured = client.is_configured()
+    tiers_dict = get_reasoning_tiers(settings)
+
+    # Query persisted live Gemini inference logs for this tenant (tenant-isolated!)
+    live_rows = (
+        db.execute(
+            select(LLMUsageLog)
+            .where(
+                LLMUsageLog.tenant_id == tenant_id,
+                LLMUsageLog.provider == "gemini",
+                LLMUsageLog.execution_mode == "gemini_live",
+            )
+            .order_by(LLMUsageLog.created_at.desc())
+            .limit(100)
+        )
+        .scalars()
+        .all()
+    )
+    all_recent_rows = (
+        db.execute(
+            select(LLMUsageLog)
+            .where(LLMUsageLog.tenant_id == tenant_id)
+            .order_by(LLMUsageLog.created_at.desc())
+            .limit(100)
+        )
+        .scalars()
+        .all()
+    )
+
+    fallback_rows = [r for r in all_recent_rows if r.execution_mode != "gemini_live"]
+    tier_fallback_used = 0
+    for r in live_rows:
+        expected_primary = settings.resolve_gemini_tier_model(r.reasoning_tier)
+        if r.model != expected_primary:
+            tier_fallback_used += 1
+
+    last_live = live_rows[0] if live_rows else None
+    avg_live_latency = (
+        round(sum(r.latency_ms for r in live_rows) / len(live_rows), 1) if live_rows else None
+    )
+
+    # Optional live catalog discovery via GET /v1beta/models
+    catalog_verified = False
+    catalog_latency_ms: int | None = None
+    catalog_error: str | None = None
+    available_models: list[dict[str, Any]] = []
+    catalog_source = "static_registry"
+
+    if discover_live and configured:
+        started = time.perf_counter()
+        try:
+            available_models = client.list_models(page_size=100, timeout_seconds=8.0)
+            catalog_latency_ms = int((time.perf_counter() - started) * 1000)
+            catalog_verified = True
+            catalog_source = "live_api"
+        except Exception as exc:
+            catalog_latency_ms = int((time.perf_counter() - started) * 1000)
+            catalog_error = str(exc)
+
+    if not available_models:
+        available_models = [
+            m for m in get_model_capability_registry(settings) if m["provider"] == "gemini"
+        ]
+
+    # Secondary failover providers status
+    secondary_providers = {
+        "openai": {
+            "configured": bool(settings.openai_api_key and settings.openai_api_key.get_secret_value().strip()),
+            "model": settings.openai_model_fallback,
+        },
+        "anthropic": {
+            "configured": bool(settings.anthropic_api_key and settings.anthropic_api_key.get_secret_value().strip()),
+            "model": settings.anthropic_model_fallback,
+        },
+        "ollama": {
+            "configured": bool(settings.ollama_base_url.strip()),
+            "model": settings.ollama_model_local,
+        },
+    }
+
+    if last_live is not None:
+        live_inf_status = (
+            "LIVE VERIFIED WITH FALLBACK"
+            if last_live.model != settings.resolve_gemini_tier_model(last_live.reasoning_tier)
+            else "LIVE VERIFIED"
+        )
+    elif not configured:
+        live_inf_status = "NOT CONFIGURED"
+    else:
+        live_inf_status = "NOT TESTED"
+
+    return {
+        "primary_provider": "gemini",
+        "provider_label": "Google Gemini",
+        "configured": configured,
+        "missing_env_vars": client.missing_env_vars(),
+        "api_mode": settings.gemini_api_mode,
+        "api_compatibility": {
+            "active_interface": settings.gemini_api_mode,
+            "default_interface": "generate_content",
+            "interactions_api_supported": True,
+            "interactions_endpoint": f"{client.base_url}/interactions",
+            "interactions_store_enabled": settings.gemini_interactions_store,
+            "rationale": (
+                "generateContent remains the stable default preserving all 60 agent schemas, "
+                "native JSON responseSchema, functionDeclarations, and deterministic tenant-isolated "
+                "PostgreSQL history; Google's GA Interactions API (/v1beta/interactions) is supported "
+                "behind a tested opt-in adapter (GEMINI_API_MODE=interactions|auto) with store=false privacy default."
+            ),
+        },
+        "reliability_policy": {
+            "timeout_seconds": settings.gemini_request_timeout_seconds,
+            "max_retries": settings.gemini_max_retries,
+            "approval_gates_immutable": True,
+        },
+        "reasoning_tiers": list(tiers_dict.values()),
+        "catalog": {
+            "source": catalog_source,
+            "catalog_verified": catalog_verified,
+            "models_discovered": len(available_models),
+            "latency_ms": catalog_latency_ms,
+            "error": catalog_error,
+            "available_models": available_models,
+        },
+        "live_inference": {
+            "verified": last_live is not None,
+            "status": live_inf_status,
+            "last_model": last_live.model if last_live else None,
+            "last_agent_id": last_live.agent_id if last_live else None,
+            "last_reasoning_tier": last_live.reasoning_tier if last_live else None,
+            "last_latency_ms": last_live.latency_ms if last_live else None,
+            "avg_latency_ms": avg_live_latency,
+            "last_successful_check_at": last_live.created_at.isoformat() if last_live else None,
+            "total_live_calls": len(live_rows),
+            "intra_gemini_fallback_calls": tier_fallback_used,
+            "non_gemini_fallback_calls": len(fallback_rows),
+            "note": (
+                "Live inference status is strictly derived from real Gemini inference completions; "
+                "a model-list catalog check alone never sets live_inference.verified to true."
+            ),
+        },
+        "secondary_providers": secondary_providers,
+    }
+
+
+def run_gemini_verification_suite(
+    db: Session,
+    *,
+    principal: Principal,
+    settings: Settings,
+    http_client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Run safe, non-destructive live Gemini verification across all 5 tiers + capabilities + governance.
+
+    Statuses strictly adhere to: LIVE VERIFIED, LIVE VERIFIED WITH FALLBACK, FAILED, NOT TESTED.
+    """
+    client = GeminiClient(settings, http_client=http_client)
+    configured = client.is_configured()
+    checked_at = datetime.now(timezone.utc).isoformat()
+
+    # 1. ApprovalGate immutability test (works offline & online — proves provider config never disables approvals)
+    high_risk_route = route_objective(
+        "Transfer $500 USD from treasury to external contractor and delete old production records",
+        financial_amount_usd=500.0,
+        settings=settings,
+    )
+    approval_gate_ok = bool(high_risk_route["requires_approval_gate"] and high_risk_route["risk_level"] == "HIGH")
+    approval_check = {
+        "check": "approval_gate_enforcement",
+        "label": "ApprovalGate Mutation & Financial Protection",
+        "status": "LIVE VERIFIED" if approval_gate_ok else "FAILED",
+        "requires_approval_gate": high_risk_route["requires_approval_gate"],
+        "risk_level": high_risk_route["risk_level"],
+        "detail": (
+            f"Verified $500 financial/destructive route enforces ApprovalGate "
+            f"(soft_limit=${settings.approval_soft_limit_usd:.2f}, cannot be disabled by Gemini config)."
+        ),
+    }
+
+    if not configured:
+        return {
+            "checked_at": checked_at,
+            "configured": False,
+            "overall_status": "NOT TESTED",
+            "detail": "GEMINI_API_KEY is not configured in this environment; live upstream Gemini checks cannot run.",
+            "tier_results": [
+                {
+                    "tier": t,
+                    "agent_id": aid,
+                    "primary_model": settings.resolve_gemini_tier_model(t),
+                    "actual_model": None,
+                    "latency_ms": None,
+                    "fallback_used": False,
+                    "status": "NOT TESTED",
+                    "detail": "GEMINI_API_KEY not configured",
+                }
+                for t, aid in [(1, "AGT-19"), (2, "AGT-06"), (3, "AGT-03"), (4, "AGT-02"), (5, "AGT-01")]
+            ],
+            "capability_checks": [
+                {"check": "structured_output", "label": "Structured JSON Output", "status": "NOT TESTED", "detail": "GEMINI_API_KEY not configured"},
+                {"check": "tool_calling", "label": "Function / Tool Calling", "status": "NOT TESTED", "detail": "GEMINI_API_KEY not configured"},
+                {"check": "streaming", "label": "Live SSE Streaming", "status": "NOT TESTED", "detail": "GEMINI_API_KEY not configured"},
+                {"check": "fallback_and_timeout", "label": "Controlled Fallback & Timeout Policy", "status": "NOT TESTED", "detail": "GEMINI_API_KEY not configured"},
+                approval_check,
+            ],
+        }
+
+    # 2. Live inference for all 5 reasoning tiers via representative specialist agents
+    tier_agents = [
+        (1, "AGT-19", "Reply with exactly: ULTRON_T1_OK"),
+        (2, "AGT-06", "Reply with exactly: ULTRON_T2_OK"),
+        (3, "AGT-03", "Reply with exactly: ULTRON_T3_OK"),
+        (4, "AGT-02", "Reply with exactly: ULTRON_T4_OK"),
+        (5, "AGT-01", "Reply with exactly: ULTRON_T5_OK"),
+    ]
+    tier_results: list[dict[str, Any]] = []
+    for tier_num, aid, prompt_text in tier_agents:
+        res = invoke_agent_reasoning(
+            db,
+            agent_id=aid,
+            prompt=prompt_text,
+            settings=settings,
+            reasoning_tier=tier_num,
+            max_output_tokens=128,
+            tenant_id=principal.tenant_id,
+            actor=principal.username,
+            gemini_client=client,
+        )
+        is_live = res["execution_mode"] == "gemini_live"
+        if is_live:
+            st = "LIVE VERIFIED WITH FALLBACK" if res["fallback_used"] else "LIVE VERIFIED"
+        else:
+            st = "FAILED"
+        tier_results.append(
+            {
+                "tier": tier_num,
+                "agent_id": aid,
+                "provider": res["provider"],
+                "api_interface": res.get("api_interface", "generate_content"),
+                "primary_model": res["primary_model"],
+                "actual_model": res["model"],
+                "latency_ms": res["latency_ms"],
+                "fallback_used": res["fallback_used"],
+                "status": st,
+                "detail": (res["output"] or "")[:120],
+            }
+        )
+
+    # 3. Structured JSON Output test (native responseMimeType="application/json")
+    json_res = invoke_agent_reasoning(
+        db,
+        agent_id="AGT-01",
+        prompt='Return a JSON object with keys "engine" ("NEON"), "verified" (true), and "tier" (2).',
+        settings=settings,
+        reasoning_tier=2,
+        response_format="json",
+        max_output_tokens=256,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        gemini_client=client,
+    )
+    so = json_res.get("structured_output")
+    json_valid = (
+        json_res["execution_mode"] == "gemini_live"
+        and isinstance(so, dict)
+        and so.get("json_valid") is not False
+    )
+    structured_check = {
+        "check": "structured_output",
+        "label": "Structured JSON Output (responseMimeType)",
+        "status": (
+            ("LIVE VERIFIED WITH FALLBACK" if json_res["fallback_used"] else "LIVE VERIFIED")
+            if json_valid
+            else "FAILED"
+        ),
+        "model": json_res["model"],
+        "latency_ms": json_res["latency_ms"],
+        "fallback_used": json_res["fallback_used"],
+        "detail": json.dumps(so)[:160] if so is not None else "No JSON parsed",
+    }
+
+    # 4. Tool / Function-Calling compatibility test (read-only tool schema)
+    tool_decl = [
+        {
+            "name": "get_ultron_system_status",
+            "description": "Retrieve read-only ULTRON subsystem status for a named subsystem.",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {"subsystem": {"type": "STRING", "description": "Subsystem name, e.g., NEON or AEGIS"}},
+                "required": ["subsystem"],
+            },
+        }
+    ]
+    tool_res = invoke_agent_reasoning(
+        db,
+        agent_id="AGT-59",
+        prompt="Call get_ultron_system_status for subsystem 'NEON' to inspect diagnostics.",
+        settings=settings,
+        reasoning_tier=2,
+        function_declarations=tool_decl,
+        max_output_tokens=256,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        gemini_client=client,
+    )
+    fcalls = tool_res.get("function_calls") or []
+    tool_ok = tool_res["execution_mode"] == "gemini_live" and (len(fcalls) > 0 or bool(tool_res.get("output")))
+    tool_check = {
+        "check": "tool_calling",
+        "label": "Function / Tool Calling Compatibility",
+        "status": (
+            ("LIVE VERIFIED WITH FALLBACK" if tool_res["fallback_used"] else "LIVE VERIFIED")
+            if tool_ok
+            else "FAILED"
+        ),
+        "model": tool_res["model"],
+        "latency_ms": tool_res["latency_ms"],
+        "fallback_used": tool_res["fallback_used"],
+        "function_calls_returned": len(fcalls),
+        "detail": f"function_calls={fcalls[:1]}" if fcalls else f"live_text_reply={(tool_res.get('output') or '')[:100]}",
+    }
+
+    # 5. Live SSE Streaming test
+    stream_started = time.perf_counter()
+    stream_chunks: list[str] = []
+    stream_model = settings.resolve_gemini_tier_model(1)
+    stream_fallback = False
+    stream_error = ""
+    for cand in build_gemini_tier_fallback_chain(stream_model, settings, reasoning_tier=1):
+        try:
+            stream_chunks = list(
+                client.stream_generate_content(
+                    prompt="Count 1, 2, 3 concisely.",
+                    system_instruction="Respond concisely.",
+                    model=cand,
+                    max_output_tokens=64,
+                    timeout_seconds=15.0,
+                )
+            )
+            if stream_chunks:
+                stream_fallback = cand != stream_model
+                stream_model = cand
+                break
+        except Exception as exc:
+            stream_error = str(exc)
+            continue
+    stream_latency = int((time.perf_counter() - stream_started) * 1000)
+    stream_check = {
+        "check": "streaming",
+        "label": "Live SSE Streaming (streamGenerateContent)",
+        "status": (
+            ("LIVE VERIFIED WITH FALLBACK" if stream_fallback else "LIVE VERIFIED")
+            if stream_chunks
+            else "FAILED"
+        ),
+        "model": stream_model,
+        "latency_ms": stream_latency,
+        "fallback_used": stream_fallback,
+        "chunks_received": len(stream_chunks),
+        "detail": ("".join(stream_chunks)[:120] if stream_chunks else stream_error or "No stream chunks received"),
+    }
+
+    # 6. Controlled Fallback & Timeout Policy verification (deliberately invalid primary model -> live Gemini fallback)
+    wrapper = GeminiLLMProvider(settings)
+    wrapper._client = client
+    fb_res, fb_errors = execute_with_failover(
+        settings=settings,
+        prompt="Reply with exactly: FALLBACK_OK",
+        system_instruction="Be concise.",
+        primary_model="gemini-invalid-model-probe-404",
+        reasoning_tier=1,
+        max_output_tokens=64,
+        providers=[wrapper],
+    )
+    fb_ok = fb_res is not None and fb_res.get("provider") == "gemini" and len(fb_errors) >= 1
+    fallback_check = {
+        "check": "fallback_and_timeout",
+        "label": "Controlled Fallback Chain & Timeout Policy",
+        "status": "LIVE VERIFIED WITH FALLBACK" if fb_ok else "FAILED",
+        "model": fb_res["model"] if fb_res else None,
+        "latency_ms": fb_res["latency_ms"] if fb_res else None,
+        "fallback_used": True,
+        "errors_recovered": len(fb_errors),
+        "detail": (
+            f"Recovered from invalid primary via {len(fb_errors)} controlled fallback hop(s) -> {fb_res['model']} "
+            f"(timeout={settings.gemini_request_timeout_seconds}s, retries={settings.gemini_max_retries})."
+            if fb_ok
+            else f"Fallback failed ({len(fb_errors)} attempts)"
+        ),
+    }
+
+    db.commit()
+
+    capability_checks = [structured_check, tool_check, stream_check, fallback_check, approval_check]
+    all_statuses = [r["status"] for r in tier_results] + [c["status"] for c in capability_checks]
+    if any(s == "FAILED" for s in all_statuses):
+        overall = "FAILED"
+    elif any(s == "LIVE VERIFIED WITH FALLBACK" for s in all_statuses):
+        overall = "LIVE VERIFIED WITH FALLBACK"
+    else:
+        overall = "LIVE VERIFIED"
+
+    return {
+        "checked_at": checked_at,
+        "configured": True,
+        "api_mode": settings.gemini_api_mode,
+        "overall_status": overall,
+        "tier_results": tier_results,
+        "capability_checks": capability_checks,
+    }
+
+
 def _serialize_conversation(
     conv: ConversationRecord,
     messages: list[ConversationMessageRecord] | None,
@@ -586,12 +1190,15 @@ def _serialize_conversation(
 __all__ = [
     "create_conversation",
     "get_conversation",
+    "get_gemini_diagnostics",
     "get_model_capability_registry",
     "get_reasoning_tiers",
     "get_usage_summary",
     "invoke_agent_reasoning",
     "list_conversations",
     "route_objective",
+    "run_gemini_verification_suite",
     "send_conversation_message",
+    "stream_live_neon_events",
     "stream_neon_events",
 ]

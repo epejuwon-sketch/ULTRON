@@ -79,11 +79,13 @@ export default function NeonModulePage({
   const [newTitle, setNewTitle] = useState("");
   const [attachedFile, setAttachedFile] = useState<{ file_id: string; filename: string; text: string } | null>(null);
 
-  // Models, tiers, usage, health, settings
+  // Models, tiers, usage, health, Gemini diagnostics, settings
   const [models, setModels] = useState<any>(null);
   const [tiers, setTiers] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
+  const [geminiDiag, setGeminiDiag] = useState<any>(null);
+  const [discoveringModels, setDiscoveringModels] = useState(false);
   const [defaultTier, setDefaultTier] = useState("T2");
   const [defaultTemp, setDefaultTemp] = useState("0.3");
   const [structuredMode, setStructuredMode] = useState(false);
@@ -93,16 +95,18 @@ export default function NeonModulePage({
   const [mmResult, setMmResult] = useState<any>(null);
   const [copiedFlag, setCopiedFlag] = useState(false);
 
-  async function loadBase() {
+  async function loadBase(discoverLive = false) {
     setError("");
+    if (discoverLive) setDiscoveringModels(true);
     try {
-      const [cRes, aRes, mRes, tRes, uRes, hRes] = await Promise.all([
+      const [cRes, aRes, mRes, tRes, uRes, hRes, gRes] = await Promise.all([
         apiFetch<any>("/api/v1/neon/conversations").catch(() => ({ conversations: [] })),
         apiFetch<any>("/api/v1/agents").catch(() => ({ agents: [] })),
         apiFetch<any>("/api/v1/neon/models").catch(() => null),
         apiFetch<any>("/api/v1/neon/tiers").catch(() => null),
         apiFetch<any>("/api/v1/neon/usage").catch(() => null),
         apiFetch<any>("/health").catch(() => null),
+        apiFetch<any>(`/api/v1/neon/gemini/diagnostics?discover=${discoverLive ? "true" : "false"}`).catch(() => null),
       ]);
       const list = cRes.conversations || [];
       setConversations(list);
@@ -112,8 +116,14 @@ export default function NeonModulePage({
       setTiers(tRes);
       setUsage(uRes);
       setHealth(hRes);
+      setGeminiDiag(gRes);
+      if (discoverLive && gRes?.catalog?.catalog_verified) {
+        pushToast(`Discovered ${gRes.catalog.models_discovered} live Gemini models (${gRes.catalog.latency_ms}ms).`, "success");
+      }
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      if (discoverLive) setDiscoveringModels(false);
     }
   }
 
@@ -323,6 +333,21 @@ export default function NeonModulePage({
       (c.agent_id || "").toLowerCase().includes(convSearch.toLowerCase())
   );
 
+  const geminiConfigured = Boolean(
+    geminiDiag?.configured || health?.integrations?.capabilities?.gemini?.configured
+  );
+  const liveInf = geminiDiag?.live_inference;
+  const geminiBadgeLabel =
+    liveInf?.status === "LIVE VERIFIED"
+      ? "GEMINI LIVE VERIFIED"
+      : liveInf?.status === "LIVE VERIFIED WITH FALLBACK"
+      ? "GEMINI LIVE (FALLBACK)"
+      : geminiConfigured
+      ? "GEMINI CONFIGURED"
+      : "FALLBACK MODE";
+  const geminiBadgeTone =
+    liveInf?.verified ? "success" : geminiConfigured ? "info" : "warn";
+
   return (
     <ResponsiveWorkspace subPages={mod.subPages} activeSubPage={page.id} onSelectSubPage={onSelectSubPage}>
       <PageHeader
@@ -331,18 +356,15 @@ export default function NeonModulePage({
         description={page.description}
         actions={
           <div className="row">
-            <StatusIndicator
-              label={health?.providers?.gemini?.configured ? "GEMINI LIVE" : "FALLBACK MODE"}
-              tone={health?.providers?.gemini?.configured ? "success" : "warn"}
-            />
-            <button type="button" className="btn btn-secondary btn-sm" onClick={loadBase}>
+            <StatusIndicator label={geminiBadgeLabel} tone={geminiBadgeTone} />
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadBase(false)}>
               <RefreshCw size={13} /> Refresh
             </button>
           </div>
         }
       />
 
-      {error && <ErrorState message={error} onRetry={loadBase} />}
+      {error && <ErrorState message={error} onRetry={() => loadBase(false)} />}
       {warning && <div className="alert-box alert-warn">{warning}</div>}
 
       {/* 9. NEON CHAT */}
@@ -512,7 +534,7 @@ export default function NeonModulePage({
               ))}
             </select>
             <button type="submit" className="btn">
-              <Sparkles size={14} /> Create & Open Chat
+              <Sparkles size={14} /> Create &amp; Open Chat
             </button>
           </form>
         </div>
@@ -520,41 +542,163 @@ export default function NeonModulePage({
 
       {/* 12. MODEL SELECTION */}
       {page.id === "models" && (
-        <div className="grid-2">
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div className="card">
-            <div className="card-title"><span>Active Gemini & NEON Models</span></div>
-            <pre className="code-block">{JSON.stringify(models || { status: "Loading models..." }, null, 2)}</pre>
+            <div className="card-title">
+              <span>5-Tier Gemini Reasoning Assignments (Configurable + Controlled Fallback)</span>
+              <div className="row">
+                <StatusIndicator label={`API: ${geminiDiag?.api_mode || "generate_content"}`} tone="info" />
+                <button
+                  id="neon-discover-models-btn"
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={discoveringModels}
+                  onClick={() => loadBase(true)}
+                >
+                  <RefreshCw size={12} /> {discoveringModels ? "Discovering..." : "Discover Live Models"}
+                </button>
+              </div>
+            </div>
+            <DataTable
+              rows={geminiDiag?.reasoning_tiers || tiers?.tiers || []}
+              rowKey={(t: any) => String(t.tier)}
+              columns={[
+                { key: "tier", header: "Tier", mono: true, render: (t: any) => <strong>T{t.tier}</strong> },
+                { key: "primary", header: "Primary Verified Model", mono: true, render: (t: any) => <strong>{t.primary_model}</strong> },
+                {
+                  key: "fallback",
+                  header: "Controlled Gemini Fallback Chain",
+                  mono: true,
+                  render: (t: any) => (t.gemini_fallback_chain || t.fallback_models || []).join(" → "),
+                },
+                { key: "purpose", header: "Purpose", render: (t: any) => t.purpose },
+              ]}
+            />
           </div>
+
           <div className="card">
-            <div className="card-title"><span>Reasoning Tiers (T1 – T5)</span></div>
-            <pre className="code-block">{JSON.stringify(tiers || { status: "Loading tiers..." }, null, 2)}</pre>
+            <div className="card-title">
+              <span>
+                Available Gemini Model Catalogue ({geminiDiag?.catalog?.models_discovered ?? models?.total ?? 0})
+              </span>
+              <StatusIndicator
+                label={geminiDiag?.catalog?.source === "live_api" ? "LIVE API CATALOG" : "CONFIGURED REGISTRY"}
+                tone={geminiDiag?.catalog?.source === "live_api" ? "success" : "neutral"}
+              />
+            </div>
+            <DataTable
+              rows={geminiDiag?.catalog?.available_models || models?.models || []}
+              rowKey={(m: any) => m.id || `${m.provider}:${m.model}`}
+              columns={[
+                { key: "id", header: "Model ID", mono: true, render: (m: any) => <strong>{m.id || m.model}</strong> },
+                {
+                  key: "ctx",
+                  header: "Context / Output",
+                  mono: true,
+                  render: (m: any) =>
+                    m.input_token_limit
+                      ? `${Number(m.input_token_limit).toLocaleString()} / ${Number(m.output_token_limit || 0).toLocaleString()}`
+                      : "1,048,576 / 65,536",
+                },
+                {
+                  key: "caps",
+                  header: "Capabilities",
+                  mono: true,
+                  render: (m: any) =>
+                    [
+                      m.supports_streaming ? "Stream" : null,
+                      m.supports_structured_output ? "JSON" : null,
+                      m.supports_tool_calling ? "Tools" : null,
+                      m.supports_interactions_api ? "Interactions" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "Standard",
+                },
+                {
+                  key: "notice",
+                  header: "Lifecycle / Notes",
+                  render: (m: any) => m.deprecation_notice || (m.tiers ? `Assigned: T${m.tiers.join(", T")}` : "Active"),
+                },
+              ]}
+            />
           </div>
         </div>
       )}
 
       {/* 13. PROVIDER CONFIGURATION */}
       {page.id === "providers" && (
-        <div className="card">
-          <div className="card-title">
-            <span>LLM Provider Readiness (Honest Backend State)</span>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigate("connections", "api-providers")}>
-              Configure in Connections Centre
-            </button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="grid-3">
+            <MetricDisplay
+              label="Primary Provider"
+              value={geminiDiag?.provider_label || "Google Gemini"}
+              sub={`Interface: ${geminiDiag?.api_mode || "generate_content"} (Interactions adapter ready)`}
+              tone={geminiConfigured ? "success" : "warn"}
+            />
+            <MetricDisplay
+              label="Live Inference Status"
+              value={liveInf?.status || (geminiConfigured ? "NOT TESTED" : "NOT CONFIGURED")}
+              sub={
+                liveInf?.last_model
+                  ? `Last: ${liveInf.last_model} (${liveInf.last_latency_ms}ms)`
+                  : "Model list alone never marks live inference verified"
+              }
+              tone={liveInf?.verified ? "success" : geminiConfigured ? "info" : "warn"}
+            />
+            <MetricDisplay
+              label="Fallback & Latency"
+              value={liveInf?.avg_latency_ms != null ? `${liveInf.avg_latency_ms} ms avg` : "—"}
+              sub={`Live calls: ${liveInf?.total_live_calls ?? 0} · Intra-Gemini fallbacks: ${liveInf?.intra_gemini_fallback_calls ?? 0}`}
+              tone="info"
+            />
           </div>
-          <div className="grid-2">
-            {["gemini", "openai", "anthropic", "ollama"].map((p) => {
-              const info = health?.providers?.[p];
-              const configured = Boolean(info?.configured);
-              return (
-                <div key={p} className="list-item">
-                  <div className="row-between">
-                    <strong>{p.toUpperCase()}</strong>
-                    <StatusIndicator label={configured ? "Configured" : "Not connected"} tone={configured ? "success" : "neutral"} />
+
+          <div className="card">
+            <div className="card-title">
+              <span>Google Gemini Primary Diagnostics &amp; API Compatibility</span>
+              <div className="row">
+                <button type="button" className="btn btn-sm" onClick={() => onNavigate("agents", "evaluation")}>
+                  Run Live Verification Suite
+                </button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigate("connections", "overview")}>
+                  Connections Centre
+                </button>
+              </div>
+            </div>
+            <div className="list-item" style={{ marginBottom: 10 }}>
+              <div className="row-between">
+                <strong>Last Successful Live Inference Check</strong>
+                <span className="mono">{liveInf?.last_successful_check_at || "Not yet executed in this tenant"}</span>
+              </div>
+              <div className="muted" style={{ marginTop: 4 }}>
+                {geminiDiag?.api_compatibility?.rationale ||
+                  "generateContent is the stable default; Google Interactions API (/v1beta/interactions) is available behind GEMINI_API_MODE=interactions|auto."}
+              </div>
+              <div className="muted mono" style={{ fontSize: 11.5, marginTop: 6 }}>
+                Timeout: {geminiDiag?.reliability_policy?.timeout_seconds ?? 25}s · Max Retries: {geminiDiag?.reliability_policy?.max_retries ?? 1} · ApprovalGates Immutable: YES
+              </div>
+            </div>
+
+            <div className="grid-2">
+              {["gemini", "openai", "anthropic", "ollama"].map((p) => {
+                const isPrimary = p === "gemini";
+                const configured = isPrimary
+                  ? geminiConfigured
+                  : Boolean(geminiDiag?.secondary_providers?.[p]?.configured);
+                const modelLabel = isPrimary
+                  ? `T1–T5 (${(geminiDiag?.reasoning_tiers || []).map((t: any) => t.primary_model).filter((v: string, i: number, a: string[]) => a.indexOf(v) === i).join(", ") || "Gemini 3.5/3.8/4"})`
+                  : geminiDiag?.secondary_providers?.[p]?.model || "Optional failover";
+                return (
+                  <div key={p} className="list-item">
+                    <div className="row-between">
+                      <strong>{p.toUpperCase()} {isPrimary ? "(PRIMARY)" : "(SECONDARY)"}</strong>
+                      <StatusIndicator label={configured ? "Configured" : "Not connected"} tone={configured ? "success" : "neutral"} />
+                    </div>
+                    <div className="muted">{modelLabel}</div>
                   </div>
-                  <div className="muted">{info?.detail || "Configure server environment key or backend VAULT."}</div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -562,15 +706,15 @@ export default function NeonModulePage({
       {/* 14. INTELLIGENCE SETTINGS */}
       {page.id === "intelligence-settings" && (
         <div className="card" style={{ maxWidth: 640 }}>
-          <div className="card-title"><span>NEON Routing & Reasoning Defaults</span></div>
+          <div className="card-title"><span>NEON Routing &amp; Reasoning Defaults</span></div>
           <form onSubmit={saveIntelligenceSettings} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <label className="muted">Default Reasoning Tier</label>
             <select className="select" value={defaultTier} onChange={(e) => setDefaultTier(e.target.value)}>
-              <option value="T1">T1 — Fast Utility & Classification</option>
+              <option value="T1">T1 — Fast Utility &amp; Classification</option>
               <option value="T2">T2 — Balanced Daily Operations</option>
               <option value="T3">T3 — Deep Technical Reasoning</option>
               <option value="T4">T4 — Multi-Agent Strategic Synthesis</option>
-              <option value="T5">T5 — Maximum Verification & Governance</option>
+              <option value="T5">T5 — Maximum Verification &amp; Governance</option>
             </select>
             <label className="muted">Temperature ({defaultTemp})</label>
             <input className="input" type="number" min="0" max="1" step="0.1" value={defaultTemp} onChange={(e) => setDefaultTemp(e.target.value)} />
@@ -587,9 +731,9 @@ export default function NeonModulePage({
       {page.id === "execution-history" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div className="grid-3">
-            <MetricDisplay label="Total Invocations" value={usage?.total_invocations ?? 0} tone="info" />
+            <MetricDisplay label="Total Invocations" value={usage?.total_calls ?? 0} tone="info" />
             <MetricDisplay label="Total Tokens" value={usage?.total_tokens ?? 0} tone="neutral" />
-            <MetricDisplay label="Est. Cost (USD)" value={`$${Number(usage?.total_cost_usd || 0).toFixed(4)}`} tone="success" />
+            <MetricDisplay label="Est. Cost (USD)" value={`$${Number(usage?.estimated_cost_usd || 0).toFixed(4)}`} tone="success" />
           </div>
           <div className="card">
             <div className="card-title"><span>NEON Telemetry Breakdown (/api/v1/neon/usage)</span></div>

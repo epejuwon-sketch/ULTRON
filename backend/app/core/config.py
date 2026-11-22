@@ -303,11 +303,38 @@ class Settings(BaseSettings):
         default="https://generativelanguage.googleapis.com/v1beta",
         alias="GEMINI_BASE_URL",
     )
+    gemini_api_mode: Literal["generate_content", "interactions", "auto"] = Field(
+        default="generate_content",
+        alias="GEMINI_API_MODE",
+    )
+    gemini_interactions_store: bool = Field(
+        default=False,
+        alias="GEMINI_INTERACTIONS_STORE",
+    )
+    gemini_request_timeout_seconds: float = Field(
+        default=25.0,
+        ge=3.0,
+        le=120.0,
+        alias="GEMINI_REQUEST_TIMEOUT_SECONDS",
+    )
+    gemini_max_retries: int = Field(
+        default=1,
+        ge=0,
+        le=4,
+        alias="GEMINI_MAX_RETRIES",
+    )
+    # Legacy 3-band defaults preserved for full backwards compatibility
     gemini_model_fast: str = Field(default="gemini-3.5-flash-lite", alias="GEMINI_MODEL_FAST")
     gemini_model_standard: str = Field(default="gemini-3.8-flash", alias="GEMINI_MODEL_STANDARD")
     gemini_model_reasoning: str = Field(default="gemini-4-argon", alias="GEMINI_MODEL_REASONING")
     gemini_model_embedding: str = Field(default="gemini-embedding-001", alias="GEMINI_MODEL_EMBEDDING")
     gemini_model_image: str = Field(default="gemini-nano-banana-2.1", alias="GEMINI_MODEL_IMAGE")
+    # Explicit 5-Tier configurable overrides (Tier 1..5). Empty string falls back to verified defaults.
+    gemini_model_tier_1: str = Field(default="", alias="GEMINI_MODEL_TIER_1")
+    gemini_model_tier_2: str = Field(default="", alias="GEMINI_MODEL_TIER_2")
+    gemini_model_tier_3: str = Field(default="", alias="GEMINI_MODEL_TIER_3")
+    gemini_model_tier_4: str = Field(default="", alias="GEMINI_MODEL_TIER_4")
+    gemini_model_tier_5: str = Field(default="", alias="GEMINI_MODEL_TIER_5")
 
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
@@ -482,6 +509,32 @@ class Settings(BaseSettings):
             pass
         return info
 
+    def resolve_gemini_tier_model(self, tier: int) -> str:
+        """Resolve the primary verified Gemini model ID for reasoning tiers 1..5."""
+        t = max(1, min(5, int(tier)))
+        explicit = {
+            1: self.gemini_model_tier_1.strip(),
+            2: self.gemini_model_tier_2.strip(),
+            3: self.gemini_model_tier_3.strip(),
+            4: self.gemini_model_tier_4.strip(),
+            5: self.gemini_model_tier_5.strip(),
+        }[t]
+        if explicit:
+            return explicit
+        if t == 1:
+            return self.gemini_model_fast.strip() or "gemini-3.5-flash-lite"
+        if t in (2, 3):
+            return self.gemini_model_standard.strip() or "gemini-3.8-flash"
+        if t == 4:
+            # Tier 4 defaults to Gemini 4 Hydrogen (free+paid Gemini 4 reasoning) unless reasoning was custom-overridden
+            if self.gemini_model_reasoning.strip() and self.gemini_model_reasoning.strip() != "gemini-4-argon":
+                return self.gemini_model_reasoning.strip()
+            return "gemini-4-hydrogen"
+        # Tier 5 defaults to flagship Gemini 4 Carbon (highest available reasoning) unless custom-overridden
+        if self.gemini_model_reasoning.strip() and self.gemini_model_reasoning.strip() != "gemini-4-argon":
+            return self.gemini_model_reasoning.strip()
+        return "gemini-4-carbon"
+
     def safe_summary(self) -> dict[str, Any]:
         """Return non-sensitive runtime configuration metadata safe for diagnostics."""
         return {
@@ -495,6 +548,7 @@ class Settings(BaseSettings):
             "default_tenant_id": self.default_tenant_id,
             "rate_limit_per_min": self.rate_limit_requests_per_minute,
             "argon_max_parallel_steps": self.argon_max_parallel_steps,
+            "gemini_api_mode": self.gemini_api_mode,
             "gemini_models": {
                 "fast": self.gemini_model_fast,
                 "standard": self.gemini_model_standard,
@@ -502,6 +556,7 @@ class Settings(BaseSettings):
                 "embedding": self.gemini_model_embedding,
                 "image": self.gemini_model_image,
             },
+            "gemini_tier_models": {f"tier_{t}": self.resolve_gemini_tier_model(t) for t in range(1, 6)},
             "integrations_configured": {
                 "supabase": bool(self.supabase_url.strip() and (self.supabase_service_role_key or self.supabase_anon_key)),
                 "gemini": bool(self.gemini_api_key and self.gemini_api_key.get_secret_value().strip()),

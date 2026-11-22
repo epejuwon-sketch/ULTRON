@@ -95,7 +95,7 @@ function resolveHonestStatus(
   }
 
   // Check /health providers for LLM / DB providers
-  const hp = health?.providers?.[entry.id];
+  const hp = health?.integrations?.capabilities?.[entry.id] || health?.providers?.[entry.id];
   if (hp) {
     if (hp.configured) {
       return { status: "Connected", detail: hp.detail || "Configured on server." };
@@ -106,7 +106,7 @@ function resolveHonestStatus(
     };
   }
 
-  if (entry.id === "postgresql" && health?.database?.connected) {
+  if (entry.id === "postgresql" && (health?.database?.connected || health?.database?.healthy)) {
     return { status: "Connected", detail: "PostgreSQL Transaction Pooler verified." };
   }
 
@@ -132,6 +132,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
   const [connections, setConnections] = useState<any[]>([]);
   const [antigravity, setAntigravity] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
+  const [geminiDiag, setGeminiDiag] = useState<any>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [bridgeShares, setBridgeShares] = useState<any[]>([]);
   const [error, setError] = useState("");
@@ -148,11 +149,12 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
   async function load() {
     setError("");
     try {
-      const [sRes, cRes, agRes, hRes, aRes, bRes] = await Promise.all([
+      const [sRes, cRes, agRes, hRes, gRes, aRes, bRes] = await Promise.all([
         apiFetch<any>("/api/v1/integrations/status").catch(() => null),
         apiFetch<any>("/api/v1/integrations/connections").catch(() => ({ connections: [] })),
         apiFetch<any>("/api/v1/integrations/antigravity?live=false").catch(() => null),
         apiFetch<any>("/health").catch(() => null),
+        apiFetch<any>("/api/v1/neon/gemini/diagnostics?discover=false").catch(() => null),
         apiFetch<any>("/api/v1/audit/logs?limit=30").catch(() => ({ logs: [] })),
         apiFetch<any>("/api/v1/bridge/shares").catch(() => ({ shares: [] })),
       ]);
@@ -160,6 +162,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
       setConnections(cRes.connections || []);
       setAntigravity(agRes);
       setHealth(hRes);
+      setGeminiDiag(gRes);
       setAuditLogs(
         (aRes.logs || []).filter((l: any) =>
           String(l.action || l.resource || "").toLowerCase().includes("integrat") ||
@@ -298,6 +301,59 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
             <MetricDisplay label="Stage 2: Config Needed" value={configReqCount} sub="Missing env or VAULT key" tone="warn" />
             <MetricDisplay label="Stage 3/4: Live Verified" value={connectedCount} sub="Strictly verified, zero fakes" tone={connectedCount > 0 ? "success" : "neutral"} />
           </div>
+          <div className="card">
+            <div className="card-title">
+              <span>Google Gemini Primary Intelligence Diagnostics</span>
+              <StatusIndicator
+                label={geminiDiag?.live_inference?.status || (geminiDiag?.configured ? "CONFIGURED" : "NOT CONFIGURED")}
+                tone={geminiDiag?.live_inference?.verified ? "success" : geminiDiag?.configured ? "info" : "warn"}
+              />
+            </div>
+            <div className="grid-3" style={{ marginBottom: 12 }}>
+              <MetricDisplay
+                label="Primary Provider"
+                value={geminiDiag?.provider_label || "Google Gemini"}
+                sub={`API: ${geminiDiag?.api_mode || "generate_content"} · Models: ${geminiDiag?.catalog?.models_discovered ?? 0}`}
+                tone={geminiDiag?.configured ? "success" : "warn"}
+              />
+              <MetricDisplay
+                label="Live Inference & Latency"
+                value={
+                  geminiDiag?.live_inference?.last_latency_ms != null
+                    ? `${geminiDiag.live_inference.last_latency_ms} ms`
+                    : "Not tested"
+                }
+                sub={
+                  geminiDiag?.live_inference?.last_model
+                    ? `Last model: ${geminiDiag.live_inference.last_model}`
+                    : "Catalog check alone never marks live inference verified"
+                }
+                tone={geminiDiag?.live_inference?.verified ? "success" : "neutral"}
+              />
+              <MetricDisplay
+                label="Fallback & Last Check"
+                value={`${geminiDiag?.live_inference?.intra_gemini_fallback_calls ?? 0} fallbacks`}
+                sub={geminiDiag?.live_inference?.last_successful_check_at || "No live check recorded yet"}
+                tone="info"
+              />
+            </div>
+            {Array.isArray(geminiDiag?.reasoning_tiers) && geminiDiag.reasoning_tiers.length > 0 && (
+              <div className="grid-2">
+                {geminiDiag.reasoning_tiers.map((t: any) => (
+                  <div key={t.tier} className="list-item">
+                    <div className="row-between">
+                      <strong className="mono">T{t.tier} · {t.primary_model}</strong>
+                      <span className="pill mono">{t.api_interface || "generate_content"}</span>
+                    </div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      Fallback: {(t.gemini_fallback_chain || []).slice(0, 3).join(" → ") || "—"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="card">
             <div className="card-title"><span>4-Stage Honest Connectivity Architecture</span></div>
             <p className="muted" style={{ marginTop: 0 }}>

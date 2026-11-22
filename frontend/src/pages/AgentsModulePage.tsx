@@ -183,7 +183,23 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
   const [auditRows, setAuditRows] = useState<Record<string, AuditRow>>({});
   const [auditRunning, setAuditRunning] = useState(false);
   const [auditProgress, setAuditProgress] = useState({ done: 0, total: 0 });
+  const [suiteRunning, setSuiteRunning] = useState(false);
+  const [suiteResult, setSuiteResult] = useState<any>(null);
   const abortAuditRef = useRef(false);
+
+  async function runCapabilitiesSuite() {
+    if (suiteRunning) return;
+    setSuiteRunning(true);
+    try {
+      const res = await apiFetch<any>("/api/v1/neon/gemini/verify-suite", { method: "POST" });
+      setSuiteResult(res);
+      pushToast(`Gemini verification suite completed: ${res.overall_status}`, res.overall_status === "FAILED" ? "error" : "success");
+    } catch (e: any) {
+      pushToast(e.message, "error");
+    } finally {
+      setSuiteRunning(false);
+    }
+  }
 
   async function runLiveAudit(targetList: any[]) {
     if (auditRunning || targetList.length === 0) return;
@@ -573,6 +589,101 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
       {/* 33. AGENT EVALUATION */}
       {page.id === "evaluation" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="card-title">
+              <span>Gemini 5-Tier &amp; Capabilities Verification Suite</span>
+              <div className="row">
+                {suiteResult?.overall_status && (
+                  <StatusIndicator
+                    label={suiteResult.overall_status}
+                    tone={
+                      suiteResult.overall_status === "LIVE VERIFIED"
+                        ? "success"
+                        : suiteResult.overall_status === "LIVE VERIFIED WITH FALLBACK"
+                        ? "info"
+                        : suiteResult.overall_status === "FAILED"
+                        ? "danger"
+                        : "neutral"
+                    }
+                  />
+                )}
+                <button
+                  id="audit-run-capabilities-suite"
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={suiteRunning}
+                  onClick={runCapabilitiesSuite}
+                >
+                  <Play size={12} /> {suiteRunning ? "Running Suite..." : "Run Full Verification Suite"}
+                </button>
+              </div>
+            </div>
+            <p className="muted" style={{ margin: 0 }}>
+              Executes live backend verification via <code>POST /api/v1/neon/gemini/verify-suite</code> covering all <strong>5 reasoning tiers (T1–T5)</strong>, <strong>structured JSON output</strong>, <strong>tool/function calling</strong>, <strong>SSE streaming</strong>, <strong>controlled fallback &amp; timeout</strong>, and <strong>ApprovalGate immutability</strong>.
+            </p>
+            {suiteResult && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <DataTable
+                  rows={suiteResult.tier_results || []}
+                  rowKey={(r: any) => `tier-${r.tier}`}
+                  columns={[
+                    { key: "tier", header: "Tier", mono: true, render: (r: any) => <strong>T{r.tier} ({r.agent_id})</strong> },
+                    { key: "primary", header: "Primary Model", mono: true, render: (r: any) => r.primary_model },
+                    { key: "actual", header: "Actual Model", mono: true, render: (r: any) => r.actual_model || "—" },
+                    {
+                      key: "status",
+                      header: "Status",
+                      render: (r: any) => (
+                        <StatusIndicator
+                          label={r.status}
+                          tone={
+                            r.status === "LIVE VERIFIED"
+                              ? "success"
+                              : r.status === "LIVE VERIFIED WITH FALLBACK"
+                              ? "info"
+                              : r.status === "FAILED"
+                              ? "danger"
+                              : "neutral"
+                          }
+                        />
+                      ),
+                    },
+                    { key: "lat", header: "Latency", mono: true, render: (r: any) => (r.latency_ms != null ? `${r.latency_ms} ms` : "—") },
+                    { key: "fb", header: "Fallback", mono: true, render: (r: any) => (r.status === "NOT TESTED" ? "—" : r.fallback_used ? "YES" : "NO") },
+                  ]}
+                />
+                <DataTable
+                  rows={suiteResult.capability_checks || []}
+                  rowKey={(c: any) => c.check}
+                  columns={[
+                    { key: "label", header: "Capability Check", render: (c: any) => <strong>{c.label}</strong> },
+                    {
+                      key: "status",
+                      header: "Status",
+                      render: (c: any) => (
+                        <StatusIndicator
+                          label={c.status}
+                          tone={
+                            c.status === "LIVE VERIFIED"
+                              ? "success"
+                              : c.status === "LIVE VERIFIED WITH FALLBACK"
+                              ? "info"
+                              : c.status === "FAILED"
+                              ? "danger"
+                              : "neutral"
+                          }
+                        />
+                      ),
+                    },
+                    { key: "model", header: "Model", mono: true, render: (c: any) => c.model || "—" },
+                    { key: "lat", header: "Latency", mono: true, render: (c: any) => (c.latency_ms != null ? `${c.latency_ms} ms` : "—") },
+                    { key: "detail", header: "Evidence", render: (c: any) => c.detail || "—" },
+                  ]}
+                />
+              </div>
+            )}
+          </div>
+
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div className="card-title">
               <span>Live 60-Agent &amp; 5-Tier Gemini Verification Matrix</span>

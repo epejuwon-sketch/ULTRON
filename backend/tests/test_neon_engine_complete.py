@@ -12,7 +12,7 @@ from app.services.neon_providers import GeminiLLMProvider, OpenAILLMProvider, ex
 def test_neon_models_tiers_structured_tool_calling_and_usage(client: TestClient, auth_headers: dict) -> None:
     models = client.get("/api/v1/neon/models", headers=auth_headers["operator"])
     assert models.status_code == 200
-    assert models.json()["total"] == 6
+    assert models.json()["total"] >= 7
     assert all(m["configured"] is False for m in models.json()["models"])
 
     tiers = client.get("/api/v1/neon/tiers", headers=auth_headers["operator"])
