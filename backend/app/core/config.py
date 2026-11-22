@@ -13,10 +13,116 @@ from typing import Any, Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
+from app.core.exceptions import DatabaseConfigurationError
 
 _DEV_EPHEMERAL_JWT = secrets.token_urlsafe(48)
 _DEV_EPHEMERAL_VAULT = secrets.token_urlsafe(48)
+_LOCAL_PG_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def normalize_database_url(
+    raw_url: str,
+    *,
+    allow_sqlite: bool,
+    env_label: str = "development",
+    is_vercel: bool = False,
+) -> str:
+    """Validate and normalize a database connection string for SQLAlchemy + psycopg v3.
+
+    - Rejects missing URLs and SQLite URLs whenever `allow_sqlite` is False (production,
+      staging, and Vercel preview/production deployments).
+    - Normalizes `postgres://`, `postgresql://`, and `postgresql+psycopg2://` to
+      `postgresql+psycopg://` to match the installed `psycopg` v3 driver.
+    - Adds `sslmode=require` for remote PostgreSQL hosts (such as Supabase) unless
+      `sslmode` is already specified.
+    - Never includes raw credentials in raised error messages.
+    """
+    cleaned = raw_url.strip()
+    if not cleaned:
+        if not allow_sqlite:
+            raise DatabaseConfigurationError(
+                "ULTRON_DATABASE_URL is required in deployed environments (production, staging, and Vercel deployments). "
+                "Configure ULTRON_DATABASE_URL with your Supabase PostgreSQL connection string; SQLite fallback is disabled.",
+                details={
+                    "env": env_label,
+                    "vercel": is_vercel,
+                    "required_env_var": "ULTRON_DATABASE_URL",
+                },
+            )
+        return ""
+
+    lower = cleaned.lower()
+    if lower.startswith("http://") or lower.startswith("https://"):
+        raise DatabaseConfigurationError(
+            "ULTRON_DATABASE_URL must be a PostgreSQL connection string (postgresql://...), not an HTTP/HTTPS URL. "
+            "Copy the PostgreSQL URI from Supabase Project Settings -> Database.",
+            details={
+                "env": env_label,
+                "vercel": is_vercel,
+                "required_env_var": "ULTRON_DATABASE_URL",
+            },
+        )
+
+    if lower.startswith("sqlite"):
+        if not allow_sqlite:
+            raise DatabaseConfigurationError(
+                "SQLite is not permitted in deployed environments (production, staging, or Vercel deployments). "
+                "Configure ULTRON_DATABASE_URL with a Supabase PostgreSQL connection string.",
+                details={
+                    "env": env_label,
+                    "vercel": is_vercel,
+                    "required_env_var": "ULTRON_DATABASE_URL",
+                },
+            )
+        try:
+            parsed = make_url(cleaned)
+        except Exception as exc:
+            raise DatabaseConfigurationError(
+                "ULTRON_DATABASE_URL is not a valid SQLite connection string.",
+                details={"required_env_var": "ULTRON_DATABASE_URL"},
+            ) from exc
+        return parsed.render_as_string(hide_password=False)
+
+    # Normalize standard PostgreSQL schemes to the installed psycopg v3 driver.
+    candidate = cleaned
+    if lower.startswith("postgres://"):
+        candidate = "postgresql+psycopg://" + cleaned[len("postgres://") :]
+    elif lower.startswith("postgresql://"):
+        candidate = "postgresql+psycopg://" + cleaned[len("postgresql://") :]
+    elif lower.startswith("postgresql+psycopg2://"):
+        candidate = "postgresql+psycopg://" + cleaned[len("postgresql+psycopg2://") :]
+    elif not lower.startswith("postgresql+"):
+        raise DatabaseConfigurationError(
+            "Unsupported database scheme in ULTRON_DATABASE_URL. Use a PostgreSQL connection string (postgresql://...).",
+            details={
+                "env": env_label,
+                "vercel": is_vercel,
+                "required_env_var": "ULTRON_DATABASE_URL",
+            },
+        )
+
+    try:
+        parsed = make_url(candidate)
+    except Exception as exc:
+        raise DatabaseConfigurationError(
+            "ULTRON_DATABASE_URL could not be parsed as a valid PostgreSQL connection string. "
+            "Verify URL encoding of special characters in the database password.",
+            details={"required_env_var": "ULTRON_DATABASE_URL"},
+        ) from exc
+
+    if not parsed.host:
+        raise DatabaseConfigurationError(
+            "ULTRON_DATABASE_URL is missing a PostgreSQL hostname.",
+            details={"required_env_var": "ULTRON_DATABASE_URL"},
+        )
+
+    host_lower = parsed.host.strip().lower()
+    if host_lower not in _LOCAL_PG_HOSTS and "sslmode" not in parsed.query:
+        parsed = parsed.update_query_dict({"sslmode": "require"})
+
+    return parsed.render_as_string(hide_password=False)
 
 
 class Settings(BaseSettings):
@@ -33,6 +139,8 @@ class Settings(BaseSettings):
     ultron_env: Literal["development", "test", "staging", "production"] = Field(
         default="development", alias="ULTRON_ENV"
     )
+    vercel: str = Field(default="", alias="VERCEL")
+    vercel_env: str = Field(default="", alias="VERCEL_ENV")
     app_name: str = Field(default="ULTRON OS 2026 Backend", alias="ULTRON_APP_NAME")
     app_version: str = Field(default="2026.4.0", alias="ULTRON_APP_VERSION")
     host: str = Field(default="127.0.0.1", alias="ULTRON_HOST")
@@ -76,6 +184,7 @@ class Settings(BaseSettings):
     sqlite_path: str = Field(default="./data/ultron_os_2026.db", alias="ULTRON_SQLITE_PATH")
     db_pool_size: int = Field(default=10, ge=1, le=100, alias="ULTRON_DB_POOL_SIZE")
     db_max_overflow: int = Field(default=20, ge=0, le=100, alias="ULTRON_DB_MAX_OVERFLOW")
+    auto_init_schema: bool = Field(default=True, alias="ULTRON_AUTO_INIT_SCHEMA")
 
     # --- Supabase ---
     supabase_url: str = Field(default="", alias="SUPABASE_URL")
@@ -175,27 +284,58 @@ class Settings(BaseSettings):
         return self
 
     @property
+    def is_vercel(self) -> bool:
+        """True when running inside a Vercel preview or production serverless deployment."""
+        vercel_env = self.vercel_env.strip().lower()
+        if vercel_env in {"production", "preview"}:
+            return True
+        return self.vercel.strip().lower() in {"1", "true", "yes"} and vercel_env != "development"
+
+    @property
+    def is_deployed_environment(self) -> bool:
+        """True in production, staging, or Vercel deployments where SQLite fallback is prohibited."""
+        return self.ultron_env in {"production", "staging"} or self.is_vercel
+
+    @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def effective_database_url(self) -> str:
-        url = self.database_url.strip()
-        if url:
-            return url
+        """Return the normalized SQLAlchemy database URL.
+
+        In deployed environments (production, staging, Vercel), ULTRON_DATABASE_URL
+        must be a valid PostgreSQL connection string; SQLite fallback is strictly disabled.
+        In local development and automated tests, an empty ULTRON_DATABASE_URL uses SQLite.
+        """
+        normalized = normalize_database_url(
+            self.database_url,
+            allow_sqlite=not self.is_deployed_environment,
+            env_label=self.ultron_env,
+            is_vercel=self.is_vercel,
+        )
+        if normalized:
+            return normalized
         return f"sqlite:///{self.sqlite_path}"
 
     @property
     def database_backend(self) -> str:
-        url = self.effective_database_url.lower()
-        if url.startswith("postgresql") or url.startswith("postgres"):
+        """Return active database backend label without raising or exposing credentials."""
+        raw = self.database_url.strip().lower()
+        if not raw:
+            return "unconfigured" if self.is_deployed_environment else "sqlite"
+        if raw.startswith("postgresql") or raw.startswith("postgres://"):
             return "postgresql"
-        return "sqlite"
+        if raw.startswith("sqlite"):
+            return "unconfigured" if self.is_deployed_environment else "sqlite"
+        return "invalid"
 
     def safe_summary(self) -> dict[str, Any]:
         """Return non-sensitive runtime configuration metadata safe for diagnostics."""
         return {
             "env": self.ultron_env,
+            "deployed_environment": self.is_deployed_environment,
+            "vercel_serverless": self.is_vercel,
             "app_name": self.app_name,
             "app_version": self.app_version,
             "database_backend": self.database_backend,

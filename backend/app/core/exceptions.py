@@ -78,6 +78,16 @@ class IntegrationError(UltronError):
     code = "INTEGRATION_ERROR"
 
 
+class ConfigurationError(UltronError):
+    status_code = 503
+    code = "CONFIGURATION_ERROR"
+
+
+class DatabaseConfigurationError(ConfigurationError):
+    status_code = 503
+    code = "DATABASE_CONFIGURATION_ERROR"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Install consistent JSON error handlers on the FastAPI application."""
 

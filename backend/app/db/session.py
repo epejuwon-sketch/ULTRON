@@ -1,20 +1,27 @@
-"""Database engine management supporting Supabase PostgreSQL (pooled) and SQLite WAL."""
+"""Database engine management supporting Supabase PostgreSQL (pooled/serverless) and local SQLite WAL."""
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import Engine, create_engine, event, select, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.core.config import Settings, get_settings
+from app.core.exceptions import DatabaseConfigurationError
+from app.core.logging import redact_secrets
 from app.db.models import Base, SchemaMigration, Tenant
 
 _ENGINE: Engine | None = None
 _SESSION_FACTORY: sessionmaker[Session] | None = None
 _ENGINE_URL: str | None = None
+_INITIALIZED_ENGINE_URLS: set[str] = set()
 
 MIGRATION_REGISTRY: list[tuple[str, str]] = [
     ("001", "001_initial_schema.sql"),
@@ -24,20 +31,50 @@ MIGRATION_REGISTRY: list[tuple[str, str]] = [
 ]
 
 
+def _is_supabase_pooler_url(url: str) -> bool:
+    parsed = make_url(url)
+    host = (parsed.host or "").lower()
+    return parsed.port == 6543 or "pooler.supabase" in host
+
+
 def _build_engine(settings: Settings) -> Engine:
     url = settings.effective_database_url
-    kwargs: dict = {"pool_pre_ping": True, "future": True}
+    kwargs: dict[str, Any] = {"pool_pre_ping": True, "future": True}
 
     if url.startswith("sqlite"):
+        if settings.is_deployed_environment:
+            raise DatabaseConfigurationError(
+                "Refusing to initialize SQLite in a deployed environment. "
+                "Configure ULTRON_DATABASE_URL with a Supabase PostgreSQL connection string.",
+                details={
+                    "env": settings.ultron_env,
+                    "vercel": settings.is_vercel,
+                    "required_env_var": "ULTRON_DATABASE_URL",
+                },
+            )
         if url.startswith("sqlite:///"):
             db_file = url.removeprefix("sqlite:///")
-            if db_file != ":memory:":
+            if db_file and db_file != ":memory:":
                 Path(db_file).parent.mkdir(parents=True, exist_ok=True)
         kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30.0}
     else:
-        kwargs["pool_size"] = settings.db_pool_size
-        kwargs["max_overflow"] = settings.db_max_overflow
-        kwargs["pool_recycle"] = 1800
+        parsed = make_url(url)
+        connect_args: dict[str, Any] = {"connect_timeout": 10}
+        if "psycopg" in (parsed.drivername or "").lower() and (
+            settings.is_vercel or _is_supabase_pooler_url(url)
+        ):
+            # Disable psycopg v3 automatic server-side prepared statements for
+            # PgBouncer / Supabase Supavisor transaction pooler compatibility.
+            connect_args["prepare_threshold"] = None
+        kwargs["connect_args"] = connect_args
+
+        if settings.is_vercel:
+            # Delegate connection pooling to Supabase's pooler in ephemeral serverless functions.
+            kwargs["poolclass"] = NullPool
+        else:
+            kwargs["pool_size"] = settings.db_pool_size
+            kwargs["max_overflow"] = settings.db_max_overflow
+            kwargs["pool_recycle"] = 1800
 
     engine = create_engine(url, **kwargs)
 
@@ -74,6 +111,7 @@ def reset_engine() -> None:
     _ENGINE = None
     _SESSION_FACTORY = None
     _ENGINE_URL = None
+    _INITIALIZED_ENGINE_URLS.clear()
 
 
 def _record_schema_migrations(db: Session) -> None:
@@ -89,21 +127,39 @@ def _record_schema_migrations(db: Session) -> None:
 
 
 def init_database(settings: Settings | None = None) -> None:
-    """Create schema tables, record migration versions, and seed default tenant + 60 agents."""
+    """Non-destructively ensure schema tables exist, record migration versions, and seed default tenant + 60 agents."""
     cfg = settings or get_settings()
+    url = cfg.effective_database_url
     engine = get_engine(cfg)
-    Base.metadata.create_all(bind=engine)
+
+    if cfg.auto_init_schema:
+        # Strictly non-destructive (CREATE TABLE IF NOT EXISTS); never drops or alters existing tables.
+        Base.metadata.create_all(bind=engine, checkfirst=True)
 
     from app.services.agent_catalog import seed_agent_catalog
 
     with get_session_factory(cfg)() as db:
-        _record_schema_migrations(db)
-        tenant = db.get(Tenant, cfg.default_tenant_id)
-        if tenant is None:
-            db.add(Tenant(tenant_id=cfg.default_tenant_id, name="ULTRON OS Primary Organization"))
-            db.flush()
-        seed_agent_catalog(db)
-        db.commit()
+        try:
+            _record_schema_migrations(db)
+            tenant = db.get(Tenant, cfg.default_tenant_id)
+            if tenant is None:
+                db.add(Tenant(tenant_id=cfg.default_tenant_id, name="ULTRON OS Primary Organization"))
+                db.flush()
+            seed_agent_catalog(db)
+            db.commit()
+        except IntegrityError:
+            # Tolerate concurrent cold-start seeding races in serverless environments.
+            db.rollback()
+
+    _INITIALIZED_ENGINE_URLS.add(url)
+
+
+def ensure_database_initialized(settings: Settings | None = None) -> None:
+    """Ensure the active database engine has been initialized at least once in this process."""
+    cfg = settings or get_settings()
+    url = cfg.effective_database_url
+    if url not in _INITIALIZED_ENGINE_URLS:
+        init_database(cfg)
 
 
 def get_applied_migrations(settings: Settings | None = None) -> list[dict]:
@@ -129,7 +185,9 @@ def get_session_factory(settings: Settings | None = None) -> sessionmaker[Sessio
 
 def get_db() -> Generator[Session, None, None]:
     """FastAPI dependency yielding a scoped SQLAlchemy session."""
-    factory = get_session_factory()
+    cfg = get_settings()
+    ensure_database_initialized(cfg)
+    factory = get_session_factory(cfg)
     db = factory()
     try:
         yield db
@@ -144,5 +202,7 @@ def check_database_health(settings: Settings | None = None) -> tuple[bool, str]:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return True, "ok"
+    except DatabaseConfigurationError as exc:
+        return False, exc.message
     except Exception as exc:
-        return False, str(exc)
+        return False, redact_secrets(str(exc))

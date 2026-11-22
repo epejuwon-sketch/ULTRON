@@ -17,15 +17,18 @@ _SECRET_PATTERNS = [
     re.compile(r"(AIza[0-9A-Za-z\-_]{20,})"),
     re.compile(r"(sk-[A-Za-z0-9\-_]{16,})"),
     re.compile(r"(eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)"),
+    re.compile(r"(postgres(?:ql)?(?:\+[a-z0-9_]+)?://[^:\s/@]+:)([^@\s]+)(@)", re.IGNORECASE),
     re.compile(r"((?:api[_-]?key|token|secret|password)\s*[=:]\s*)([^\s,\"']+)", re.IGNORECASE),
 ]
 
 
 def redact_secrets(text: str) -> str:
-    """Scrub bearer tokens, JWTs, API keys, and inline secret assignments from log lines."""
+    """Scrub bearer tokens, JWTs, API keys, DB credentials, and inline secret assignments from log lines."""
     redacted = text
     for pattern in _SECRET_PATTERNS:
-        if pattern.groups >= 2:
+        if pattern.groups >= 3:
+            redacted = pattern.sub(r"\1[REDACTED]\3", redacted)
+        elif pattern.groups >= 2:
             redacted = pattern.sub(r"\1[REDACTED]", redacted)
         else:
             redacted = pattern.sub("[REDACTED]", redacted)

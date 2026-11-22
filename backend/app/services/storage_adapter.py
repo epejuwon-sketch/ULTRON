@@ -23,7 +23,7 @@ from typing import Any
 import httpx
 
 from app.core.config import Settings
-from app.core.exceptions import AuthorizationError, NotFoundError
+from app.core.exceptions import AuthorizationError, ConfigurationError, NotFoundError
 from app.core.security import decrypt_vault_secret, encrypt_vault_secret
 
 
@@ -339,11 +339,21 @@ class SupabaseStorageAdapter(BaseStorageAdapter):
 
 
 def get_storage_adapter(settings: Settings) -> BaseStorageAdapter:
-    """Return SupabaseStorageAdapter when Supabase credentials are configured; otherwise LocalStorageAdapter."""
+    """Return SupabaseStorageAdapter when Supabase credentials are configured; otherwise LocalStorageAdapter (dev/test only)."""
     if (
         settings.supabase_url.strip()
         and settings.supabase_service_role_key
         and settings.supabase_service_role_key.get_secret_value().strip()
     ):
         return SupabaseStorageAdapter(settings)
+    if settings.is_deployed_environment:
+        raise ConfigurationError(
+            "Supabase Storage is required in deployed environments (production, staging, and Vercel deployments). "
+            "Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY; local disk fallback is disabled on read-only filesystems.",
+            details={
+                "required_env_vars": ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"],
+                "env": settings.ultron_env,
+                "vercel": settings.is_vercel,
+            },
+        )
     return LocalStorageAdapter(settings)

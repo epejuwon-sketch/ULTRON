@@ -26,6 +26,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("ULTRON_MAX_FAILED_LOGINS", "3")
     # Ensure external keys are cleared so offline tests are strictly deterministic
     for var in (
+        "VERCEL",
+        "VERCEL_ENV",
         "SUPABASE_URL",
         "SUPABASE_ANON_KEY",
         "SUPABASE_SERVICE_ROLE_KEY",

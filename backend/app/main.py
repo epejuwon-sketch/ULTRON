@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import Settings, get_settings
-from app.core.exceptions import register_exception_handlers
+from app.core.exceptions import DatabaseConfigurationError, register_exception_handlers
 from app.core.logging import configure_logging, request_id_ctx
 from app.core.rate_limit import build_rate_limiter
 from app.db.session import init_database
@@ -60,8 +60,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        init_database(cfg)
-        logger.info("ULTRON OS 2026 initialized (env=%s, db=%s, rl=%s)", cfg.ultron_env, cfg.database_backend, rate_limiter.backend_name)
+        try:
+            init_database(cfg)
+            logger.info(
+                "ULTRON OS 2026 initialized (env=%s, db=%s, rl=%s)",
+                cfg.ultron_env,
+                cfg.database_backend,
+                rate_limiter.backend_name,
+            )
+        except DatabaseConfigurationError as exc:
+            logger.error(
+                "ULTRON OS 2026 started in degraded mode — database configuration error: %s",
+                exc.message,
+            )
         yield
 
     application = FastAPI(

@@ -60,13 +60,18 @@ class SupabaseClient:
     def status_without_network(self) -> IntegrationStatus:
         missing = self.missing_env_vars()
         if missing:
+            detail = (
+                "Supabase credentials not configured; ULTRON_DATABASE_URL (PostgreSQL) is required in deployed environments."
+                if self._settings.is_deployed_environment
+                else "Supabase credentials not configured; local SQLite WAL active unless ULTRON_DATABASE_URL is set."
+            )
             return IntegrationStatus(
                 provider="supabase",
                 configured=False,
                 capability_state=HonestCapabilityState.DEFINED_NOT_INSTALLED,
                 live_verified=False,
                 missing_env_vars=missing,
-                detail="Supabase credentials not configured; local SQLite WAL active unless ULTRON_DATABASE_URL is set.",
+                detail=detail,
             )
         return IntegrationStatus(
             provider="supabase",
