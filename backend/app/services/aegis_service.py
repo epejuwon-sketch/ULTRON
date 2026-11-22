@@ -79,7 +79,7 @@ def inspect_url_safety(url: str) -> dict[str, Any]:
         reasons.append("Missing hostname.")
     if "@" in (parsed.netloc or ""):
         reasons.append("Embedded credentials/userinfo in URL authority rejected.")
-    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254", "metadata.google.internal"}:
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254", "metadata.google.internal"}:  # nosec B104
         reasons.append(f"Local/metadata host '{host}' blocked by SSRF guard.")
 
     if host and not reasons:

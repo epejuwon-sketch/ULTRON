@@ -211,7 +211,7 @@ def validate_outbound_url(url: str) -> str:
     host = (parsed.hostname or "").strip().lower()
     if not host:
         raise SecurityViolationError("URL must include a valid hostname.")
-    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "metadata.google.internal"} or host.endswith(
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "metadata.google.internal"} or host.endswith(  # nosec B104
         (".local", ".internal")
     ):
         raise SecurityViolationError(f"Outbound access to internal host '{host}' is blocked by SSRF guard.")

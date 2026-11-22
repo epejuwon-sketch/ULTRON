@@ -34,8 +34,8 @@ class Settings(BaseSettings):
         default="development", alias="ULTRON_ENV"
     )
     app_name: str = Field(default="ULTRON OS 2026 Backend", alias="ULTRON_APP_NAME")
-    app_version: str = Field(default="2026.3.0", alias="ULTRON_APP_VERSION")
-    host: str = Field(default="0.0.0.0", alias="ULTRON_HOST")
+    app_version: str = Field(default="2026.4.0", alias="ULTRON_APP_VERSION")
+    host: str = Field(default="127.0.0.1", alias="ULTRON_HOST")
     port: int = Field(default=8000, alias="ULTRON_PORT")
     log_level: str = Field(default="INFO", alias="ULTRON_LOG_LEVEL")
     cors_origins: str = Field(
@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     rate_limit_requests_per_minute: int = Field(
         default=180, ge=10, le=10000, alias="ULTRON_RATE_LIMIT_PER_MIN"
     )
+    redis_rest_url: str = Field(default="", alias="ULTRON_REDIS_REST_URL")
+    redis_rest_token: SecretStr | None = Field(default=None, alias="ULTRON_REDIS_REST_TOKEN")
     argon_max_parallel_steps: int = Field(default=4, ge=1, le=32, alias="ULTRON_ARGON_MAX_PARALLEL_STEPS")
     argon_default_step_retries: int = Field(default=1, ge=0, le=5, alias="ULTRON_ARGON_DEFAULT_STEP_RETRIES")
     argon_step_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0, alias="ULTRON_ARGON_STEP_TIMEOUT_SECONDS")
@@ -79,7 +81,7 @@ class Settings(BaseSettings):
     supabase_url: str = Field(default="", alias="SUPABASE_URL")
     supabase_anon_key: SecretStr | None = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_role_key: SecretStr | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
-    supabase_storage_bucket: str = Field(default="ultron-artifacts", alias="SUPABASE_STORAGE_BUCKET")
+    supabase_storage_bucket: str = Field(default="ultron-private-files", alias="SUPABASE_STORAGE_BUCKET")
 
     # --- Multi-Model LLM Providers (Official Nov 2026 Gemini Models Primary + Optional Failover) ---
     gemini_api_key: SecretStr | None = Field(default=None, alias="GEMINI_API_KEY")

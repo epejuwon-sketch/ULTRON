@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, request_id_ctx
-from app.core.rate_limit import SlidingWindowRateLimiter
+from app.core.rate_limit import build_rate_limiter
 from app.db.session import init_database
 from app.routers import (
     aegis,
@@ -56,12 +56,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Create and configure the unified ULTRON OS 2026 FastAPI application."""
     cfg = settings or get_settings()
     logger = configure_logging(cfg.log_level)
-    rate_limiter = SlidingWindowRateLimiter(limit_per_minute=cfg.rate_limit_requests_per_minute)
+    rate_limiter = build_rate_limiter(cfg)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         init_database(cfg)
-        logger.info("ULTRON OS 2026 initialized (env=%s, db=%s)", cfg.ultron_env, cfg.database_backend)
+        logger.info("ULTRON OS 2026 initialized (env=%s, db=%s, rl=%s)", cfg.ultron_env, cfg.database_backend, rate_limiter.backend_name)
         yield
 
     application = FastAPI(
@@ -145,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         if not request.url.path.endswith("/preview"):
             response.headers["X-Frame-Options"] = "DENY"
+            response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none';")
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 

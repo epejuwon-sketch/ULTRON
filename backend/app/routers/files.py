@@ -1,9 +1,8 @@
-"""FILE HUB API routes: secure upload, inspection, generation, ZIP export, and download."""
+"""FILE HUB API routes: secure upload, inspection, generation, ZIP export, signed URLs, delete, restore, and download."""
 
 from __future__ import annotations
 
 import base64
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from fastapi.responses import Response
@@ -11,18 +10,23 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.exceptions import NotFoundError
 from app.core.permissions import Principal
 from app.db.session import get_db
 from app.routers.deps import require_perm
 from app.services.file_hub_service import (
     _serialize_file,
+    create_signed_file_url,
     create_zip_bundle_file,
+    download_file_bytes,
+    download_via_signed_token,
     generate_and_store_file,
     get_file_record,
     ingest_uploaded_file,
     list_files,
+    restore_file,
+    soft_delete_file,
 )
+from app.services.storage_adapter import get_storage_adapter
 
 router = APIRouter(prefix="/api/v1/files", tags=["FILE HUB"])
 
@@ -39,6 +43,23 @@ class GenerateZipRequest(BaseModel):
     archive_name: str = Field(min_length=2, max_length=160)
     files: dict[str, str]
     project_id: str | None = None
+
+
+class SignedUrlRequest(BaseModel):
+    expires_in_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+@router.get("/storage/status")
+def api_storage_status(
+    _principal: Principal = Depends(require_perm("files:read")),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    adapter = get_storage_adapter(settings)
+    return {
+        "active_backend": adapter.backend_name,
+        "private_bucket_default": settings.supabase_storage_bucket,
+        "supabase_storage_configured": adapter.backend_name == "supabase_storage",
+    }
 
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
@@ -101,15 +122,40 @@ def api_generate_zip(
 def api_list_files(
     direction: str | None = Query(default=None),
     project_id: str | None = Query(default=None),
+    include_deleted: bool = Query(default=False),
     principal: Principal = Depends(require_perm("files:read")),
     db: Session = Depends(get_db),
 ) -> dict:
-    items = list_files(db, tenant_id=principal.tenant_id, direction=direction, project_id=project_id)
+    items = list_files(
+        db,
+        tenant_id=principal.tenant_id,
+        direction=direction,
+        project_id=project_id,
+        include_deleted=include_deleted,
+    )
     return {
         "total": len(items),
         "files": items,
         "empty_state": None if items else "No files uploaded or generated yet.",
     }
+
+
+@router.get("/signed/{token}")
+def api_download_signed_file(
+    token: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Serve a file via short-lived HMAC-signed URL token (local adapter; Supabase returns direct cloud signed URLs)."""
+    rec, raw = download_via_signed_token(db, token=token, settings=settings)
+    return Response(
+        content=raw,
+        media_type=rec.mime_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{rec.filename}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.get("/{file_id}")
@@ -127,13 +173,51 @@ def api_download_file(
     file_id: str,
     principal: Principal = Depends(require_perm("files:read")),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> Response:
-    rec = get_file_record(db, tenant_id=principal.tenant_id, file_id=file_id)
-    path = Path(rec.storage_path)
-    if not path.exists():
-        raise NotFoundError("Stored file payload not found on disk.")
+    rec, raw = download_file_bytes(db, tenant_id=principal.tenant_id, file_id=file_id, settings=settings)
     return Response(
-        content=path.read_bytes(),
+        content=raw,
         media_type=rec.mime_type,
-        headers={"Content-Disposition": f'attachment; filename="{rec.filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{rec.filename}"',
+            "Cache-Control": "private, no-store",
+        },
     )
+
+
+@router.post("/{file_id}/signed-url")
+def api_create_signed_url(
+    file_id: str,
+    body: SignedUrlRequest,
+    principal: Principal = Depends(require_perm("files:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return create_signed_file_url(
+        db,
+        principal=principal,
+        file_id=file_id,
+        settings=settings,
+        expires_in_seconds=body.expires_in_seconds,
+    )
+
+
+@router.delete("/{file_id}")
+def api_soft_delete_file(
+    file_id: str,
+    principal: Principal = Depends(require_perm("files:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return soft_delete_file(db, principal=principal, file_id=file_id, settings=settings)
+
+
+@router.post("/{file_id}/restore")
+def api_restore_file(
+    file_id: str,
+    principal: Principal = Depends(require_perm("files:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return restore_file(db, principal=principal, file_id=file_id, settings=settings)

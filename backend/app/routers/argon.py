@@ -1,8 +1,8 @@
-"""ARGON background job queue, recurring schedules, and worker poll control endpoints."""
+"""ARGON background job queue, DLQ management, recurring schedules, and worker poll control endpoints."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -11,11 +11,13 @@ from app.db.session import get_db
 from app.routers.deps import require_perm
 from app.schemas import CreateScheduleRequest, EnqueueJobRequest
 from app.services.job_scheduler import (
+    cancel_background_job,
     create_scheduled_job,
     enqueue_background_job,
     list_background_jobs,
     list_scheduled_jobs,
     process_due_jobs,
+    requeue_dead_letter_job,
 )
 
 router = APIRouter(prefix="/api/v1/argon", tags=["ARGON Queue & Scheduler"])
@@ -24,6 +26,7 @@ router = APIRouter(prefix="/api/v1/argon", tags=["ARGON Queue & Scheduler"])
 @router.post("/jobs", status_code=status.HTTP_201_CREATED)
 def api_enqueue_job(
     body: EnqueueJobRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     principal: Principal = Depends(require_perm("tasks:execute")),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -34,6 +37,7 @@ def api_enqueue_job(
         payload=body.payload,
         max_attempts=body.max_attempts,
         delay_seconds=body.delay_seconds,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -45,6 +49,24 @@ def api_list_jobs(
 ) -> dict:
     jobs = list_background_jobs(db, tenant_id=principal.tenant_id, status=status_filter)
     return {"total": len(jobs), "jobs": jobs}
+
+
+@router.post("/jobs/{job_id}/cancel")
+def api_cancel_job(
+    job_id: str,
+    principal: Principal = Depends(require_perm("tasks:cancel")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return cancel_background_job(db, principal=principal, job_id=job_id)
+
+
+@router.post("/jobs/{job_id}/requeue")
+def api_requeue_job(
+    job_id: str,
+    principal: Principal = Depends(require_perm("jobs:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return requeue_dead_letter_job(db, principal=principal, job_id=job_id)
 
 
 @router.post("/jobs/process")

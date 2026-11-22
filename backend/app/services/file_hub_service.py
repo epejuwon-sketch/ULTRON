@@ -1,4 +1,4 @@
-"""FILE HUB — Two-Way Secure File Intake, Extraction, Secret Redaction & Artifact Generation."""
+"""FILE HUB — Two-Way Secure File Intake, XXE-Safe Extraction, Secret Redaction & Persistent Cloud/Local Storage."""
 
 from __future__ import annotations
 
@@ -8,20 +8,25 @@ import io
 import json
 import re
 import uuid
-import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from typing import Any
 
+from defusedxml import ElementTree as SafeET
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.permissions import Principal
 from app.core.secret_interceptor import intercept_and_redact_secrets
 from app.db.models import FileRecord
 from app.db.repositories import append_audit_log
+from app.services.storage_adapter import (
+    BaseStorageAdapter,
+    get_storage_adapter,
+    verify_local_download_token,
+)
 
 MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB per upload
 
@@ -33,12 +38,6 @@ TEXT_EXTENSIONS = frozenset(
 )
 
 BLOCKED_EXTENSIONS = frozenset({".exe", ".dll", ".bat", ".cmd", ".msi", ".com", ".scr", ".vbs"})
-
-
-def _storage_root(settings: Settings) -> Path:
-    base = Path(__file__).resolve().parents[3] / "data" / "file_hub"
-    base.mkdir(parents=True, exist_ok=True)
-    return base
 
 
 def _safe_filename(name: str) -> str:
@@ -74,25 +73,25 @@ def _extract_content(filename: str, raw_bytes: bytes) -> tuple[str, dict[str, An
                 meta["archive_entries"] = len(names)
                 meta["entries_preview"] = names[:30]
                 if ext == ".docx" and "word/document.xml" in names:
-                    root = ET.fromstring(zf.read("word/document.xml"))
+                    root = SafeET.fromstring(zf.read("word/document.xml"))
                     extracted = " ".join(elem.text for elem in root.iter() if elem.text)
-                    meta["extractor"] = "docx_xml"
+                    meta["extractor"] = "docx_defusedxml"
                     return extracted[:100_000], meta
                 if ext == ".pptx":
                     slides = [n for n in sorted(names) if n.startswith("ppt/slides/slide") and n.endswith(".xml")]
                     parts = []
                     for s in slides:
-                        root = ET.fromstring(zf.read(s))
+                        root = SafeET.fromstring(zf.read(s))
                         parts.append(" ".join(e.text for e in root.iter() if e.text))
-                    meta["extractor"] = "pptx_xml"
+                    meta["extractor"] = "pptx_defusedxml"
                     meta["slide_count"] = len(slides)
                     return "\n".join(parts)[:100_000], meta
                 if ext == ".xlsx":
                     shared = []
                     if "xl/sharedStrings.xml" in names:
-                        root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                        root = SafeET.fromstring(zf.read("xl/sharedStrings.xml"))
                         shared = [e.text for e in root.iter() if e.text]
-                    meta["extractor"] = "xlsx_xml"
+                    meta["extractor"] = "xlsx_defusedxml"
                     return "\n".join(shared)[:100_000], meta
                 meta["extractor"] = "zip_manifest"
                 return "\n".join(names[:200]), meta
@@ -142,8 +141,9 @@ def ingest_uploaded_file(
     raw_bytes: bytes,
     mime_type: str = "application/octet-stream",
     project_id: str | None = None,
+    storage: BaseStorageAdapter | None = None,
 ) -> dict[str, Any]:
-    """Validate, hash, scan, redact secrets, extract text, tag as untrusted, and persist uploaded file."""
+    """Validate, hash, scan, redact secrets, extract text, tag as untrusted, and persist via StorageAdapter."""
     safe_name = _safe_filename(filename)
     ext = Path(safe_name).suffix.lower()
     if ext in BLOCKED_EXTENSIONS:
@@ -153,14 +153,15 @@ def ingest_uploaded_file(
 
     sha256_hex = hashlib.sha256(raw_bytes).hexdigest()
     file_id = f"fil_{uuid.uuid4().hex[:14]}"
-    tenant_dir = _storage_root(settings) / principal.tenant_id
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    disk_path = tenant_dir / f"{file_id}_{safe_name}"
-    disk_path.write_bytes(raw_bytes)
+    adapter = storage or get_storage_adapter(settings)
+    storage_ref = adapter.upload_bytes(
+        tenant_id=principal.tenant_id,
+        object_key=f"{file_id}_{safe_name}",
+        data=raw_bytes,
+        mime_type=mime_type or "application/octet-stream",
+    )
 
     raw_extracted, meta = _extract_content(safe_name, raw_bytes)
-
-    # Run VAULT secret interception on extracted text so secrets in uploaded files never leak to AI prompts!
     interception = intercept_and_redact_secrets(
         raw_extracted,
         db=db,
@@ -175,6 +176,9 @@ def ingest_uploaded_file(
     if interception.secrets_vaulted:
         meta["secrets_vaulted"] = interception.secrets_vaulted
     meta["prompt_injection_guard"] = "TAGGED_AS_UNTRUSTED_DATA"
+    meta["storage_backend"] = adapter.backend_name
+    meta["private_bucket"] = True
+    meta["deleted"] = False
 
     rec = FileRecord(
         file_id=file_id,
@@ -184,7 +188,7 @@ def ingest_uploaded_file(
         size_bytes=len(raw_bytes),
         sha256_hash=sha256_hex,
         direction="UPLOAD",
-        storage_path=str(disk_path),
+        storage_path=storage_ref,
         scan_status=scan_status,
         secrets_redacted=interception.redaction_count,
         untrusted_content_tagged=True,
@@ -200,7 +204,7 @@ def ingest_uploaded_file(
         actor=principal.username,
         action="FILE_HUB_UPLOAD",
         resource=file_id,
-        outcome=f"{safe_name}|bytes={len(raw_bytes)}|scan={scan_status}",
+        outcome=f"{safe_name}|bytes={len(raw_bytes)}|scan={scan_status}|backend={adapter.backend_name}",
     )
     db.commit()
     db.refresh(rec)
@@ -217,19 +221,28 @@ def generate_and_store_file(
     mime_type: str = "text/plain",
     project_id: str | None = None,
     metadata: dict[str, Any] | None = None,
+    storage: BaseStorageAdapter | None = None,
 ) -> dict[str, Any]:
-    """Persist an ULTRON-generated artifact (report, CSV, JSON, code, ZIP archive) for download."""
+    """Persist an ULTRON-generated artifact via StorageAdapter (Supabase Storage in prod, Local in dev)."""
     safe_name = _safe_filename(filename)
     sha256_hex = hashlib.sha256(content_bytes).hexdigest()
     file_id = f"fil_{uuid.uuid4().hex[:14]}"
-    tenant_dir = _storage_root(settings) / principal.tenant_id
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    disk_path = tenant_dir / f"{file_id}_{safe_name}"
-    disk_path.write_bytes(content_bytes)
+    adapter = storage or get_storage_adapter(settings)
+    storage_ref = adapter.upload_bytes(
+        tenant_id=principal.tenant_id,
+        object_key=f"{file_id}_{safe_name}",
+        data=content_bytes,
+        mime_type=mime_type,
+    )
 
     extracted = ""
     if Path(safe_name).suffix.lower() in TEXT_EXTENSIONS:
         extracted = content_bytes.decode("utf-8", errors="replace")[:50_000]
+
+    meta = dict(metadata or {})
+    meta["storage_backend"] = adapter.backend_name
+    meta["private_bucket"] = True
+    meta["deleted"] = False
 
     rec = FileRecord(
         file_id=file_id,
@@ -239,12 +252,12 @@ def generate_and_store_file(
         size_bytes=len(content_bytes),
         sha256_hash=sha256_hex,
         direction="GENERATED",
-        storage_path=str(disk_path),
+        storage_path=storage_ref,
         scan_status="CLEAN",
         secrets_redacted=0,
         untrusted_content_tagged=False,
         extracted_text=extracted,
-        metadata_json=json.dumps(metadata or {}, default=str),
+        metadata_json=json.dumps(meta, default=str),
         project_id=project_id,
         created_by=principal.username,
     )
@@ -255,7 +268,7 @@ def generate_and_store_file(
         actor=principal.username,
         action="FILE_HUB_GENERATED",
         resource=file_id,
-        outcome=f"{safe_name}|bytes={len(content_bytes)}",
+        outcome=f"{safe_name}|bytes={len(content_bytes)}|backend={adapter.backend_name}",
     )
     db.commit()
     db.refresh(rec)
@@ -270,8 +283,8 @@ def create_zip_bundle_file(
     archive_name: str,
     files_map: dict[str, str],
     project_id: str | None = None,
+    storage: BaseStorageAdapter | None = None,
 ) -> dict[str, Any]:
-    """Package a multi-file dict into a real downloadable ZIP archive in File Hub."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for rel_path, content in sorted(files_map.items()):
@@ -287,7 +300,143 @@ def create_zip_bundle_file(
         mime_type="application/zip",
         project_id=project_id,
         metadata={"archived_files": sorted(files_map.keys())},
+        storage=storage,
     )
+
+
+def download_file_bytes(
+    db: Session,
+    *,
+    tenant_id: str,
+    file_id: str,
+    settings: Settings,
+    storage: BaseStorageAdapter | None = None,
+) -> tuple[FileRecord, bytes]:
+    rec = get_file_record(db, tenant_id=tenant_id, file_id=file_id)
+    meta = json.loads(rec.metadata_json or "{}")
+    if meta.get("deleted"):
+        raise NotFoundError(f"File '{file_id}' has been soft-deleted. Restore it before downloading.")
+    adapter = storage or get_storage_adapter(settings)
+    raw = adapter.download_bytes(tenant_id=tenant_id, storage_ref=rec.storage_path)
+    return rec, raw
+
+
+def create_signed_file_url(
+    db: Session,
+    *,
+    principal: Principal,
+    file_id: str,
+    settings: Settings,
+    expires_in_seconds: int = 300,
+    storage: BaseStorageAdapter | None = None,
+) -> dict[str, Any]:
+    rec = get_file_record(db, tenant_id=principal.tenant_id, file_id=file_id)
+    meta = json.loads(rec.metadata_json or "{}")
+    if meta.get("deleted"):
+        raise NotFoundError(f"File '{file_id}' is soft-deleted.")
+    adapter = storage or get_storage_adapter(settings)
+    signed = adapter.create_signed_url(
+        tenant_id=principal.tenant_id,
+        file_id=rec.file_id,
+        storage_ref=rec.storage_path,
+        expires_in_seconds=expires_in_seconds,
+    )
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="FILE_HUB_SIGNED_URL_ISSUED",
+        resource=rec.file_id,
+        outcome=f"ttl={signed['expires_in_seconds']}s|backend={signed['storage_backend']}",
+    )
+    db.commit()
+    return {"file_id": rec.file_id, "filename": rec.filename, **signed}
+
+
+def download_via_signed_token(
+    db: Session,
+    *,
+    token: str,
+    settings: Settings,
+    storage: BaseStorageAdapter | None = None,
+) -> tuple[FileRecord, bytes]:
+    claims = verify_local_download_token(token, secret_key=settings.jwt_secret.get_secret_value())
+    return download_file_bytes(
+        db,
+        tenant_id=str(claims["tid"]),
+        file_id=str(claims["fid"]),
+        settings=settings,
+        storage=storage,
+    )
+
+
+def soft_delete_file(
+    db: Session,
+    *,
+    principal: Principal,
+    file_id: str,
+    settings: Settings,
+    storage: BaseStorageAdapter | None = None,
+) -> dict[str, Any]:
+    rec = get_file_record(db, tenant_id=principal.tenant_id, file_id=file_id)
+    meta = json.loads(rec.metadata_json or "{}")
+    if meta.get("deleted"):
+        raise ConflictError(f"File '{file_id}' is already deleted.")
+    adapter = storage or get_storage_adapter(settings)
+    original_ref = rec.storage_path
+    trash_ref = adapter.soft_delete(tenant_id=principal.tenant_id, storage_ref=original_ref)
+    meta["deleted"] = True
+    meta["original_storage_path"] = original_ref
+    rec.storage_path = trash_ref
+    rec.metadata_json = json.dumps(meta, default=str)
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="FILE_HUB_SOFT_DELETED",
+        resource=rec.file_id,
+        outcome=rec.filename,
+    )
+    db.commit()
+    db.refresh(rec)
+    return _serialize_file(rec, include_text=False)
+
+
+def restore_file(
+    db: Session,
+    *,
+    principal: Principal,
+    file_id: str,
+    settings: Settings,
+    storage: BaseStorageAdapter | None = None,
+) -> dict[str, Any]:
+    rec = get_file_record(db, tenant_id=principal.tenant_id, file_id=file_id)
+    meta = json.loads(rec.metadata_json or "{}")
+    if not meta.get("deleted"):
+        raise ConflictError(f"File '{file_id}' is not deleted.")
+    original_ref = meta.get("original_storage_path")
+    if not original_ref:
+        raise NotFoundError("Original storage path missing; file cannot be restored.")
+    adapter = storage or get_storage_adapter(settings)
+    restored_ref = adapter.restore(
+        tenant_id=principal.tenant_id,
+        trash_ref=rec.storage_path,
+        original_ref=original_ref,
+    )
+    meta["deleted"] = False
+    rec.storage_path = restored_ref
+    rec.metadata_json = json.dumps(meta, default=str)
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="FILE_HUB_RESTORED",
+        resource=rec.file_id,
+        outcome=rec.filename,
+    )
+    db.commit()
+    db.refresh(rec)
+    return _serialize_file(rec, include_text=False)
 
 
 def list_files(
@@ -296,6 +445,7 @@ def list_files(
     tenant_id: str,
     direction: str | None = None,
     project_id: str | None = None,
+    include_deleted: bool = False,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     stmt = select(FileRecord).where(FileRecord.tenant_id == tenant_id)
@@ -304,7 +454,13 @@ def list_files(
     if project_id:
         stmt = stmt.where(FileRecord.project_id == project_id)
     rows = db.execute(stmt.order_by(FileRecord.created_at.desc()).limit(limit)).scalars().all()
-    return [_serialize_file(r, include_text=False) for r in rows]
+    items = []
+    for r in rows:
+        meta = json.loads(r.metadata_json or "{}")
+        if not include_deleted and meta.get("deleted"):
+            continue
+        items.append(_serialize_file(r, include_text=False))
+    return items
 
 
 def get_file_record(db: Session, *, tenant_id: str, file_id: str) -> FileRecord:
@@ -317,6 +473,7 @@ def get_file_record(db: Session, *, tenant_id: str, file_id: str) -> FileRecord:
 
 
 def _serialize_file(f: FileRecord, *, include_text: bool = False) -> dict[str, Any]:
+    meta = json.loads(f.metadata_json or "{}")
     data: dict[str, Any] = {
         "file_id": f.file_id,
         "filename": f.filename,
@@ -327,7 +484,9 @@ def _serialize_file(f: FileRecord, *, include_text: bool = False) -> dict[str, A
         "scan_status": f.scan_status,
         "secrets_redacted": f.secrets_redacted,
         "untrusted_content_tagged": f.untrusted_content_tagged,
-        "metadata": json.loads(f.metadata_json or "{}"),
+        "deleted": bool(meta.get("deleted", False)),
+        "storage_backend": meta.get("storage_backend", "local_disk"),
+        "metadata": meta,
         "project_id": f.project_id,
         "created_by": f.created_by,
         "created_at": f.created_at.isoformat(),
