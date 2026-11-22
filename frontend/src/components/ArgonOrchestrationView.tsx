@@ -78,7 +78,7 @@ export function ArgonOrchestrationView() {
   async function decideApproval(approvalId: string, decision: "APPROVED" | "REJECTED") {
     setError("");
     try {
-      await apiFetch(`/api/v1/approvals/${approvalId}/decision`, {
+      await apiFetch(`/api/v1/approvals/${approvalId}/decide`, {
         method: "POST",
         body: { decision, note: `Decided via ARGON Orchestration Console (${decision})` },
       });
