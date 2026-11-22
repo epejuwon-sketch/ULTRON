@@ -14,9 +14,12 @@ from app.integrations.gemini import GeminiClient
 
 # Estimated USD per 1M tokens (input, output) for cost monitoring & budgeting
 MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
+    "gemini-3.5-flash-lite": (0.075, 0.30),
+    "gemini-3.8-flash": (0.20, 0.80),
+    "gemini-4-argon": (1.25, 8.00),
+    "gemini-2.5-flash-lite": (0.075, 0.30),
     "gemini-2.0-flash-lite": (0.075, 0.30),
     "gemini-2.0-flash": (0.10, 0.40),
-    "gemini-2.5-pro": (1.25, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "claude-3-5-sonnet-latest": (3.00, 15.00),
     "llama3.2": (0.0, 0.0),

@@ -35,3 +35,6 @@ jobs:
 
       - name: Verify persistent worker single cycle
         run: python backend/worker.py --once
+
+      - name: Verify desktop device agent module
+        run: python -m py_compile device_agent/ultron_desktop_agent.py

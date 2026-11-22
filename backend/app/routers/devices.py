@@ -1,0 +1,207 @@
+"""Multi-Device Connectivity Mesh routes (Windows, macOS, iOS, iPadOS, Android, PWA)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Depends, Header, status
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import AuthorizationError
+from app.core.permissions import Principal
+from app.db.session import get_db
+from app.routers.deps import require_perm
+from app.services.device_service import (
+    authenticate_device_token,
+    complete_device_pairing,
+    dispatch_device_task,
+    init_device_pairing,
+    list_devices,
+    poll_pending_device_tasks,
+    record_device_heartbeat,
+    report_device_task_result,
+    revoke_device,
+    update_device_permissions,
+)
+
+router = APIRouter(prefix="/api/v1/devices", tags=["Multi-Device Connectivity"])
+
+
+class PairInitRequest(BaseModel):
+    target_platform: str = Field(min_length=3, max_length=32)
+    requested_permissions: dict[str, bool] = Field(default_factory=dict)
+    authorized_folders: list[str] = Field(default_factory=list)
+    ttl_minutes: int = Field(default=10, ge=1, le=30)
+
+
+class PairCompleteRequest(BaseModel):
+    pairing_code: str = Field(min_length=6, max_length=64)
+    device_name: str = Field(min_length=2, max_length=160)
+    platform: str = Field(min_length=3, max_length=32)
+    os_version: str = Field(default="", max_length=120)
+    app_version: str = Field(default="2026.3.0", max_length=64)
+    capabilities: list[str] = Field(default_factory=list)
+
+
+class HeartbeatRequest(BaseModel):
+    os_version: str | None = None
+    app_version: str | None = None
+    capabilities: list[str] | None = None
+    telemetry: dict[str, Any] = Field(default_factory=dict)
+
+
+class UpdatePermissionsRequest(BaseModel):
+    permissions: dict[str, bool]
+    authorized_folders: list[str] | None = None
+
+
+class DispatchDeviceTaskRequest(BaseModel):
+    action: str = Field(min_length=2, max_length=80)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    parent_task_id: str | None = None
+
+
+class ReportDeviceTaskRequest(BaseModel):
+    status: str = Field(min_length=4, max_length=32)
+    result: dict[str, Any] = Field(default_factory=dict)
+    error_detail: str | None = None
+
+
+@router.post("/pair/init", status_code=status.HTTP_201_CREATED)
+def api_pair_init(
+    body: PairInitRequest,
+    principal: Principal = Depends(require_perm("devices:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return init_device_pairing(
+        db,
+        principal=principal,
+        target_platform=body.target_platform,
+        requested_permissions=body.requested_permissions,
+        authorized_folders=body.authorized_folders,
+        ttl_minutes=body.ttl_minutes,
+    )
+
+
+@router.post("/pair/complete", status_code=status.HTTP_201_CREATED)
+def api_pair_complete(body: PairCompleteRequest, db: Session = Depends(get_db)) -> dict:
+    """Public pairing exchange authenticated strictly by the single-use cryptographic pairing code."""
+    return complete_device_pairing(
+        db,
+        pairing_code=body.pairing_code,
+        device_name=body.device_name,
+        platform=body.platform,
+        os_version=body.os_version,
+        app_version=body.app_version,
+        capabilities=body.capabilities or None,
+    )
+
+
+@router.get("")
+def api_list_devices(
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = list_devices(db, tenant_id=principal.tenant_id)
+    return {
+        "total": len(items),
+        "devices": items,
+        "empty_state": None if items else "No devices paired yet. Call POST /api/v1/devices/pair/init to pair a device.",
+    }
+
+
+@router.post("/{device_id}/heartbeat")
+def api_device_heartbeat(
+    device_id: str,
+    body: HeartbeatRequest,
+    x_device_token: str = Header(default="", alias="X-Device-Token"),
+    db: Session = Depends(get_db),
+) -> dict:
+    device = authenticate_device_token(db, raw_token=x_device_token)
+    if device.device_id != device_id:
+        raise AuthorizationError("Device token does not match target device_id.")
+    return record_device_heartbeat(
+        db,
+        device=device,
+        os_version=body.os_version,
+        app_version=body.app_version,
+        capabilities=body.capabilities,
+        telemetry=body.telemetry,
+    )
+
+
+@router.patch("/{device_id}/permissions")
+def api_device_permissions(
+    device_id: str,
+    body: UpdatePermissionsRequest,
+    principal: Principal = Depends(require_perm("devices:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return update_device_permissions(
+        db,
+        principal=principal,
+        device_id=device_id,
+        permissions=body.permissions,
+        authorized_folders=body.authorized_folders,
+    )
+
+
+@router.post("/{device_id}/revoke")
+def api_device_revoke(
+    device_id: str,
+    principal: Principal = Depends(require_perm("devices:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return revoke_device(db, principal=principal, device_id=device_id)
+
+
+@router.post("/{device_id}/tasks", status_code=status.HTTP_201_CREATED)
+def api_dispatch_device_task(
+    device_id: str,
+    body: DispatchDeviceTaskRequest,
+    principal: Principal = Depends(require_perm("devices:execute")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return dispatch_device_task(
+        db,
+        principal=principal,
+        device_id=device_id,
+        action=body.action,
+        payload=body.payload,
+        parent_task_id=body.parent_task_id,
+    )
+
+
+@router.get("/{device_id}/tasks/pending")
+def api_poll_device_tasks(
+    device_id: str,
+    x_device_token: str = Header(default="", alias="X-Device-Token"),
+    db: Session = Depends(get_db),
+) -> dict:
+    device = authenticate_device_token(db, raw_token=x_device_token)
+    if device.device_id != device_id:
+        raise AuthorizationError("Device token does not match target device_id.")
+    tasks = poll_pending_device_tasks(db, device=device)
+    return {"total": len(tasks), "tasks": tasks}
+
+
+@router.post("/{device_id}/tasks/{device_task_id}/report")
+def api_report_device_task(
+    device_id: str,
+    device_task_id: str,
+    body: ReportDeviceTaskRequest,
+    x_device_token: str = Header(default="", alias="X-Device-Token"),
+    db: Session = Depends(get_db),
+) -> dict:
+    device = authenticate_device_token(db, raw_token=x_device_token)
+    if device.device_id != device_id:
+        raise AuthorizationError("Device token does not match target device_id.")
+    return report_device_task_result(
+        db,
+        device=device,
+        device_task_id=device_task_id,
+        status_value=body.status,
+        result=body.result,
+        error_detail=body.error_detail,
+    )

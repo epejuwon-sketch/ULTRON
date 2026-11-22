@@ -21,8 +21,12 @@ from app.routers import (
     argon,
     audit,
     auth,
+    devices,
     finance,
+    github,
+    google,
     health,
+    integrations,
     memory,
     monitoring,
     neon,
@@ -54,9 +58,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=cfg.app_version,
         description=(
             "Unified autonomous multi-agent intelligence operating system backend: "
-            "NEON intelligence engine, ARGON orchestration & ApprovalGate governance, "
-            "60 specialist agents, multi-tier versioned memory, Financial Command Center, "
-            "Developer & Coding Infrastructure, and Supabase/Gemini/Vercel/Cloudflare integrations."
+            "NEON intelligence engine (Gemini primary), ARGON orchestration & ApprovalGate governance, "
+            "60 specialist agents, multi-tier versioned memory, unified OAuth 2.0 IntegrationManager, "
+            "Google Ecosystem, GitHub Engineering, Web Research, Multi-Device Mesh, Financial Command Center, "
+            "Developer Infrastructure, and Supabase/Vercel/Cloudflare integrations."
         ),
         lifespan=lifespan,
     )
@@ -68,7 +73,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=cfg.cors_origin_list,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Tenant-ID", "X-Request-ID", "Idempotency-Key"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Tenant-ID",
+            "X-Request-ID",
+            "Idempotency-Key",
+            "X-Device-Token",
+        ],
     )
 
     @application.middleware("http")
@@ -125,6 +137,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application.include_router(health.router)
     application.include_router(auth.router)
+    application.include_router(integrations.router)
+    application.include_router(google.router)
+    application.include_router(github.router)
+    application.include_router(devices.router)
     application.include_router(agents.router)
     application.include_router(neon.router)
     application.include_router(argon.router)

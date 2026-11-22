@@ -34,7 +34,7 @@ class Settings(BaseSettings):
         default="development", alias="ULTRON_ENV"
     )
     app_name: str = Field(default="ULTRON OS 2026 Backend", alias="ULTRON_APP_NAME")
-    app_version: str = Field(default="2026.2.0", alias="ULTRON_APP_VERSION")
+    app_version: str = Field(default="2026.3.0", alias="ULTRON_APP_VERSION")
     host: str = Field(default="0.0.0.0", alias="ULTRON_HOST")
     port: int = Field(default=8000, alias="ULTRON_PORT")
     log_level: str = Field(default="INFO", alias="ULTRON_LOG_LEVEL")
@@ -81,16 +81,17 @@ class Settings(BaseSettings):
     supabase_service_role_key: SecretStr | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
     supabase_storage_bucket: str = Field(default="ultron-artifacts", alias="SUPABASE_STORAGE_BUCKET")
 
-    # --- Multi-Model LLM Providers (Gemini Primary + Optional Failover) ---
+    # --- Multi-Model LLM Providers (Official Nov 2026 Gemini Models Primary + Optional Failover) ---
     gemini_api_key: SecretStr | None = Field(default=None, alias="GEMINI_API_KEY")
     gemini_base_url: str = Field(
         default="https://generativelanguage.googleapis.com/v1beta",
         alias="GEMINI_BASE_URL",
     )
-    gemini_model_fast: str = Field(default="gemini-2.0-flash-lite", alias="GEMINI_MODEL_FAST")
-    gemini_model_standard: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL_STANDARD")
-    gemini_model_reasoning: str = Field(default="gemini-2.5-pro", alias="GEMINI_MODEL_REASONING")
-    gemini_model_embedding: str = Field(default="text-embedding-004", alias="GEMINI_MODEL_EMBEDDING")
+    gemini_model_fast: str = Field(default="gemini-3.5-flash-lite", alias="GEMINI_MODEL_FAST")
+    gemini_model_standard: str = Field(default="gemini-3.8-flash", alias="GEMINI_MODEL_STANDARD")
+    gemini_model_reasoning: str = Field(default="gemini-4-argon", alias="GEMINI_MODEL_REASONING")
+    gemini_model_embedding: str = Field(default="gemini-embedding-001", alias="GEMINI_MODEL_EMBEDDING")
+    gemini_model_image: str = Field(default="gemini-nano-banana-2.1", alias="GEMINI_MODEL_IMAGE")
 
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
@@ -102,6 +103,32 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = Field(default="", alias="OLLAMA_BASE_URL")
     ollama_model_local: str = Field(default="llama3.2", alias="OLLAMA_MODEL_LOCAL")
+
+    # --- OAuth 2.0 Client Configuration ---
+    google_oauth_client_id: str = Field(default="", alias="GOOGLE_OAUTH_CLIENT_ID")
+    google_oauth_client_secret: SecretStr | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_SECRET")
+    google_oauth_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/integrations/oauth/google/callback",
+        alias="GOOGLE_OAUTH_REDIRECT_URI",
+    )
+    github_oauth_client_id: str = Field(default="", alias="GITHUB_OAUTH_CLIENT_ID")
+    github_oauth_client_secret: SecretStr | None = Field(default=None, alias="GITHUB_OAUTH_CLIENT_SECRET")
+    github_oauth_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/integrations/oauth/github/callback",
+        alias="GITHUB_OAUTH_REDIRECT_URI",
+    )
+
+    # --- Google Ecosystem Service-Specific Tokens & Search ---
+    google_drive_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_DRIVE_ACCESS_TOKEN")
+    google_gmail_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_GMAIL_ACCESS_TOKEN")
+    google_calendar_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_CALENDAR_ACCESS_TOKEN")
+    google_docs_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_DOCS_ACCESS_TOKEN")
+    google_sheets_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_SHEETS_ACCESS_TOKEN")
+    google_slides_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_SLIDES_ACCESS_TOKEN")
+    google_cloud_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_CLOUD_ACCESS_TOKEN")
+    google_cloud_project_id: str = Field(default="", alias="GOOGLE_CLOUD_PROJECT_ID")
+    google_search_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_SEARCH_API_KEY")
+    google_search_cx: str = Field(default="", alias="GOOGLE_SEARCH_CX")
 
     # --- Vercel ---
     vercel_token: SecretStr | None = Field(default=None, alias="VERCEL_TOKEN")
@@ -122,8 +149,6 @@ class Settings(BaseSettings):
     # --- Extended Tool Integrations ---
     github_token: SecretStr | None = Field(default=None, alias="GITHUB_TOKEN")
     github_default_repo: str = Field(default="epejuwon-sketch/ULTRON", alias="GITHUB_DEFAULT_REPO")
-    google_drive_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_DRIVE_ACCESS_TOKEN")
-    google_calendar_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_CALENDAR_ACCESS_TOKEN")
     email_smtp_host: str = Field(default="", alias="EMAIL_SMTP_HOST")
     email_api_key: SecretStr | None = Field(default=None, alias="EMAIL_API_KEY")
     whatsapp_access_token: SecretStr | None = Field(default=None, alias="WHATSAPP_ACCESS_TOKEN")
@@ -176,6 +201,13 @@ class Settings(BaseSettings):
             "default_tenant_id": self.default_tenant_id,
             "rate_limit_per_min": self.rate_limit_requests_per_minute,
             "argon_max_parallel_steps": self.argon_max_parallel_steps,
+            "gemini_models": {
+                "fast": self.gemini_model_fast,
+                "standard": self.gemini_model_standard,
+                "reasoning": self.gemini_model_reasoning,
+                "embedding": self.gemini_model_embedding,
+                "image": self.gemini_model_image,
+            },
             "integrations_configured": {
                 "supabase": bool(self.supabase_url.strip() and (self.supabase_service_role_key or self.supabase_anon_key)),
                 "gemini": bool(self.gemini_api_key and self.gemini_api_key.get_secret_value().strip()),
@@ -185,7 +217,15 @@ class Settings(BaseSettings):
                 "vercel": bool(self.vercel_token and self.vercel_token.get_secret_value().strip()),
                 "cloudflare": bool(self.cloudflare_api_token and self.cloudflare_api_token.get_secret_value().strip()),
                 "github": bool(self.github_token and self.github_token.get_secret_value().strip()),
+                "google_oauth": bool(self.google_oauth_client_id.strip() and self.google_oauth_client_secret),
                 "google_drive": bool(self.google_drive_access_token and self.google_drive_access_token.get_secret_value().strip()),
+                "google_gmail": bool(self.google_gmail_access_token and self.google_gmail_access_token.get_secret_value().strip()),
+                "google_calendar": bool(self.google_calendar_access_token and self.google_calendar_access_token.get_secret_value().strip()),
+                "google_docs": bool(self.google_docs_access_token and self.google_docs_access_token.get_secret_value().strip()),
+                "google_sheets": bool(self.google_sheets_access_token and self.google_sheets_access_token.get_secret_value().strip()),
+                "google_slides": bool(self.google_slides_access_token and self.google_slides_access_token.get_secret_value().strip()),
+                "google_cloud": bool(self.google_cloud_access_token and self.google_cloud_access_token.get_secret_value().strip()),
+                "google_search": bool(self.google_search_api_key and self.google_search_cx.strip()),
             },
         }
 

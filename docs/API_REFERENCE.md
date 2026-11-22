@@ -89,3 +89,29 @@ All protected `/api/v1/*` routes require `Authorization: Bearer <access_token>` 
 * `GET/PUT /api/v1/settings` (includes `OWNER`-only `autonomous_execution_enabled` kill switch).
 * `GET /api/v1/monitoring/overview`, `GET /api/v1/monitoring/metrics` (Prometheus text exposition).
 * `WS /ws/v1/events?token=<jwt>` (authenticated tenant-scoped real-time event stream).
+
+## 12. Unified Integration Manager & OAuth 2.0 (`/api/v1/integrations`)
+* `GET /api/v1/integrations/connections` — Tenant-scoped encrypted connection inventory + Antigravity environment adapter.
+* `GET /api/v1/integrations/antigravity?live=true|false` — Honest official Antigravity plugin adapter status.
+* `POST /api/v1/integrations/{provider}/connect` — Store AES-256-GCM encrypted credentials (`OWNER`/`ADMIN`).
+* `POST /api/v1/integrations/oauth/{provider}/start` & `/callback` — OAuth 2.0 + PKCE (`S256`) flow.
+* `POST /api/v1/integrations/{provider}/refresh`, `/verify`, `/disconnect` — Token refresh, live verification, and upstream revocation.
+
+## 13. Google Ecosystem (`/api/v1/google`)
+* **Drive:** `GET /drive/files`, `GET /drive/files/{id}/read`, `POST /drive/folders`, `POST /drive/upload`
+* **Gmail:** `GET /gmail/messages`, `GET /gmail/threads/{id}`, `POST /gmail/drafts`, `POST /gmail/send-request` (ApprovalGate enforced)
+* **Calendar:** `GET /calendar/calendars`, `GET /calendar/events`, `POST /calendar/events`, `POST /calendar/availability`
+* **Docs / Sheets / Slides:** `POST /docs`, `GET /docs/{id}`, `POST /docs/{id}/append`, `POST /sheets`, `GET/PUT /sheets/{id}/values`, `POST /slides`, `POST /slides/{id}/slides`
+* **Google Cloud:** `GET /cloud/projects`, `GET /cloud/projects/{id}/services`
+
+## 14. GitHub Engineering & Web Research (`/api/v1/github`, `/api/v1/research`)
+* `GET /api/v1/github/repos`, `/repos/{owner}/{repo}`, `/branches`, `POST /branches`, `/commits`, `GET/PUT /file` (protected branches blocked), `GET/POST /pulls`, `GET/POST /issues`, `GET /workflows`, `GET /releases`.
+* `POST /api/v1/research/search`, `POST /api/v1/research/fetch` (SSRF-safe with preserved citations).
+
+## 15. Multi-Device Connectivity Mesh (`/api/v1/devices`)
+* `POST /api/v1/devices/pair/init`, `POST /api/v1/devices/pair/complete`, `GET /api/v1/devices`.
+* `POST /api/v1/devices/{id}/heartbeat` (`X-Device-Token`), `PATCH /api/v1/devices/{id}/permissions`, `POST /api/v1/devices/{id}/revoke`.
+* `POST /api/v1/devices/{id}/tasks`, `GET /api/v1/devices/{id}/tasks/pending`, `POST /api/v1/devices/{id}/tasks/{tid}/report`.
+
+## 16. Unified Natural-Language Orchestration
+* `POST /api/v1/orchestrate` — Plain-language objective uniting Memory recall, authorized Integrations/Devices, NEON routing, ARGON DAG planning/execution, ApprovalGate checkpoints, and independent verification.

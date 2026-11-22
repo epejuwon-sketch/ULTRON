@@ -9,7 +9,9 @@
 * **Financial Command Center:** Revenue, expenses, API spending, hosting costs, project costs, budgets with automatic overrun alerts, investments, reserves, owner distributions (strictly gated; never executes unverified live payment rails), financial summary reports, and immutable financial audit logs.
 * **Developer & Coding Infrastructure:** Project management, local git & GitHub inspection, real Python AST static analysis & security scanning, non-destructive code generation proposals, ApprovalGate-governed production deployments, rollback support, and dev activity tracking.
 * **Security & Observability:** Argon2id (`t=3, m=64 MiB, p=4`), HS256 JWT + JTI revocation, rotating refresh tokens, brute-force lockout, 5-role RBAC, strict tenant isolation, AES-256-GCM vault with HKDF + AAD binding, SHA-256 hash-chained audit ledger, sliding-window rate limiting, `Idempotency-Key` replay safety, SSRF & prompt-injection defenses, authenticated WebSocket events (`/ws/v1/events`), and Prometheus metrics (`/api/v1/monitoring/metrics`).
-* **14-Capability Honest Integration Registry:** Supabase (PostgreSQL + pgvector + Storage), Gemini API, Vercel, Cloudflare, GitHub, Google Drive, Email, WhatsApp, Calendar, Web Research, File Processing, Image Generation, Coding Environment, and External APIs.
+* **Unified Integration Manager & OAuth 2.0 (PKCE):** Central encrypted per-tenant credential management, least-privilege OAuth scopes, token refresh, live verification, and upstream revocation across **Google Ecosystem** (Drive, Gmail, Calendar, Docs, Sheets, Slides, Search, Google Cloud), **GitHub Engineering**, **Supabase**, **Vercel**, **Cloudflare**, and the honest **Antigravity Plugin Adapter**.
+* **Multi-Device Connectivity Mesh & Desktop Agent:** Secure pairing (`windows`, `macos`, `ios`, `ipados`, `android`, `pwa`), explicit opt-in permissions, cross-device task sync, instant revocation, and sandboxed desktop agent (`device_agent/ultron_desktop_agent.py`).
+* **Unified Natural-Language Orchestration (`POST /api/v1/orchestrate`):** Plain-language objectives automatically combine memory recall, authorized integration/device discovery, NEON routing (official Nov 2026 Gemini models `gemini-3.5-flash-lite` / `gemini-3.8-flash` / `gemini-4-argon`), ARGON DAG execution, ApprovalGate checkpoints, and independent verification.
 
 ## Quick Start
 
@@ -28,6 +30,7 @@ PYTHONPATH=backend uvicorn app.main:app --reload --port 8000
 
 * [Existing State & Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
 * [System Architecture & Serverless/Worker Split](docs/ARCHITECTURE.md)
+* [Ecosystem Connectivity, OAuth 2.0 & Multi-Device Mesh](docs/ECOSYSTEM_AND_DEVICES.md)
 * [Complete REST & WebSocket API Reference](docs/API_REFERENCE.md)
 * [Environment Variables & Secret Management](docs/ENVIRONMENT_VARIABLES.md)
 * [Deployment, Migration, Backup & Rollback Guide](docs/DEPLOYMENT.md)

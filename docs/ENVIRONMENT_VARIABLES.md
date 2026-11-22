@@ -28,10 +28,16 @@ Never commit `.env` files, API keys, service-role keys, or private credentials t
 | `SUPABASE_SERVICE_ROLE_KEY` | Optional | `None` | Supabase service role key (server-side only; never expose to frontend) |
 | `GEMINI_API_KEY` | Optional | `None` | Google Gemini API key (sent via `x-goog-api-key` header) |
 | `GEMINI_BASE_URL` | No | `https://generativelanguage.googleapis.com/v1beta` | Gemini API base URL |
-| `GEMINI_MODEL_FAST` | No | `gemini-2.0-flash-lite` | Tier 1 fast operations model |
-| `GEMINI_MODEL_STANDARD` | No | `gemini-2.0-flash` | Tier 2–3 standard/engineering model |
-| `GEMINI_MODEL_REASONING` | No | `gemini-2.5-pro` | Tier 4–5 deep reasoning & orchestration model |
-| `GEMINI_MODEL_EMBEDDING` | No | `text-embedding-004` | Semantic memory embedding model |
+| `GEMINI_MODEL_FAST` | No | `gemini-3.5-flash-lite` | Tier 1 fast operations model (official Nov 2026) |
+| `GEMINI_MODEL_STANDARD` | No | `gemini-3.8-flash` | Tier 2–3 standard/engineering model (official Nov 2026) |
+| `GEMINI_MODEL_REASONING` | No | `gemini-4-argon` | Tier 4–5 frontier reasoning & orchestration model (official Nov 2026) |
+| `GEMINI_MODEL_EMBEDDING` | No | `gemini-embedding-001` | Semantic memory embedding model (`gemini-embedding-2` multimodal also supported) |
+| `GEMINI_MODEL_IMAGE` | No | `gemini-nano-banana-2.1` | Image generation model (official Nov 2026) |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | For OAuth | `""` / `None` | Google OAuth 2.0 + PKCE client credentials (per-service least-privilege scopes) |
+| `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | For OAuth | `""` / `None` | GitHub OAuth 2.0 client credentials |
+| `GOOGLE_DRIVE_ACCESS_TOKEN` … `GOOGLE_CLOUD_ACCESS_TOKEN` | Optional | `None` | Optional per-service Google tokens (or connect per-tenant via OAuth IntegrationManager) |
+| `GOOGLE_SEARCH_API_KEY` / `GOOGLE_SEARCH_CX` | Optional | `None` / `""` | Google Programmable Search JSON API credentials |
+| `GITHUB_TOKEN` | Optional | `None` | GitHub REST API v3 token for engineering operations |
 | `VERCEL_TOKEN` | Optional | `None` | Vercel API token for deployment/project verification |
 | `VERCEL_PROJECT_ID` | Optional | `""` | Vercel project ID |
 | `VERCEL_ORG_ID` | Optional | `""` | Vercel team/organization ID |

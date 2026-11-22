@@ -29,10 +29,11 @@ python3 backend/worker.py --poll-interval 5
 ## 2. Supabase PostgreSQL + pgvector + RLS + Storage Setup
 
 1. Create or open your Supabase project (`https://supabase.com/dashboard`).
-2. Run both SQL migrations in order via **SQL Editor** or `psql`:
+2. Run all three SQL migrations in order via **SQL Editor** or `psql`:
    ```bash
    psql "$SUPABASE_DIRECT_URL" -f backend/migrations/supabase/001_initial_schema.sql
    psql "$SUPABASE_DIRECT_URL" -f backend/migrations/supabase/002_full_backend_schema.sql
+   psql "$SUPABASE_DIRECT_URL" -f backend/migrations/supabase/003_ecosystem_and_devices.sql
    ```
 3. Create a private Storage bucket named `ultron-artifacts` (matching `SUPABASE_STORAGE_BUCKET`).
 4. Set environment variables (strictly server-side — **never expose `SUPABASE_SERVICE_ROLE_KEY` to frontend clients**):

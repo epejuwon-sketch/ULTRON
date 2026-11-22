@@ -511,3 +511,103 @@ class SystemSettingRecord(Base):
     value_json: Mapped[str] = mapped_column(Text, nullable=False)
     updated_by: Mapped[str] = mapped_column(String(120), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Unified Integration Connections & OAuth 2.0 PKCE State
+# ---------------------------------------------------------------------------
+class IntegrationConnectionRecord(Base):
+    __tablename__ = "integration_connections"
+    __table_args__ = (UniqueConstraint("tenant_id", "provider", name="uq_tenant_provider_conn"),)
+
+    connection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    auth_type: Mapped[str] = mapped_column(String(32), nullable=False, default="API_KEY")
+    encrypted_credentials_b64: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    credentials_nonce_b64: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    scopes_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    capabilities_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="REQUIRES_CONFIGURATION")
+    account_label: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    connected_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    disconnected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class OAuthStateRecord(Base):
+    __tablename__ = "oauth_states"
+
+    state_token: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_verifier: Mapped[str] = mapped_column(String(160), nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(500), nullable=False)
+    scopes_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Multi-Device Connectivity Mesh (Desktop, Mobile, PWA)
+# ---------------------------------------------------------------------------
+class DeviceRecord(Base):
+    __tablename__ = "devices"
+
+    device_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    owner_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)  # windows | macos | ios | ipados | android | pwa
+    device_token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    os_version: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    app_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    capabilities_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    permissions_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    authorized_folders_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ONLINE", index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class DevicePairingCodeRecord(Base):
+    __tablename__ = "device_pairing_codes"
+
+    pairing_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    created_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_username: Mapped[str] = mapped_column(String(120), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    target_platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_permissions_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    authorized_folders_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    consumed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class DeviceTaskRecord(Base):
+    __tablename__ = "device_tasks"
+
+    device_task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(String(64), ForeignKey("devices.device_id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    requires_user_interaction: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+

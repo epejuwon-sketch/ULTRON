@@ -96,10 +96,12 @@ def route_objective(
 
     selected_agent = preferred_agent_id or "AGT-01"
     if not preferred_agent_id:
+        best_score = 0
         for keywords, agent_id in DOMAIN_ROUTING_RULES:
-            if any(kw in lowered for kw in keywords):
+            score = sum(1 for kw in keywords if kw in lowered)
+            if score > best_score:
+                best_score = score
                 selected_agent = agent_id
-                break
 
     risk_level = classify_risk_level(
         clean,

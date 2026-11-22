@@ -16,6 +16,7 @@ from app.db.models import (
     AgentRecord,
     ApprovalRecord,
     DeploymentRequest,
+    DeviceTaskRecord,
     FinancialTransaction,
     TaskRecord,
 )
@@ -174,6 +175,13 @@ def decide_approval(
                 agent.approved = False
                 agent.capability_state = "UNAVAILABLE"
                 linked_resource_state = "UNAVAILABLE"
+
+    if record.action_type == "DEVICE_SENSITIVE_ACTION" and record.resource_ref:
+        dt = db.get(DeviceTaskRecord, record.resource_ref)
+        if dt is not None:
+            dt.status = "PENDING" if normalized == "APPROVED" else "REJECTED"
+            dt.updated_at = now
+            linked_resource_state = dt.status
 
     append_audit_log(
         db,
