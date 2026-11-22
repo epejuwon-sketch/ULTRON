@@ -1,6 +1,8 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { PreferencesProvider } from "./lib/preferences";
+import { ToastProvider } from "./components/ui/DesignSystem";
 import "./styles.css";
 
 if ("serviceWorker" in navigator) {
@@ -13,6 +15,10 @@ if ("serviceWorker" in navigator) {
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <PreferencesProvider>
+      <ToastProvider>
+        <App />
+      </ToastProvider>
+    </PreferencesProvider>
   </React.StrictMode>
 );
