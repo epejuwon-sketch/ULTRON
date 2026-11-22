@@ -1,13 +1,21 @@
 import React, { useEffect, useState } from "react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, downloadAuthFile, streamNeon } from "../lib/api";
 
-/* 1. JARVIS Conversation & Natural-Language Orchestration + BRIDGE Share Intake */
-export function JarvisView({ initialShare }: { initialShare?: { title: string; text: string; url: string } | null }) {
+/* 1. JARVIS Conversation, SSE Streaming, ARGON Orchestration & BRIDGE Share Intake */
+export function JarvisView({
+  initialShare,
+  pendingPrompt,
+  onClearPendingPrompt,
+}: {
+  initialShare?: { title: string; text: string; url: string } | null;
+  pendingPrompt?: string;
+  onClearPendingPrompt?: () => void;
+}) {
   const [conversations, setConversations] = useState<any[]>([]);
   const [activeId, setActiveId] = useState<string>("");
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
-  const [orchestrateMode, setOrchestrateMode] = useState(false);
+  const [mode, setMode] = useState<"chat" | "stream" | "orchestrate">("chat");
   const [warning, setWarning] = useState<string>("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -43,6 +51,13 @@ export function JarvisView({ initialShare }: { initialShare?: { title: string; t
   }, [activeId]);
 
   useEffect(() => {
+    if (pendingPrompt) {
+      setInput(pendingPrompt);
+      onClearPendingPrompt?.();
+    }
+  }, [pendingPrompt]);
+
+  useEffect(() => {
     if (initialShare && (initialShare.url || initialShare.text || initialShare.title)) {
       apiFetch<any>("/api/v1/bridge/share", {
         method: "POST",
@@ -54,7 +69,8 @@ export function JarvisView({ initialShare }: { initialShare?: { title: string; t
         },
       })
         .then((res) => {
-          setWarning(`BRIDGE received shared item (AEGIS verdict: ${res.aegis_url_verdict}).`);
+          const fetchStatus = res.extracted_metadata?.public_fetch?.fetch_status || "PROCESSED";
+          setWarning(`BRIDGE received shared item (AEGIS: ${res.aegis_url_verdict}, Fetch: ${fetchStatus}).`);
           if (res.conversation_id) {
             setActiveId(res.conversation_id);
             loadConversations();
@@ -80,27 +96,51 @@ export function JarvisView({ initialShare }: { initialShare?: { title: string; t
     setLoading(true);
     setError("");
     setWarning("");
+    const userText = input;
     try {
-      if (orchestrateMode) {
+      if (mode === "orchestrate") {
         const res = await apiFetch<any>("/api/v1/orchestrate", {
           method: "POST",
-          body: { objective: input, execute_immediately: true },
+          body: { objective: userText, auto_execute: true },
         });
         setMessages((prev) => [
           ...prev,
-          { message_id: `u_${Date.now()}`, role: "user", content: input },
+          { message_id: `u_${Date.now()}`, role: "user", content: userText },
           {
             message_id: `a_${Date.now()}`,
             role: "assistant",
-            content: `[ARGON ${res.routing?.selected_agent_id} | Tier ${res.routing?.reasoning_tier}] Status: ${res.task?.status}\n${JSON.stringify(res.task?.summary || res.routing, null, 2)}`,
+            model: res.neon_routing?.primary_model,
+            content: `[ARGON ${res.neon_routing?.selected_agent_id} | Tier ${res.neon_routing?.reasoning_tier}] Lifecycle: ${res.task?.lifecycle_state}\nSteps: ${(res.task?.steps || []).map((s: any) => `${s.agent_id}:${s.status}`).join(" -> ")}\n${res.task?.result_summary || ""}`,
           },
         ]);
+      } else if (mode === "stream") {
+        const uId = `u_${Date.now()}`;
+        const aId = `a_${Date.now() + 1}`;
+        setMessages((prev) => [
+          ...prev,
+          { message_id: uId, role: "user", content: userText },
+          { message_id: aId, role: "assistant", content: "", model: "streaming..." },
+        ]);
+        await streamNeon(
+          userText,
+          "AGT-01",
+          (delta) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.message_id === aId ? { ...m, content: (m.content || "") + delta } : m))
+            );
+          },
+          (meta) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.message_id === aId ? { ...m, model: `${meta.model} (${meta.execution_mode})` } : m))
+            );
+          }
+        );
       } else {
         let cid = activeId;
         if (!cid) {
           const created = await apiFetch<any>("/api/v1/neon/conversations", {
             method: "POST",
-            body: { title: input.slice(0, 48), agent_id: "AGT-01" },
+            body: { title: userText.slice(0, 48), agent_id: "AGT-01" },
           });
           cid = created.conversation_id;
           setActiveId(cid);
@@ -108,7 +148,7 @@ export function JarvisView({ initialShare }: { initialShare?: { title: string; t
         }
         const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}/messages`, {
           method: "POST",
-          body: { content: input },
+          body: { content: userText },
         });
         if (res.secret_interception?.warnings?.length) {
           setWarning(res.secret_interception.warnings.join(" "));
@@ -128,16 +168,16 @@ export function JarvisView({ initialShare }: { initialShare?: { title: string; t
       <div className="card-title">
         <span>JARVIS Command Interface (NEON + ARGON)</span>
         <div className="row">
-          <button className="btn btn-secondary btn-sm" onClick={() => setOrchestrateMode((v) => !v)}>
-            Mode: {orchestrateMode ? "ARGON Orchestrate" : "NEON Chat"}
-          </button>
-          <button className="btn btn-sm" onClick={createNewChat}>New Session</button>
+          <button className={`btn btn-sm ${mode === "chat" ? "" : "btn-secondary"}`} onClick={() => setMode("chat")}>Chat</button>
+          <button className={`btn btn-sm ${mode === "stream" ? "" : "btn-secondary"}`} onClick={() => setMode("stream")}>SSE Stream</button>
+          <button className={`btn btn-sm ${mode === "orchestrate" ? "" : "btn-secondary"}`} onClick={() => setMode("orchestrate")}>Orchestrate</button>
+          <button className="btn btn-secondary btn-sm" onClick={createNewChat}>New Session</button>
         </div>
       </div>
 
-      {conversations.length > 0 && !orchestrateMode && (
+      {conversations.length > 0 && mode === "chat" && (
         <div className="row" style={{ marginBottom: 10 }}>
-          <select className="select" style={{ maxWidth: 320 }} value={activeId} onChange={(e) => setActiveId(e.target.value)}>
+          <select className="select" style={{ maxWidth: 340 }} value={activeId} onChange={(e) => setActiveId(e.target.value)}>
             {conversations.map((c) => (
               <option key={c.conversation_id} value={c.conversation_id}>{c.title} ({c.agent_id})</option>
             ))}
@@ -168,7 +208,7 @@ export function JarvisView({ initialShare }: { initialShare?: { title: string; t
         <input
           className="input"
           style={{ flex: 1 }}
-          placeholder={orchestrateMode ? "Give ARGON an autonomous multi-agent objective..." : "Speak or type to JARVIS..."}
+          placeholder={mode === "orchestrate" ? "Give ARGON a multi-agent objective..." : mode === "stream" ? "Stream response via NEON SSE..." : "Speak or type to JARVIS..."}
           value={input}
           onChange={(e) => setInput(e.target.value)}
         />
@@ -206,7 +246,7 @@ export function VoiceView() {
     setError("");
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRec) {
-      setError("Web Speech Recognition is not supported in this browser. Type your transcript below to test the live voice pipeline.");
+      setError("Web Speech Recognition is not available in this browser context (requires iPhone Safari/Chrome HTTPS + mic permission). Use the transcript box below to invoke the live voice pipeline.");
       return;
     }
     if (listening) {
@@ -377,6 +417,9 @@ export function AgentsView() {
 export function ActivityView() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [approvals, setApprovals] = useState<any[]>([]);
+  const [title, setTitle] = useState("");
+  const [objective, setObjective] = useState("");
+  const [amount, setAmount] = useState("0");
   const [error, setError] = useState("");
 
   async function load() {
@@ -394,7 +437,36 @@ export function ActivityView() {
 
   useEffect(() => { load(); }, []);
 
+  async function createTask(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !objective.trim()) return;
+    setError("");
+    try {
+      await apiFetch("/api/v1/tasks", {
+        method: "POST",
+        body: { title, objective, financial_amount_usd: Number(amount) || 0 },
+      });
+      setTitle("");
+      setObjective("");
+      setAmount("0");
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  async function taskAction(taskId: string, action: "execute" | "pause" | "resume" | "cancel") {
+    setError("");
+    try {
+      await apiFetch(`/api/v1/tasks/${taskId}/${action}`, { method: "POST" });
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
   async function decide(approvalId: string, decision: "APPROVED" | "REJECTED") {
+    setError("");
     try {
       await apiFetch(`/api/v1/approvals/${approvalId}/decide`, {
         method: "POST",
@@ -407,60 +479,86 @@ export function ActivityView() {
   }
 
   return (
-    <div className="grid-2">
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div className="card">
-        <div className="card-title">
-          <span>ApprovalGate Queue ({approvals.filter((a) => a.status === "PENDING").length} Pending)</span>
-          <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
-        </div>
-        {error && <div className="alert-box alert-error">{error}</div>}
-        {approvals.length === 0 ? (
-          <div className="muted">No approval requests recorded yet.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {approvals.map((a) => (
-              <div key={a.approval_id} className="list-item">
-                <div className="row-between">
-                  <strong>{a.action_type}</strong>
-                  <span className={`pill ${a.status === "PENDING" ? "pill-warn" : a.status === "APPROVED" ? "pill-green" : "pill-danger"}`}>{a.status}</span>
-                </div>
-                <div className="muted">{a.reason}</div>
-                {a.status === "PENDING" && (
-                  <div className="row">
-                    <button className="btn btn-sm" onClick={() => decide(a.approval_id, "APPROVED")}>Approve</button>
-                    <button className="btn btn-danger btn-sm" onClick={() => decide(a.approval_id, "REJECTED")}>Reject</button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="card-title"><span>Plan New ARGON Task (ApprovalGate Triggered &gt; $50 or High Risk)</span></div>
+        {error && <div className="alert-box alert-error" style={{ marginBottom: 10 }}>{error}</div>}
+        <form onSubmit={createTask} className="row">
+          <input className="input" style={{ flex: 1, minWidth: 180 }} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task Title" />
+          <input className="input" style={{ flex: 2, minWidth: 220 }} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="Objective (e.g., Market research & marketing campaign)" />
+          <input className="input" style={{ width: 110 }} type="number" step="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="$ USD" />
+          <button className="btn" type="submit">Plan DAG</button>
+        </form>
       </div>
 
-      <div className="card">
-        <div className="card-title"><span>ARGON Task Execution Activity ({tasks.length})</span></div>
-        {tasks.length === 0 ? (
-          <div className="muted">No ARGON tasks created yet. Use JARVIS in ARGON Orchestrate mode to start a task.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {tasks.map((t) => (
-              <div key={t.task_id} className="list-item">
-                <div className="row-between">
-                  <strong>{t.title || t.objective?.slice(0, 60)}</strong>
-                  <span className="pill pill-cyan">{t.status}</span>
-                </div>
-                <div className="muted">Agent: {t.assigned_agent_id} · Risk: {t.risk_level}</div>
-              </div>
-            ))}
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-title">
+            <span>ApprovalGate Queue ({approvals.filter((a) => a.status === "PENDING").length} Pending)</span>
+            <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
           </div>
-        )}
+          {approvals.length === 0 ? (
+            <div className="muted">No approval requests recorded yet.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {approvals.map((a) => (
+                <div key={a.approval_id} className="list-item">
+                  <div className="row-between">
+                    <strong>{a.action_type}</strong>
+                    <span className={`pill ${a.status === "PENDING" ? "pill-warn" : a.status === "APPROVED" ? "pill-green" : "pill-danger"}`}>{a.status}</span>
+                  </div>
+                  <div className="muted">{a.reason}</div>
+                  {a.status === "PENDING" && (
+                    <div className="row">
+                      <button className="btn btn-sm" onClick={() => decide(a.approval_id, "APPROVED")}>Approve</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => decide(a.approval_id, "REJECTED")}>Reject</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-title"><span>ARGON Task Execution Activity ({tasks.length})</span></div>
+          {tasks.length === 0 ? (
+            <div className="muted">No ARGON tasks created yet.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {tasks.map((t) => (
+                <div key={t.task_id} className="list-item">
+                  <div className="row-between">
+                    <strong>{t.title || t.objective?.slice(0, 60)}</strong>
+                    <span className="pill pill-cyan">{t.lifecycle_state || t.status}</span>
+                  </div>
+                  <div className="muted">Agent: {t.assigned_agent_id} · Risk: {t.risk_level} · Steps: {(t.steps || []).map((s: any) => s.agent_id).join(" → ")}</div>
+                  <div className="row">
+                    {(t.lifecycle_state === "READY" || t.lifecycle_state === "APPROVED") && (
+                      <button className="btn btn-sm" onClick={() => taskAction(t.task_id, "execute")}>Execute</button>
+                    )}
+                    {t.lifecycle_state === "EXECUTING" && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => taskAction(t.task_id, "pause")}>Pause</button>
+                    )}
+                    {t.lifecycle_state === "PAUSED" && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => taskAction(t.task_id, "resume")}>Resume</button>
+                    )}
+                    {!["COMPLETED", "CANCELLED"].includes(t.lifecycle_state) && (
+                      <button className="btn btn-danger btn-sm" onClick={() => taskAction(t.task_id, "cancel")}>Cancel</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-/* 5. File Hub */
-export function FileHubView() {
+/* 5. File Hub (Upload PDF/Docs/Images, Secret Redaction, Generate, Download & Send to JARVIS) */
+export function FileHubView({ onAnalyzeInJarvis }: { onAnalyzeInJarvis?: (prompt: string) => void }) {
   const [files, setFiles] = useState<any[]>([]);
   const [genName, setGenName] = useState("report.md");
   const [genContent, setGenContent] = useState("# ULTRON Report\nGenerated from File Hub.");
@@ -513,7 +611,7 @@ export function FileHubView() {
         <div className="card-title"><span>File Hub — Upload & Generate</span></div>
         {error && <div className="alert-box alert-error" style={{ marginBottom: 10 }}>{error}</div>}
         <label className="btn" style={{ marginBottom: 14, width: "100%" }}>
-          Upload File (Scanned by AEGIS + VAULT)
+          Upload PDF / Document / Image / Code (AEGIS + VAULT Scanned)
           <input type="file" style={{ display: "none" }} onChange={handleUpload} />
         </label>
         <form onSubmit={handleGenerate} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -538,6 +636,18 @@ export function FileHubView() {
                 <div className="muted">{f.direction} · {f.size_bytes} bytes · Secrets redacted: {f.secrets_redacted}</div>
                 <div className="row">
                   <button className="btn btn-secondary btn-sm" onClick={async () => setDetail(await apiFetch(`/api/v1/files/${f.file_id}`))}>Inspect</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => downloadAuthFile(f.download_url, f.filename).catch((e) => setError(e.message))}>Download</button>
+                  {onAnalyzeInJarvis && (
+                    <button
+                      className="btn btn-sm"
+                      onClick={async () => {
+                        const full = await apiFetch<any>(`/api/v1/files/${f.file_id}`);
+                        onAnalyzeInJarvis(`Analyze uploaded file '${full.filename}' (tagged untrusted):\n\n${(full.extracted_text || "(binary file)").slice(0, 3000)}`);
+                      }}
+                    >
+                      Analyze in JARVIS
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -545,7 +655,7 @@ export function FileHubView() {
         )}
         {detail && (
           <div style={{ marginTop: 12 }}>
-            <div className="muted">Extracted Content ({detail.filename}):</div>
+            <div className="muted">Extracted Content ({detail.filename}, extractor={detail.metadata?.extractor || "n/a"}):</div>
             <pre className="code-block">{detail.extracted_text || "(binary/empty)"}</pre>
           </div>
         )}
@@ -561,6 +671,7 @@ export function ForgeView({ onOpenPreview }: { onOpenPreview: (forgeId: string) 
   const [template, setTemplate] = useState("react_vite");
   const [prompt, setPrompt] = useState("Build a responsive founder dashboard with real status indicators.");
   const [selected, setSelected] = useState<any>(null);
+  const [activeFile, setActiveFile] = useState<string>("");
   const [error, setError] = useState("");
 
   async function load() {
@@ -583,6 +694,7 @@ export function ForgeView({ onOpenPreview }: { onOpenPreview: (forgeId: string) 
         body: { name, template, prompt },
       });
       setSelected(res);
+      setActiveFile(res.file_list?.[0] || "");
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -623,14 +735,41 @@ export function ForgeView({ onOpenPreview }: { onOpenPreview: (forgeId: string) 
                 <div className="muted">{p.template} · {p.file_list?.length || 0} files</div>
                 <div className="row">
                   <button className="btn btn-sm" onClick={() => onOpenPreview(p.forge_id)}>Open Live Preview</button>
-                  <button className="btn btn-secondary btn-sm" onClick={async () => setSelected(await apiFetch(`/api/v1/forge/projects/${p.forge_id}`))}>Inspect Files</button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={async () => {
+                      const full = await apiFetch<any>(`/api/v1/forge/projects/${p.forge_id}`);
+                      setSelected(full);
+                      setActiveFile(full.file_list?.[0] || "");
+                    }}
+                  >
+                    Inspect Files
+                  </button>
+                  {p.archive_download_url && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => downloadAuthFile(p.archive_download_url, `${p.name.toLowerCase().replace(/\s+/g, "_")}.zip`).catch((e) => setError(e.message))}
+                    >
+                      Download ZIP
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
           </div>
         )}
         {selected && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="row">
+              {(selected.file_list || []).map((fn: string) => (
+                <button key={fn} className={`btn btn-sm ${activeFile === fn ? "" : "btn-secondary"}`} onClick={() => setActiveFile(fn)}>
+                  {fn}
+                </button>
+              ))}
+            </div>
+            {activeFile && selected.files?.[activeFile] !== undefined && (
+              <pre className="code-block">{selected.files[activeFile]}</pre>
+            )}
             <div className="muted">Build & AEGIS Logs:</div>
             <pre className="code-block">{(selected.build_logs || []).join("\n")}</pre>
           </div>

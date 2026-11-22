@@ -82,3 +82,65 @@ export async function apiFetch<T = any>(
   }
   return (await resp.text()) as unknown as T;
 }
+
+export async function downloadAuthFile(path: string, filename: string): Promise<void> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const resp = await fetch(path, { headers });
+  if (!resp.ok) throw new Error(`Download failed (HTTP ${resp.status})`);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function streamNeon(
+  prompt: string,
+  agentId: string,
+  onDelta: (chunk: string) => void,
+  onMeta?: (meta: any) => void
+): Promise<void> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const resp = await fetch("/api/v1/neon/stream", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ prompt, agent_id: agentId }),
+  });
+  if (!resp.ok || !resp.body) {
+    throw new Error(`Stream failed (HTTP ${resp.status})`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let currentEvent = "message";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        currentEvent = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        const raw = line.slice(5).trim();
+        if (!raw) continue;
+        try {
+          const parsed = JSON.parse(raw);
+          if (currentEvent === "delta" && parsed.text) onDelta(parsed.text);
+          if (currentEvent === "metadata" && onMeta) onMeta(parsed);
+        } catch {
+          // ignore malformed keepalives
+        }
+      }
+    }
+  }
+}

@@ -101,11 +101,20 @@ def _extract_content(filename: str, raw_bytes: bytes) -> tuple[str, dict[str, An
             return "", meta
 
     if ext == ".pdf":
-        # Lightweight stdlib text stream extraction fallback when pypdf isn't installed
-        ascii_chunks = re.findall(rb"\(([^()]{3,200})\)", raw_bytes)
-        extracted = " ".join(c.decode("latin-1", errors="ignore") for c in ascii_chunks[:500])
-        meta["extractor"] = "pdf_basic_text_scan"
-        return extracted[:100_000], meta
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(raw_bytes))
+            pages_text = [(page.extract_text() or "").strip() for page in reader.pages]
+            extracted = "\n\n".join(p for p in pages_text if p)
+            meta["extractor"] = "pypdf"
+            meta["page_count"] = len(reader.pages)
+            return extracted[:100_000], meta
+        except Exception:
+            ascii_chunks = re.findall(rb"\(([^()]{3,200})\)", raw_bytes)
+            extracted = " ".join(c.decode("latin-1", errors="ignore") for c in ascii_chunks[:500])
+            meta["extractor"] = "pdf_basic_text_scan"
+            return extracted[:100_000], meta
 
     if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
         try:

@@ -136,6 +136,39 @@ def verify_task_results(steps: list[TaskStepRecord]) -> dict[str, Any]:
 
 
 def _build_default_dag(objective: str, primary_agent_id: str) -> list[dict[str, Any]]:
+    lowered = objective.lower()
+    is_market_collab = (
+        ("market research" in lowered)
+        or (("research" in lowered or "competitor" in lowered) and any(k in lowered for k in ("marketing", "go-to-market", "gtm", "campaign", "positioning")))
+    )
+    if is_market_collab:
+        return [
+            {
+                "step_number": 1,
+                "agent_id": "AGT-01",
+                "description": f"Decompose scope and constraints for market intelligence objective: {objective}",
+                "depends_on": [],
+            },
+            {
+                "step_number": 2,
+                "agent_id": "AGT-02",
+                "description": f"Conduct market research, competitive evidence gathering, and audience analysis: {objective}",
+                "depends_on": [1],
+            },
+            {
+                "step_number": 3,
+                "agent_id": "AGT-06",
+                "description": f"Collaborate with Research Agent output to build positioning, messaging, and go-to-market marketing strategy: {objective}",
+                "depends_on": [2],
+            },
+            {
+                "step_number": 4,
+                "agent_id": "AGT-25",
+                "description": "Verify output integrity, policy adherence, and factual honesty across Research and Marketing deliverables.",
+                "depends_on": [3],
+            },
+        ]
+
     return [
         {
             "step_number": 1,

@@ -313,6 +313,67 @@ def _serialize_media_job(j: MediaJobRecord) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # BRIDGE — iPhone PWA Share-to-JARVIS Intake
 # ---------------------------------------------------------------------------
+def _fetch_public_share_metadata(url: str, settings: Settings) -> dict[str, Any]:
+    """Attempt an honest, SSRF-safe public metadata lookup (e.g., TikTok oEmbed or public page title).
+
+    Never bypasses logins, CAPTCHAs, or anti-bot walls; explicitly reports UNAVAILABLE_OR_GATED when unreachable.
+    """
+    import httpx
+    from urllib.parse import quote_plus, urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    is_tiktok = host == "tiktok.com" or host.endswith(".tiktok.com")
+    if is_tiktok:
+        oembed_url = f"https://www.tiktok.com/oembed?url={quote_plus(url)}"
+        try:
+            with httpx.Client(timeout=4.0, follow_redirects=True) as client:
+                resp = client.get(oembed_url, headers={"User-Agent": "ULTRON-OS-2026-Bridge/1.0"})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {
+                        "platform": "tiktok",
+                        "fetch_status": "PUBLIC_OEMBED_ACCESSIBLE",
+                        "title": data.get("title", ""),
+                        "author_name": data.get("author_name", ""),
+                        "author_url": data.get("author_url", ""),
+                        "provider_name": data.get("provider_name", "TikTok"),
+                        "thumbnail_url": data.get("thumbnail_url", ""),
+                        "limitation_note": "Only public TikTok oEmbed metadata is retrieved; raw video stream/private content is not scraped.",
+                    }
+                return {
+                    "platform": "tiktok",
+                    "fetch_status": "UNAVAILABLE_OR_GATED",
+                    "http_status": resp.status_code,
+                    "limitation_note": f"TikTok public oEmbed returned HTTP {resp.status_code}. ULTRON does not bypass anti-bot or login walls.",
+                }
+        except Exception as exc:
+            return {
+                "platform": "tiktok",
+                "fetch_status": "UNAVAILABLE_OR_OFFLINE",
+                "error": str(exc),
+                "limitation_note": "TikTok oEmbed could not be reached from this environment; content was not fabricated.",
+            }
+
+    try:
+        from app.integrations.web_research import WebResearchClient
+
+        page = WebResearchClient(settings).fetch_page(url)
+        return {
+            "platform": "web",
+            "fetch_status": "PUBLIC_PAGE_ACCESSIBLE",
+            "title": page.get("title", ""),
+            "excerpt": (page.get("text", "") or "")[:600],
+            "final_url": page.get("url", url),
+        }
+    except Exception as exc:
+        return {
+            "platform": "web",
+            "fetch_status": "UNAVAILABLE_OR_OFFLINE",
+            "error": str(exc),
+            "limitation_note": "Public URL metadata could not be fetched from this environment.",
+        }
+
+
 def ingest_shared_item(
     db: Session,
     *,
@@ -324,7 +385,7 @@ def ingest_shared_item(
     source_app: str = "ios_share_sheet",
     file_id: str | None = None,
 ) -> dict[str, Any]:
-    """Receive content shared from iOS/PWA Share Sheet, validate URL via AEGIS, redact secrets, and route to JARVIS."""
+    """Receive content shared from iOS/PWA Share Sheet, validate URL via AEGIS, fetch public metadata honestly, redact secrets, and route to JARVIS."""
     url_check = inspect_url_safety(url) if url.strip() else {"verdict": "UNVERIFIED", "safe": True, "reasons": []}
     if url.strip() and not url_check["safe"]:
         raise ValidationError(
@@ -341,18 +402,42 @@ def ingest_shared_item(
         auto_vault=True,
     )
 
+    public_meta = _fetch_public_share_metadata(url.strip(), settings) if url.strip() else {}
+    effective_title = (title.strip() or public_meta.get("title") or url.strip() or shared_text.strip())[:240]
+
     conv = create_conversation(
         db,
         principal=principal,
-        title=f"Shared: {(title or url or shared_text)[:60]}",
+        title=f"Shared: {effective_title[:60]}",
         agent_id="AGT-02",
     )
+
+    # Seed the linked JARVIS conversation with an honest summary of what was shared & accessible
+    bridge_prompt = (
+        f"[BRIDGE UNTRUSTED EXTERNAL SHARE from {source_app}]\n"
+        f"Title: {effective_title}\n"
+        f"URL: {url.strip() or '(none)'}\n"
+        f"Accessible Metadata Status: {public_meta.get('fetch_status', 'TEXT_ONLY')}\n"
+        f"Metadata: {json.dumps(public_meta, default=str)}\n"
+        f"Shared Note: {interception.sanitized_text or '(none)'}\n"
+        "Summarize strictly what is verified and publicly accessible without inventing unseen details."
+    )
+    try:
+        send_conversation_message(
+            db,
+            principal=principal,
+            conversation_id=conv["conversation_id"],
+            content=bridge_prompt,
+            settings=settings,
+        )
+    except Exception:
+        pass
 
     item = SharedItemRecord(
         share_id=f"shr_{uuid.uuid4().hex[:14]}",
         tenant_id=principal.tenant_id,
         source_app=source_app.strip()[:80],
-        title=title.strip()[:240],
+        title=effective_title,
         url=url.strip()[:1000],
         shared_text=interception.sanitized_text,
         file_id=file_id,
@@ -360,9 +445,11 @@ def ingest_shared_item(
         extracted_metadata_json=json.dumps(
             {
                 "url_inspection": url_check,
+                "public_fetch": public_meta,
                 "secrets_redacted": interception.redaction_count,
                 "untrusted_content_tagged": True,
-            }
+            },
+            default=str,
         ),
         conversation_id=conv["conversation_id"],
         created_by=principal.username,
@@ -374,7 +461,7 @@ def ingest_shared_item(
         actor=principal.username,
         action="BRIDGE_SHARE_INGESTED",
         resource=item.share_id,
-        outcome=f"verdict={item.aegis_url_verdict};source={item.source_app}",
+        outcome=f"verdict={item.aegis_url_verdict};fetch={public_meta.get('fetch_status', 'NONE')};source={item.source_app}",
     )
     db.commit()
     db.refresh(item)

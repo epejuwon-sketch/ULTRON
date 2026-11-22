@@ -66,8 +66,13 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [authErr, setAuthErr] = useState("");
   const [initialShare, setInitialShare] = useState<{ title: string; text: string; url: string } | null>(null);
+  const [pendingJarvisPrompt, setPendingJarvisPrompt] = useState("");
+  const [backendReady, setBackendReady] = useState<boolean | null>(null);
 
   useEffect(() => {
+    fetch("/health/ready")
+      .then((r) => setBackendReady(r.ok))
+      .catch(() => setBackendReady(false));
     // Capture iOS / PWA Web Share Target query params (BRIDGE)
     const params = new URLSearchParams(window.location.search);
     const title = params.get("share_title") || "";
@@ -136,11 +141,26 @@ export default function App() {
 
   function renderView() {
     switch (view) {
-      case "jarvis": return <JarvisView initialShare={initialShare} />;
+      case "jarvis":
+        return (
+          <JarvisView
+            initialShare={initialShare}
+            pendingPrompt={pendingJarvisPrompt}
+            onClearPendingPrompt={() => setPendingJarvisPrompt("")}
+          />
+        );
       case "voice": return <VoiceView />;
       case "agents": return <AgentsView />;
       case "activity": return <ActivityView />;
-      case "files": return <FileHubView />;
+      case "files":
+        return (
+          <FileHubView
+            onAnalyzeInJarvis={(prompt) => {
+              setPendingJarvisPrompt(prompt);
+              setView("jarvis");
+            }}
+          />
+        );
       case "forge": return <ForgeView onOpenPreview={(fid) => { setPreviewForgeId(fid); setView("preview"); }} />;
       case "preview": return <PreviewView forgeId={previewForgeId} />;
       case "creative": return <CreativeView />;
@@ -198,7 +218,9 @@ export default function App() {
             <strong>{NAV_ITEMS.find((n) => n.id === view)?.label}</strong>
           </div>
           <div className="row">
-            <span className="pill pill-cyan">AEGIS ACTIVE</span>
+            <span className={`pill ${backendReady === false ? "pill-danger" : "pill-green"}`}>
+              {backendReady === false ? "API OFFLINE" : "API READY"}
+            </span>
             <button className="btn btn-secondary btn-sm" onClick={() => setView("notifications")}><Bell size={14} /></button>
           </div>
         </header>

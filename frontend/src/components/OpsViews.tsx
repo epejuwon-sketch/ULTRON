@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, downloadAuthFile } from "../lib/api";
 
-/* 8. Creative Studio + Visual Camera/Image Analyzer */
+/* 8. Creative Studio + Photo/Video Upload & Visual Multimodal */
 export function CreativeView() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [mediaType, setMediaType] = useState("GRAPHIC");
@@ -32,17 +32,35 @@ export function CreativeView() {
     }
   }
 
-  async function analyzeImageFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleMediaCapture(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
     setError("");
+    if (f.type.startsWith("video/")) {
+      const fd = new FormData();
+      fd.append("file", f);
+      try {
+        const up = await apiFetch<any>("/api/v1/files/upload", { method: "POST", body: fd, isFormData: true });
+        setVisualResult({
+          status: "VIDEO_STORED_IN_FILE_HUB",
+          file_id: up.file_id,
+          filename: up.filename,
+          size_bytes: up.size_bytes,
+          note: "Video uploaded and SHA-256 verified in File Hub. Configure GEMINI_API_KEY for live multimodal video frame understanding.",
+        });
+      } catch (err: any) {
+        setError(err.message);
+      }
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async () => {
       const b64 = String(reader.result || "").split(",")[1] || "";
       try {
         const res = await apiFetch<any>("/api/v1/creative/visual/analyze", {
           method: "POST",
-          body: { prompt: "Analyze this visual frame for ULTRON.", image_base64: b64, mime_type: f.type || "image/png", source: "upload" },
+          body: { prompt: "Analyze this visual frame for ULTRON.", image_base64: b64, mime_type: f.type || "image/png", source: "camera" },
         });
         setVisualResult(res);
       } catch (err: any) {
@@ -55,7 +73,7 @@ export function CreativeView() {
   return (
     <div className="grid-2">
       <div className="card">
-        <div className="card-title"><span>Creative Studio & Visual Multimodal</span></div>
+        <div className="card-title"><span>Creative Studio & Photo/Video Multimodal</span></div>
         {error && <div className="alert-box alert-error">{error}</div>}
         <form onSubmit={createJob} style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
           <select className="select" value={mediaType} onChange={(e) => setMediaType(e.target.value)}>
@@ -70,8 +88,8 @@ export function CreativeView() {
           <button className="btn" type="submit">Create Studio Job</button>
         </form>
         <label className="btn btn-secondary" style={{ width: "100%" }}>
-          Analyze Camera / Screenshot Image
-          <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={analyzeImageFile} />
+          Capture / Upload Photo or Video (iPhone Camera &amp; Library)
+          <input type="file" accept="image/*,video/*" style={{ display: "none" }} onChange={handleMediaCapture} />
         </label>
         {visualResult && <pre className="code-block" style={{ marginTop: 10 }}>{JSON.stringify(visualResult, null, 2)}</pre>}
       </div>
@@ -89,6 +107,14 @@ export function CreativeView() {
                   <span className={`pill ${j.status === "COMPLETED" ? "pill-green" : "pill-warn"}`}>{j.status}</span>
                 </div>
                 <div className="muted">{j.prompt}</div>
+                {j.result?.download_url && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => downloadAuthFile(j.result.download_url, `studio_${j.job_id}`).catch((e) => setError(e.message))}
+                  >
+                    Download Artifact
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -98,10 +124,11 @@ export function CreativeView() {
   );
 }
 
-/* 9. Finance Centre (Business/Personal Separation + Tokenized Payment Methods + Forecast) */
+/* 9. Finance Centre (Business/Personal Separation + Tokenized Payment Methods + Ledger + Forecast) */
 export function FinanceView() {
   const [scope, setScope] = useState<string>("");
   const [summary, setSummary] = useState<any>(null);
+  const [txs, setTxs] = useState<any[]>([]);
   const [methods, setMethods] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any>(null);
   const [txType, setTxType] = useState("REVENUE");
@@ -117,12 +144,14 @@ export function FinanceView() {
   async function load() {
     try {
       const qs = scope ? `?scope=${scope}` : "";
-      const [s, pm, fc] = await Promise.all([
+      const [s, t, pm, fc] = await Promise.all([
         apiFetch<any>(`/api/v1/finance/reports/summary${qs}`),
+        apiFetch<any>(`/api/v1/finance/transactions${qs}`),
         apiFetch<any>(`/api/v1/finance/payment-methods${qs}`),
         apiFetch<any>("/api/v1/finance/forecast?months=3"),
       ]);
       setSummary(s);
+      setTxs(t.transactions || []);
       setMethods(pm.payment_methods || []);
       setForecast(fc);
     } catch (e: any) {
@@ -238,25 +267,50 @@ export function FinanceView() {
                   <span className="pill pill-cyan">{pm.scope}</span>
                 </div>
                 <div className="muted">{pm.provider} · Exp {pm.exp_month}/{pm.exp_year} {pm.is_preferred ? "· PREFERRED" : ""}</div>
+                <div className="row">
+                  {!pm.is_preferred && (
+                    <button className="btn btn-secondary btn-sm" onClick={async () => { await apiFetch(`/api/v1/finance/payment-methods/${pm.payment_method_id}/preferred`, { method: "PATCH" }); await load(); }}>Set Preferred</button>
+                  )}
+                  <button className="btn btn-danger btn-sm" onClick={async () => { await apiFetch(`/api/v1/finance/payment-methods/${pm.payment_method_id}`, { method: "DELETE" }); await load(); }}>Remove</button>
+                </div>
               </div>
             ))
           )}
         </div>
       </div>
 
-      {forecast && (
+      <div className="grid-2">
         <div className="card">
-          <div className="card-title"><span>3-Month Cash-Flow Projection (Recorded Ledger Only)</span></div>
-          <div className="grid-3">
-            {(forecast.projections || []).map((p: any) => (
-              <div key={p.month_offset} className="list-item">
-                <strong>Month +{p.month_offset}</strong>
-                <div className="muted">Projected Net: ${p.projected_net_usd} · Reserve: ${p.projected_reserve_balance_usd}</div>
+          <div className="card-title"><span>Recorded Ledger Entries ({txs.length})</span></div>
+          {txs.length === 0 ? (
+            <div className="muted">No ledger entries recorded yet.</div>
+          ) : (
+            txs.slice(0, 8).map((t) => (
+              <div key={t.tx_id} className="list-item" style={{ marginBottom: 6 }}>
+                <div className="row-between">
+                  <strong>{t.entry_type} · ${t.amount_usd}</strong>
+                  <span className="pill pill-cyan">{t.scope} · {t.status}</span>
+                </div>
+                <div className="muted">{t.category} — {t.description}</div>
               </div>
-            ))}
-          </div>
+            ))
+          )}
         </div>
-      )}
+
+        {forecast && (
+          <div className="card">
+            <div className="card-title"><span>3-Month Cash-Flow Projection (Recorded Ledger Only)</span></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {(forecast.projections || []).map((p: any) => (
+                <div key={p.month_offset} className="list-item">
+                  <strong>Month +{p.month_offset}</strong>
+                  <div className="muted">Projected Net: ${p.projected_net_usd} · Reserve: ${p.projected_reserve_balance_usd}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -333,6 +387,10 @@ export function VaultView() {
 }
 
 /* 11. ATLAS World Map + Authorized ORBIT Locations + Weather + 9-Status Order Tracker */
+const ORDER_STATUSES = [
+  "PLACED", "PROCESSING", "SHIPPED", "IN_TRANSIT", "OUT_FOR_DELIVERY", "DELIVERED", "DELAYED", "RETURNED", "CANCELLED"
+];
+
 export function AtlasMapView() {
   const [locations, setLocations] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
@@ -369,6 +427,19 @@ export function AtlasMapView() {
       });
       setVendor("");
       setItemSummary("");
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  async function updateOrderStatus(orderId: string, nextStatus: string) {
+    setError("");
+    try {
+      await apiFetch(`/api/v1/atlas/orders/${orderId}/tracking`, {
+        method: "PATCH",
+        body: { status: nextStatus, tracking_source: "USER_RECORDED", note: `Updated to ${nextStatus} via Atlas UI` },
+      });
       await load();
     } catch (err: any) {
       setError(err.message);
@@ -426,7 +497,9 @@ export function AtlasMapView() {
               <div key={o.order_id} className="list-item" style={{ marginBottom: 6 }}>
                 <div className="row-between">
                   <strong>{o.vendor} — {o.item_summary}</strong>
-                  <span className="pill pill-cyan">{o.status}</span>
+                  <select className="select" style={{ width: 170 }} value={o.status} onChange={(e) => updateOrderStatus(o.order_id, e.target.value)}>
+                    {ORDER_STATUSES.map((st) => <option key={st} value={st}>{st}</option>)}
+                  </select>
                 </div>
                 <div className="muted">${o.amount_usd} {o.currency} · Source: {o.tracking_source}</div>
               </div>
@@ -609,7 +682,12 @@ export function CaravanView() {
               </div>
             </div>
           ))}
-          {liveData && <pre className="code-block" style={{ marginTop: 10 }}>{JSON.stringify(liveData.live_data, null, 2)}</pre>}
+          {liveData && (
+            <div style={{ marginTop: 10 }}>
+              <div className="muted">Live DB Hydration ({liveData.page?.title} · {liveData.hydrated_at}):</div>
+              <pre className="code-block">{JSON.stringify(liveData.live_data, null, 2)}</pre>
+            </div>
+          )}
         </div>
       </div>
     </div>

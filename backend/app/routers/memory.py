@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -19,6 +19,7 @@ from app.services.memory_service import (
     delete_memory,
     get_memory_history,
     get_user_preferences,
+    list_memories,
     prune_expired_memories,
     search_memories,
     set_user_preference,
@@ -27,6 +28,25 @@ from app.services.memory_service import (
 )
 
 router = APIRouter(prefix="/api/v1/memory", tags=["Memory & Semantic Recall"])
+
+
+@router.get("")
+def api_list_memories(
+    memory_type: str | None = Query(default=None),
+    namespace: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    principal: Principal = Depends(require_perm("memory:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = list_memories(
+        db,
+        tenant_id=principal.tenant_id,
+        viewer_user_id=principal.user_id,
+        memory_type=memory_type,
+        namespace=namespace,
+        limit=limit,
+    )
+    return {"total": len(items), "memories": items}
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

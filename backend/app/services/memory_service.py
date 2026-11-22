@@ -391,6 +391,40 @@ def prune_expired_memories(db: Session, *, principal: Principal) -> int:
     return removed
 
 
+def list_memories(
+    db: Session,
+    *,
+    tenant_id: str,
+    viewer_user_id: str,
+    memory_type: str | None = None,
+    namespace: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List latest non-expired memories visible to the viewer within their tenant."""
+    now = datetime.now(timezone.utc)
+    stmt = select(MemoryRecord).where(
+        MemoryRecord.tenant_id == tenant_id,
+        MemoryRecord.is_latest.is_(True),
+    )
+    if memory_type:
+        stmt = stmt.where(MemoryRecord.memory_type == memory_type.strip().upper())
+    if namespace:
+        stmt = stmt.where(MemoryRecord.namespace == namespace.strip())
+    rows = db.execute(stmt.order_by(MemoryRecord.created_at.desc()).limit(limit * 2)).scalars().all()
+    visible: list[dict[str, Any]] = []
+    for row in rows:
+        if row.access_level == "PRIVATE" and row.owner_user_id != viewer_user_id:
+            continue
+        if row.expires_at is not None:
+            exp_utc = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+            if now >= exp_utc:
+                continue
+        visible.append(serialize_memory(row))
+        if len(visible) >= limit:
+            break
+    return visible
+
+
 def serialize_memory(record: MemoryRecord) -> dict[str, Any]:
     return {
         "memory_id": record.memory_id,
