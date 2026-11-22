@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Box, Download, Image as ImageIcon, Mic, Music, RefreshCw, Video } from "lucide-react";
 import { apiFetch, downloadAuthFile } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import { VoiceView } from "../components/CoreViews";
 import {
   DataTable,
@@ -75,6 +75,7 @@ export default function CreativeModulePage({ subPage, onSelectSubPage }: ModuleP
   }
 
   const imgCap = statusData?.capabilities?.image_generation;
+  const imgReady = imgCap?.capability_state === "AVAILABLE";
 
   return (
     <ResponsiveWorkspace subPages={mod.subPages} activeSubPage={page.id} onSelectSubPage={onSelectSubPage}>
@@ -96,19 +97,38 @@ export default function CreativeModulePage({ subPage, onSelectSubPage }: ModuleP
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div className="grid-3">
             <MetricDisplay
-              label="Image Generation"
-              value={imgCap?.capability_state === "AVAILABLE" ? "Live Ready" : "Config Required"}
-              sub={imgCap?.detail || "Requires GEMINI_API_KEY"}
-              tone={imgCap?.capability_state === "AVAILABLE" ? "success" : "warn"}
+              label="Local Spec & Vector Tools"
+              value="Active"
+              sub="SVG Vector (AGT-43) · 3D JSON Spec (AGT-24) · Voice (AGT-46)"
+              tone="success"
             />
-            <MetricDisplay label="Voice Pipeline" value="AGT-46 Ready" sub="Web Speech + TTS" tone="info" />
+            <MetricDisplay
+              label="External Image Provider"
+              value={imgReady ? "Live Configured" : "Integration Required"}
+              sub={imgCap?.detail || "External raster media requires provider configuration"}
+              tone={imgReady ? "success" : "warn"}
+            />
             <MetricDisplay label="Creative Jobs" value={jobs.length} sub="Persisted assets & specs" tone="neutral" />
           </div>
-          <div className="card">
-            <div className="card-title"><span>Honest Creative Pipeline Readiness</span></div>
-            <p className="muted" style={{ margin: 0 }}>
-              Every visual, video, audio, and 3D job reports real backend execution status. No fake rendered media or placeholder metrics are ever displayed.
-            </p>
+          <div className="grid-2">
+            <div className="card">
+              <div className="card-title">
+                <span>Working Local Design &amp; Specification Tools</span>
+                <StatusIndicator label="LOCAL READY" tone="success" />
+              </div>
+              <p className="muted" style={{ margin: 0 }}>
+                SVG Brand Vector drafting (AGT-43), Three.js / WebGL 3D scene specifications (AGT-24), and browser Web Speech Voice Studio (AGT-46) run directly without external media renderers.
+              </p>
+            </div>
+            <div className="card">
+              <div className="card-title">
+                <span>External Media Generation Integrations</span>
+                <StatusIndicator label={imgReady ? "CONFIGURED" : "PROVIDER REQUIRED"} tone={imgReady ? "info" : "warn"} />
+              </div>
+              <p className="muted" style={{ margin: 0 }}>
+                Raster image rendering, video synthesis, and external audio generation report real backend provider readiness. ULTRON never fabricates placeholder media outputs.
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -117,13 +137,16 @@ export default function CreativeModulePage({ subPage, onSelectSubPage }: ModuleP
       {page.id === "image" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 680 }}>
           <div className="card-title">
-            <span><ImageIcon size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Image Generation (AGT-13)</span>
-            <StatusIndicator label={imgCap?.capability_state || "CONFIG REQUIRED"} tone={imgCap?.capability_state === "AVAILABLE" ? "success" : "warn"} />
+            <span><ImageIcon size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Image &amp; Brand Vector Studio</span>
+            <StatusIndicator label={imgReady ? "EXTERNAL PROVIDER READY" : "EXTERNAL CONFIG REQUIRED"} tone={imgReady ? "success" : "warn"} />
           </div>
+          <p className="muted" style={{ margin: 0 }}>
+            <strong>Brand Vector (AGT-43)</strong> generates real SVG specifications locally; <strong>Image Job (AGT-13)</strong> requires configured external image generation credentials.
+          </p>
           <textarea className="textarea" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the high-precision visual concept or brand vector..." />
           <div className="row">
-            <button type="button" className="btn" onClick={() => submitJob("IMAGE")}>Submit Image Job</button>
-            <button type="button" className="btn btn-secondary" onClick={() => submitJob("GRAPHIC")}>Submit Brand Vector (AGT-43)</button>
+            <button type="button" className="btn" onClick={() => submitJob("IMAGE")}>Submit External Image Job</button>
+            <button type="button" className="btn btn-secondary" onClick={() => submitJob("GRAPHIC")}>Generate Local Brand Vector (AGT-43)</button>
           </div>
         </div>
       )}
@@ -131,16 +154,28 @@ export default function CreativeModulePage({ subPage, onSelectSubPage }: ModuleP
       {/* 69. VIDEO PRODUCTION */}
       {page.id === "video" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 680 }}>
-          <div className="card-title"><span><Video size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Video Storyboard & Production (AGT-14)</span></div>
+          <div className="card-title">
+            <span><Video size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Video Storyboard &amp; Production (AGT-14)</span>
+            <StatusIndicator label="SPEC + EXTERNAL RENDER" tone="info" />
+          </div>
+          <p className="muted" style={{ margin: 0 }}>
+            Drafts structured shot lists and production scripts via AGT-14. Final rendered video requires a connected external video rendering integration.
+          </p>
           <textarea className="textarea" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe video narrative, pacing, and shot list..." />
-          <button type="button" className="btn" style={{ alignSelf: "flex-start" }} onClick={() => submitJob("VIDEO")}>Create Video Job</button>
+          <button type="button" className="btn" style={{ alignSelf: "flex-start" }} onClick={() => submitJob("VIDEO")}>Create Video Storyboard Job</button>
         </div>
       )}
 
       {/* 70. AUDIO WORKSPACE */}
       {page.id === "audio" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 680 }}>
-          <div className="card-title"><span><Music size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Audio Production & Diarization (AGT-45)</span></div>
+          <div className="card-title">
+            <span><Music size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Audio Production &amp; Diarization (AGT-45)</span>
+            <StatusIndicator label="SPEC + EXTERNAL SYNTHESIS" tone="info" />
+          </div>
+          <p className="muted" style={{ margin: 0 }}>
+            Generates structured sound design &amp; narration briefs via AGT-45. External studio audio synthesis requires a configured external audio provider.
+          </p>
           <textarea className="textarea" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe sound design, voiceover script, or podcast production brief..." />
           <button type="button" className="btn" style={{ alignSelf: "flex-start" }} onClick={() => submitJob("AUDIO")}>Create Audio Job</button>
         </div>
@@ -151,7 +186,7 @@ export default function CreativeModulePage({ subPage, onSelectSubPage }: ModuleP
         <div>
           <div className="row" style={{ marginBottom: 10 }}>
             <Mic size={15} className="muted" />
-            <span className="muted">Live Web Speech API voice capture & interruptible speech synthesis via AGT-46.</span>
+            <span className="muted">Working local browser Web Speech API voice capture &amp; interruptible speech synthesis via AGT-46.</span>
           </div>
           <VoiceView />
         </div>
@@ -160,7 +195,13 @@ export default function CreativeModulePage({ subPage, onSelectSubPage }: ModuleP
       {/* 72. 3D MODELLING WORKSPACE */}
       {page.id === "3d" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="card-title"><span><Box size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />3D Modelling Workspace (AGT-24)</span></div>
+          <div className="card-title">
+            <span><Box size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />3D Modelling Workspace (AGT-24)</span>
+            <StatusIndicator label="LOCAL SPEC READY" tone="success" />
+          </div>
+          <p className="muted" style={{ margin: 0 }}>
+            Produces structured WebGL / Three.js JSON scene specifications directly via AGT-24. Binary mesh rendering requires external 3D asset tooling.
+          </p>
           <form onSubmit={invoke3DAgent} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <textarea className="textarea" rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the 3D scene geometry, lighting, or WebGL/Three.js specification..." />
             <div className="row">

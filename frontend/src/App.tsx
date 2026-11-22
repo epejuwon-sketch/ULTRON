@@ -1,6 +1,7 @@
-import React, { lazy, Suspense, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { apiFetch, AuthUser, clearSession, getStoredToken, getStoredUser, saveSession } from "./lib/api";
 import { useDeviceProfile } from "./lib/device";
+import { lazyWithRecovery } from "./lib/lazyWithRecovery";
 import { usePreferences } from "./lib/preferences";
 import { ALL_PAGES, getModule, getSubPage, MODULES, ModuleId } from "./catalog/navigation";
 import { EarthGlobe } from "./components/EarthGlobe";
@@ -9,28 +10,49 @@ import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { AppShell, DesktopSidebar, MobileNavigation, ModuleIcon, TopBar } from "./components/ui/AppShell";
 import { CommandPalette, Drawer, LoadingState, MetricDisplay, StatusIndicator } from "./components/ui/DesignSystem";
 
-const CommandModulePage = lazy(() => import("./pages/CommandModulePage"));
-const NeonModulePage = lazy(() => import("./pages/NeonModulePage"));
-const ArgonModulePage = lazy(() => import("./pages/ArgonModulePage"));
-const AgentsModulePage = lazy(() => import("./pages/AgentsModulePage"));
-const ConnectionsModulePage = lazy(() => import("./pages/ConnectionsModulePage"));
-const FilesKnowledgeModulePage = lazy(() => import("./pages/FilesKnowledgeModulePage"));
-const ProjectsModulePage = lazy(() => import("./pages/ProjectsModulePage"));
-const ResearchModulePage = lazy(() => import("./pages/ResearchModulePage"));
-const CreativeModulePage = lazy(() => import("./pages/CreativeModulePage"));
-const PulseModulePage = lazy(() => import("./pages/PulseModulePage"));
-const SecurityModulePage = lazy(() => import("./pages/SecurityModulePage"));
-const DevicesModulePage = lazy(() => import("./pages/DevicesModulePage"));
-const FinanceModulePage = lazy(() => import("./pages/FinanceModulePage"));
-const SettingsModulePage = lazy(() => import("./pages/SettingsModulePage"));
+const CommandModulePage = lazyWithRecovery(() => import("./pages/CommandModulePage"), "Command Centre");
+const NeonModulePage = lazyWithRecovery(() => import("./pages/NeonModulePage"), "NEON Intelligence");
+const ArgonModulePage = lazyWithRecovery(() => import("./pages/ArgonModulePage"), "ARGON Orchestration");
+const AgentsModulePage = lazyWithRecovery(() => import("./pages/AgentsModulePage"), "The 60 Agents");
+const ConnectionsModulePage = lazyWithRecovery(() => import("./pages/ConnectionsModulePage"), "Connections Centre");
+const FilesKnowledgeModulePage = lazyWithRecovery(() => import("./pages/FilesKnowledgeModulePage"), "Files & Knowledge");
+const ProjectsModulePage = lazyWithRecovery(() => import("./pages/ProjectsModulePage"), "Projects & FORGE");
+const ResearchModulePage = lazyWithRecovery(() => import("./pages/ResearchModulePage"), "Research & Intel");
+const CreativeModulePage = lazyWithRecovery(() => import("./pages/CreativeModulePage"), "Creative Studio");
+const PulseModulePage = lazyWithRecovery(() => import("./pages/PulseModulePage"), "PULSE & Automation");
+const SecurityModulePage = lazyWithRecovery(() => import("./pages/SecurityModulePage"), "Security Centre");
+const DevicesModulePage = lazyWithRecovery(() => import("./pages/DevicesModulePage"), "Device Management");
+const FinanceModulePage = lazyWithRecovery(() => import("./pages/FinanceModulePage"), "Finance Centre");
+const SettingsModulePage = lazyWithRecovery(() => import("./pages/SettingsModulePage"), "Settings");
+
+const VALID_MODULE_IDS = new Set<string>(MODULES.map((m) => m.id));
+
+function parseRouteFromPathname(pathname: string): { moduleId: ModuleId; subPageId: string } {
+  const parts = pathname
+    .replace(/^\/+|\/+$/g, "")
+    .split("/")
+    .filter(Boolean);
+  const rawMod = parts[0]?.toLowerCase() || "";
+  if (VALID_MODULE_IDS.has(rawMod)) {
+    const mod = getModule(rawMod as ModuleId);
+    const sub = parts[1] ? getSubPage(mod.id, parts[1]).id : mod.defaultSubPage;
+    return { moduleId: mod.id, subPageId: sub };
+  }
+  return { moduleId: "command", subPageId: "home" };
+}
+
+function buildRoutePath(moduleId: ModuleId, subPageId: string): string {
+  return `/${moduleId}/${subPageId}`;
+}
 
 export default function App() {
   const { prefs, updatePrefs } = usePreferences();
   const device = useDeviceProfile(prefs.layoutMode);
 
   const [user, setUser] = useState<AuthUser | null>(() => (getStoredToken() ? getStoredUser() : null));
-  const [activeModule, setActiveModule] = useState<ModuleId>("command");
-  const [activeSubPage, setActiveSubPage] = useState<string>("home");
+  const initialRoute = parseRouteFromPathname(typeof window !== "undefined" ? window.location.pathname : "/");
+  const [activeModule, setActiveModule] = useState<ModuleId>(initialRoute.moduleId);
+  const [activeSubPage, setActiveSubPage] = useState<string>(initialRoute.subPageId);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [moreDrawerOpen, setMoreDrawerOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -57,13 +79,34 @@ export default function App() {
   const [initialShare, setInitialShare] = useState<{ title: string; text: string; url: string } | null>(null);
   const [pendingNeonPrompt, setPendingNeonPrompt] = useState("");
 
-  function navigate(moduleId: ModuleId, subPageId?: string) {
+  const navigate = useCallback((moduleId: ModuleId, subPageId?: string, opts?: { replace?: boolean }) => {
     const mod = getModule(moduleId);
+    const resolvedSub = subPageId ? getSubPage(moduleId, subPageId).id : mod.defaultSubPage;
     setActiveModule(moduleId);
-    setActiveSubPage(subPageId || mod.defaultSubPage);
+    setActiveSubPage(resolvedSub);
     setDrawerOpen(false);
     setMoreDrawerOpen(false);
-  }
+    const nextPath = buildRoutePath(moduleId, resolvedSub);
+    if (typeof window !== "undefined" && window.location.pathname !== nextPath) {
+      if (opts?.replace) {
+        window.history.replaceState({}, "", nextPath);
+      } else {
+        window.history.pushState({}, "", nextPath);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const next = parseRouteFromPathname(window.location.pathname);
+      setActiveModule(next.moduleId);
+      setActiveSubPage(next.subPageId);
+      setDrawerOpen(false);
+      setMoreDrawerOpen(false);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   async function probeBackendReadiness() {
     setProbingHealth(true);
@@ -117,10 +160,9 @@ export default function App() {
     const url = params.get("share_url") || "";
     if (title || text || url) {
       setInitialShare({ title, text, url });
-      navigate("neon", "chat");
-      window.history.replaceState({}, "", "/");
+      navigate("neon", "chat", { replace: true });
     }
-  }, []);
+  }, [navigate]);
 
   // Auto-recheck readiness on window focus or every 20s while unauthenticated & degraded
   useEffect(() => {
@@ -154,7 +196,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [user]);
+  }, [user, navigate]);
 
   async function handleAuth(e: React.FormEvent) {
     e.preventDefault();
@@ -177,7 +219,8 @@ export default function App() {
       });
       saveSession(login.access_token, login.user);
       setUser(login.user);
-      navigate("command", "home");
+      const target = parseRouteFromPathname(window.location.pathname);
+      navigate(target.moduleId, target.subPageId, { replace: true });
     } catch (err: any) {
       const msg = String(err?.message || "Authentication failed.");
       // If auth failed due to database unavailability, refresh readiness so a single unified panel is shown
@@ -361,7 +404,7 @@ export default function App() {
 
   const sharedProps = {
     subPage: currentSub.id,
-    onSelectSubPage: (sub: string) => setActiveSubPage(sub),
+    onSelectSubPage: (sub: string) => navigate(activeModule, sub),
     onNavigate: navigate,
     user,
     device,

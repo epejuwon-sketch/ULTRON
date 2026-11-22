@@ -3,7 +3,7 @@ import { Play, RefreshCw, ShieldCheck, Square } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
 import { AgentIcon } from "../catalog/agentIcons";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import {
   ActivityFeed,
   DataTable,

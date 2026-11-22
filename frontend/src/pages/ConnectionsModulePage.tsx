@@ -11,7 +11,7 @@ import {
 } from "../catalog/integrationsCatalog";
 import { IntegrationCard } from "../components/integrations/IntegrationCard";
 import { IntegrationLogo } from "../components/integrations/IntegrationLogo";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import {
   ActivityFeed,
   ConfirmationDialog,

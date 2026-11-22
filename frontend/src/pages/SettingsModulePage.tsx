@@ -3,7 +3,7 @@ import { Keyboard, Moon, RefreshCw, RotateCcw, ShieldAlert, Sun } from "lucide-r
 import { apiFetch } from "../lib/api";
 import { AccentPreset, DensityMode, LayoutMode, usePreferences } from "../lib/preferences";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import { MemoryView, NotificationsView, SettingsView } from "../components/SystemViews";
 import { UltronLogo } from "../components/UltronLogo";
 import {

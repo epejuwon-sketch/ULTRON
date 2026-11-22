@@ -29,9 +29,19 @@
       }
     },
     {
-      "src": "/(assets/.*|manifest\\.webmanifest|sw\\.js|icon\\.svg)",
+      "src": "/assets/(.*)",
+      "dest": "/frontend/assets/$1",
+      "headers": {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+      }
+    },
+    {
+      "src": "/(manifest\\.webmanifest|sw\\.js|icon\\.svg)",
       "dest": "/frontend/$1",
       "headers": {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "strict-origin-when-cross-origin"
       }
@@ -40,6 +50,7 @@
       "src": "/(.*)",
       "dest": "/frontend/index.html",
       "headers": {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
         "Referrer-Policy": "strict-origin-when-cross-origin",

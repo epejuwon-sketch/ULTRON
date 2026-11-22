@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { apiFetch, streamNeon } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import {
   DataTable,
   EmptyState,

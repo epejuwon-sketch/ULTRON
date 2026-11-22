@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Bug, Code2, Eye, GitBranch, Play, RefreshCw, RotateCcw, ShieldAlert } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import {
   ActivityFeed,
   ConfirmationDialog,

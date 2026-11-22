@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { CheckCircle2, KeyRound, Lock, RefreshCw, Shield, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import { SecurityView } from "../components/SystemViews";
 import {
   ConfirmationDialog,

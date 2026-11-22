@@ -16,9 +16,9 @@ import {
   Sparkles,
   Workflow,
 } from "lucide-react";
-import { apiFetch, AuthUser } from "../lib/api";
-import { DeviceProfile } from "../lib/device";
+import { apiFetch } from "../lib/api";
 import { getModule, getSubPage, ModuleId } from "../catalog/navigation";
+import type { ModulePageProps } from "../types/module";
 import { EarthGlobe } from "../components/EarthGlobe";
 import {
   ActivityFeed,
@@ -34,17 +34,7 @@ import {
   useToast,
 } from "../components/ui/DesignSystem";
 
-export interface ModulePageProps {
-  subPage: string;
-  onSelectSubPage: (sub: string) => void;
-  onNavigate: (moduleId: ModuleId, subPageId?: string) => void;
-  user: AuthUser;
-  device: DeviceProfile;
-  pendingPrompt?: string;
-  onClearPendingPrompt?: () => void;
-  onSendToNeon?: (prompt: string) => void;
-  initialShare?: { title: string; text: string; url: string } | null;
-}
+export type { ModulePageProps };
 
 export default function CommandModulePage({
   subPage,

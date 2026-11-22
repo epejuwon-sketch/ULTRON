@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Globe, RefreshCw, Search } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import { AtlasMapView, CaravanView, IntelligenceView } from "../components/OpsViews";
 import {
   ErrorState,

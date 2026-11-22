@@ -1,6 +1,6 @@
 import React from "react";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import { FinanceView } from "../components/OpsViews";
 import { PageHeader, ResponsiveWorkspace } from "../components/ui/DesignSystem";
 

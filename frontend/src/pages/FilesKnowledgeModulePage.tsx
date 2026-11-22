@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Download, FileArchive, Link2, RefreshCw, RotateCcw, Sparkles, Trash2, Upload } from "lucide-react";
 import { apiFetch, downloadAuthFile } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { ModulePageProps } from "./CommandModulePage";
+import type { ModulePageProps } from "../types/module";
 import {
   ConfirmationDialog,
   DataTable,
