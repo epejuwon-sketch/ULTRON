@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { Play, RefreshCw, ShieldCheck } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Play, RefreshCw, ShieldCheck, Square } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
 import { AgentIcon } from "../catalog/agentIcons";
@@ -165,6 +165,89 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
   const [extDomain, setExtDomain] = useState("");
   const [extRole, setExtRole] = useState("");
   const [turboStats, setTurboStats] = useState<any>(null);
+
+  // Live non-destructive 60-Agent & 5-Tier Gemini verification runner
+  type AuditStatus = "LIVE VERIFIED" | "LIVE VERIFIED WITH FALLBACK" | "FAILED" | "NOT TESTED";
+  interface AuditRow {
+    agent_id: string;
+    name: string;
+    tier: number;
+    status: AuditStatus;
+    provider: string;
+    primary_model: string;
+    actual_model: string;
+    latency_ms: number | null;
+    fallback_used: boolean;
+    note?: string;
+  }
+  const [auditRows, setAuditRows] = useState<Record<string, AuditRow>>({});
+  const [auditRunning, setAuditRunning] = useState(false);
+  const [auditProgress, setAuditProgress] = useState({ done: 0, total: 0 });
+  const abortAuditRef = useRef(false);
+
+  async function runLiveAudit(targetList: any[]) {
+    if (auditRunning || targetList.length === 0) return;
+    abortAuditRef.current = false;
+    setAuditRunning(true);
+    setAuditProgress({ done: 0, total: targetList.length });
+    for (let i = 0; i < targetList.length; i++) {
+      if (abortAuditRef.current) break;
+      const ag = targetList[i];
+      try {
+        const res = await apiFetch<any>(`/api/v1/agents/${ag.agent_id}/invoke`, {
+          method: "POST",
+          body: {
+            prompt: `Non-destructive readiness check for ${ag.agent_id} (${ag.domain}). Reply in one concise sentence confirming your specialist domain.`,
+            reasoning_tier: ag.default_reasoning_tier,
+          },
+        });
+        const isLive = res.execution_mode === "gemini_live" && res.provider === "gemini";
+        const fb = Boolean(res.fallback_used || (res.primary_model && res.model !== res.primary_model));
+        const status: AuditStatus = !isLive
+          ? "FAILED"
+          : fb
+          ? "LIVE VERIFIED WITH FALLBACK"
+          : "LIVE VERIFIED";
+        setAuditRows((prev) => ({
+          ...prev,
+          [ag.agent_id]: {
+            agent_id: ag.agent_id,
+            name: ag.name,
+            tier: res.reasoning_tier ?? ag.default_reasoning_tier,
+            status,
+            provider: res.provider || "unknown",
+            primary_model: res.primary_model || res.model || "—",
+            actual_model: res.model || "—",
+            latency_ms: typeof res.latency_ms === "number" ? res.latency_ms : null,
+            fallback_used: fb,
+            note: isLive ? undefined : String(res.output || "").slice(0, 140),
+          },
+        }));
+      } catch (e: any) {
+        setAuditRows((prev) => ({
+          ...prev,
+          [ag.agent_id]: {
+            agent_id: ag.agent_id,
+            name: ag.name,
+            tier: ag.default_reasoning_tier,
+            status: "FAILED",
+            provider: "error",
+            primary_model: "—",
+            actual_model: "—",
+            latency_ms: null,
+            fallback_used: false,
+            note: e.message,
+          },
+        }));
+      }
+      setAuditProgress({ done: i + 1, total: targetList.length });
+      if (i + 1 < targetList.length && !abortAuditRef.current) {
+        await new Promise((r) => window.setTimeout(r, 900));
+      }
+    }
+    setAuditRunning(false);
+    pushToast("Live agent verification batch finished.", "success");
+  }
 
   async function loadAgents() {
     setError("");
@@ -489,10 +572,100 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
 
       {/* 33. AGENT EVALUATION */}
       {page.id === "evaluation" && (
-        <div className="card">
-          <div className="card-title"><span>Zero-Fabrication & TURBO Evaluation Telemetry</span></div>
-          <p className="muted">All 60 ULTRON agents enforce independent prompt contracts, zero fabricated metrics, and live TURBO latency instrumentation.</p>
-          <pre className="code-block">{JSON.stringify(turboStats || { registered_agents: agents.length, policy: "ZERO_FABRICATION_ENFORCED" }, null, 2)}</pre>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="card-title">
+              <span>Live 60-Agent &amp; 5-Tier Gemini Verification Matrix</span>
+              <div className="row">
+                <button
+                  id="audit-run-5-tiers"
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={auditRunning || agents.length === 0}
+                  onClick={() => {
+                    const repIds = ["AGT-19", "AGT-06", "AGT-03", "AGT-02", "AGT-01"];
+                    runLiveAudit(agents.filter((a) => repIds.includes(a.agent_id)));
+                  }}
+                >
+                  <Play size={12} /> Test All 5 Tiers (T1–T5)
+                </button>
+                <button
+                  id="audit-run-all-60"
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={auditRunning || agents.length === 0}
+                  onClick={() => runLiveAudit(agents)}
+                >
+                  <Play size={12} /> Run All 60 Live
+                </button>
+                {auditRunning && (
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={() => {
+                      abortAuditRef.current = true;
+                    }}
+                  >
+                    <Square size={12} /> Stop ({auditProgress.done}/{auditProgress.total})
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="muted" style={{ margin: 0 }}>
+              Runs real, non-destructive, uncached calls through <code>POST /api/v1/agents/&#123;id&#125;/invoke</code> via NEON → Gemini. Every agent starts as <strong>NOT TESTED</strong> until its own upstream inference finishes.
+            </p>
+            <DataTable
+              rows={agents.map((a) => {
+                const r = auditRows[a.agent_id];
+                return (
+                  r || {
+                    agent_id: a.agent_id,
+                    name: a.name,
+                    tier: a.default_reasoning_tier,
+                    status: "NOT TESTED" as AuditStatus,
+                    provider: "—",
+                    primary_model: "—",
+                    actual_model: "—",
+                    latency_ms: null,
+                    fallback_used: false,
+                  }
+                );
+              })}
+              rowKey={(r) => r.agent_id}
+              columns={[
+                { key: "id", header: "Agent", mono: true, render: (r) => <strong>{r.agent_id}</strong> },
+                { key: "name", header: "Specialist", render: (r) => r.name },
+                { key: "tier", header: "Tier", mono: true, render: (r) => `T${r.tier}` },
+                {
+                  key: "status",
+                  header: "Status",
+                  render: (r) => (
+                    <StatusIndicator
+                      label={r.status}
+                      tone={
+                        r.status === "LIVE VERIFIED"
+                          ? "success"
+                          : r.status === "LIVE VERIFIED WITH FALLBACK"
+                          ? "info"
+                          : r.status === "FAILED"
+                          ? "danger"
+                          : "neutral"
+                      }
+                    />
+                  ),
+                },
+                { key: "provider", header: "Provider", mono: true, render: (r) => r.provider },
+                { key: "model", header: "Actual Model", mono: true, render: (r) => r.actual_model },
+                { key: "latency", header: "Latency", mono: true, render: (r) => (r.latency_ms !== null ? `${r.latency_ms} ms` : "—") },
+                { key: "fb", header: "Fallback", mono: true, render: (r) => (r.status === "NOT TESTED" ? "—" : r.fallback_used ? "YES" : "NO") },
+              ]}
+            />
+          </div>
+
+          <div className="card">
+            <div className="card-title"><span>TURBO Runtime Telemetry</span></div>
+            <pre className="code-block">{JSON.stringify(turboStats || { registered_agents: agents.length, policy: "ZERO_FABRICATION_ENFORCED" }, null, 2)}</pre>
+          </div>
         </div>
       )}
     </ResponsiveWorkspace>

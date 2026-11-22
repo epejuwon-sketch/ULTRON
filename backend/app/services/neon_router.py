@@ -256,15 +256,20 @@ def invoke_agent_reasoning(
                 usage=llm_response["usage"],
                 latency_ms=llm_response["latency_ms"],
             )
+        agent.tasks_completed += 1
         agent.total_latency_ms += llm_response["latency_ms"]
         agent.last_active = datetime.now(timezone.utc)
+        actual_model = llm_response["model"]
+        fallback_used = bool(failover_errors) or (actual_model != primary_model)
         return {
             "agent_id": agent.agent_id,
             "agent_name": agent.name,
             "domain": agent.domain,
             "reasoning_tier": tier,
             "provider": provider_name,
-            "model": llm_response["model"],
+            "primary_model": primary_model,
+            "model": actual_model,
+            "fallback_used": fallback_used,
             "execution_mode": exec_mode,
             "output": raw_text,
             "structured_output": structured_output,
@@ -326,6 +331,10 @@ def invoke_agent_reasoning(
             latency_ms=latency_ms,
         )
 
+    if failover_errors:
+        agent.tasks_failed += 1
+    else:
+        agent.tasks_completed += 1
     agent.total_latency_ms += latency_ms
     agent.last_active = datetime.now(timezone.utc)
     return {
@@ -334,7 +343,9 @@ def invoke_agent_reasoning(
         "domain": agent.domain,
         "reasoning_tier": tier,
         "provider": "local_fallback",
+        "primary_model": primary_model,
         "model": primary_model,
+        "fallback_used": True,
         "execution_mode": exec_mode,
         "output": output_text,
         "structured_output": structured_fallback,

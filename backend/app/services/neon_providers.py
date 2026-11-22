@@ -20,6 +20,7 @@ MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
     "gemini-4-neon": (3.00, 15.00),
     "gemini-4-argon": (2.00, 10.00),
     "gemini-4-carbon": (2.00, 10.00),
+    "gemini-2.5-flash": (0.15, 0.60),
     "gemini-2.5-flash-lite": (0.075, 0.30),
     "gemini-2.0-flash-lite": (0.075, 0.30),
     "gemini-2.0-flash": (0.10, 0.40),
@@ -382,6 +383,8 @@ def _build_gemini_model_candidates(primary_model: str, settings: Settings) -> li
         "gemini-4-hydrogen",
         settings.gemini_model_standard,
         settings.gemini_model_fast,
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
     ]
     seen: set[str] = set()
     result: list[str] = []

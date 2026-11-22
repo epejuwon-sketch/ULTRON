@@ -131,7 +131,7 @@ def analyze_visual_frame(
             resp = gemini.generate_content(
                 prompt=interception.sanitized_text,
                 model=settings.gemini_model_standard,
-                inline_data=[{"mime_type": mime_type, "data": image_base64}],
+                multimodal_parts=[{"inlineData": {"mimeType": mime_type, "data": image_base64}}],
             )
             return {
                 "status": "ANALYZED_LIVE",
