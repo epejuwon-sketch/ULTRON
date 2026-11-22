@@ -1,5 +1,16 @@
 import React, { Suspense, useCallback, useEffect, useState } from "react";
-import { apiFetch, AuthUser, clearSession, getStoredToken, getStoredUser, saveSession } from "./lib/api";
+import {
+  apiFetch,
+  AUTH_STATE_EVENT,
+  AuthUser,
+  clearSession,
+  getStoredRefreshToken,
+  getStoredToken,
+  getStoredUser,
+  isAccessTokenExpiredOrExpiring,
+  refreshAccessTokenSingleFlight,
+  saveSession,
+} from "./lib/api";
 import { useDeviceProfile } from "./lib/device";
 import { lazyWithRecovery } from "./lib/lazyWithRecovery";
 import { usePreferences } from "./lib/preferences";
@@ -199,6 +210,58 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [user, navigate]);
 
+  // Keep React auth state synchronized with shared API client token refreshes and session expirations
+  useEffect(() => {
+    const onAuthChanged = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && "user" in detail) {
+        setUser(detail.user || null);
+        if (!detail.user && detail.reason === "session_expired") {
+          setAuthErr("Your session expired. Please sign in again.");
+        }
+      } else {
+        setUser(getStoredToken() ? getStoredUser() : null);
+      }
+    };
+    window.addEventListener(AUTH_STATE_EVENT, onAuthChanged);
+    return () => window.removeEventListener(AUTH_STATE_EVENT, onAuthChanged);
+  }, []);
+
+  // Validate or refresh session on initial boot and whenever the installed iOS PWA returns to foreground
+  useEffect(() => {
+    if (!user) return;
+    const ensureFreshSession = async () => {
+      const token = getStoredToken();
+      if (!token) {
+        clearSession("session_expired");
+        return;
+      }
+      if (isAccessTokenExpiredOrExpiring(token, 45)) {
+        if (getStoredRefreshToken()) {
+          const refreshed = await refreshAccessTokenSingleFlight();
+          if (!refreshed) {
+            clearSession("session_expired");
+          }
+        } else {
+          // Legacy session stored before refresh_token persistence whose JWT is already expired
+          clearSession("session_expired");
+        }
+      }
+    };
+    ensureFreshSession();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        ensureFreshSession();
+      }
+    };
+    window.addEventListener("focus", ensureFreshSession);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", ensureFreshSession);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [user]);
+
   async function handleAuth(e: React.FormEvent) {
     e.preventDefault();
     if (backendReady === false) {
@@ -218,7 +281,7 @@ export default function App() {
         method: "POST",
         body: { username, password },
       });
-      saveSession(login.access_token, login.user);
+      saveSession(login.access_token, login.user, login.refresh_token, login.expires_at);
       setUser(login.user);
       const target = parseRouteFromPathname(window.location.pathname);
       navigate(target.moduleId, target.subPageId, { replace: true });
@@ -238,7 +301,8 @@ export default function App() {
   }
 
   function logout() {
-    clearSession();
+    apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
+    clearSession("logged_out");
     setUser(null);
   }
 

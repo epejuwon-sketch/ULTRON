@@ -96,7 +96,10 @@ function resolveHonestStatus(
   }
 
   // Check /health providers for LLM / DB providers
-  const hp = health?.integrations?.capabilities?.[entry.id] || health?.providers?.[entry.id];
+  const hp =
+    health?.integrations?.capabilities?.[entry.id] ||
+    health?.integrations?.providers?.[entry.id] ||
+    health?.providers?.[entry.id];
   if (hp) {
     if (hp.configured) {
       return { status: "Connected", detail: hp.detail || "Configured on server." };

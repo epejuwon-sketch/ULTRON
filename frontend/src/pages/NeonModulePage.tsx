@@ -17,7 +17,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import { apiFetch, streamNeon } from "../lib/api";
+import { apiFetch, resolveGeminiProviderStatus, streamNeon } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
 import type { AttachedFileRef, ModulePageProps } from "../types/module";
 import {
@@ -128,15 +128,20 @@ export default function NeonModulePage({
   async function loadBase(discoverLive = false) {
     setError("");
     if (discoverLive) setDiscoveringModels(true);
+    const authErrors: string[] = [];
+    const trackErr = <T,>(fallback: T) => (err: any): T => {
+      if (err?.message) authErrors.push(String(err.message));
+      return fallback;
+    };
     try {
       const [cRes, aRes, mRes, tRes, uRes, hRes, gRes] = await Promise.all([
-        apiFetch<any>("/api/v1/neon/conversations").catch(() => ({ conversations: [] })),
-        apiFetch<any>("/api/v1/agents").catch(() => ({ agents: [] })),
-        apiFetch<any>("/api/v1/neon/models").catch(() => null),
-        apiFetch<any>("/api/v1/neon/tiers").catch(() => null),
-        apiFetch<any>("/api/v1/neon/usage").catch(() => null),
+        apiFetch<any>("/api/v1/neon/conversations").catch(trackErr({ conversations: [] })),
+        apiFetch<any>("/api/v1/agents").catch(trackErr({ agents: [] })),
+        apiFetch<any>("/api/v1/neon/models").catch(trackErr(null)),
+        apiFetch<any>("/api/v1/neon/tiers").catch(trackErr(null)),
+        apiFetch<any>("/api/v1/neon/usage").catch(trackErr(null)),
         apiFetch<any>("/health").catch(() => null),
-        apiFetch<any>(`/api/v1/neon/gemini/diagnostics?discover=${discoverLive ? "true" : "false"}`).catch(() => null),
+        apiFetch<any>(`/api/v1/neon/gemini/diagnostics?discover=${discoverLive ? "true" : "false"}`).catch(trackErr(null)),
       ]);
       const list = cRes.conversations || [];
       setConversations(list);
@@ -147,6 +152,9 @@ export default function NeonModulePage({
       setUsage(uRes);
       setHealth(hRes);
       setGeminiDiag(gRes);
+      if (authErrors.length >= 3) {
+        setError(authErrors[0]);
+      }
       if (discoverLive && gRes?.catalog?.catalog_verified) {
         pushToast(`Discovered ${gRes.catalog.models_discovered} live Gemini models (${gRes.catalog.latency_ms}ms).`, "success");
       }
@@ -530,20 +538,11 @@ export default function NeonModulePage({
       (c.agent_id || "").toLowerCase().includes(convSearch.toLowerCase())
   );
 
-  const geminiConfigured = Boolean(
-    geminiDiag?.configured || health?.integrations?.capabilities?.gemini?.configured
-  );
+  const geminiStatus = resolveGeminiProviderStatus({ geminiDiag, health });
+  const geminiConfigured = geminiStatus.configured;
   const liveInf = geminiDiag?.live_inference;
-  const geminiBadgeLabel =
-    liveInf?.status === "LIVE VERIFIED"
-      ? "GEMINI LIVE VERIFIED"
-      : liveInf?.status === "LIVE VERIFIED WITH FALLBACK"
-      ? "GEMINI LIVE (FALLBACK)"
-      : geminiConfigured
-      ? "GEMINI CONFIGURED"
-      : "FALLBACK MODE";
-  const geminiBadgeTone =
-    liveInf?.verified ? "success" : geminiConfigured ? "info" : "warn";
+  const geminiBadgeLabel = geminiStatus.label;
+  const geminiBadgeTone = geminiStatus.tone;
 
   return (
     <ResponsiveWorkspace subPages={mod.subPages} activeSubPage={page.id} onSelectSubPage={onSelectSubPage}>

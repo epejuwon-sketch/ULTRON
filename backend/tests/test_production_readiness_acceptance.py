@@ -399,3 +399,55 @@ def test_approval_gate_remains_immutable_for_high_value_finance(
         or data.get("status") == "PENDING_APPROVAL"
         or data.get("approval_id") is not None
     )
+
+
+def test_shared_auth_refresh_rotation_and_consistent_gemini_status(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify refresh token rotation restores Command Centre + NEON endpoints and Gemini status is consistent."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-consistent-key-0001")
+    get_settings.cache_clear()
+
+    login_payload = auth_headers["owner_login"]
+    refresh_token = login_payload["refresh_token"]
+    assert refresh_token.startswith("ultron_rt_")
+
+    # Rotate via POST /api/v1/auth/refresh
+    refreshed = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert refreshed.status_code == 200, refreshed.text
+    new_session = refreshed.json()
+    assert new_session["access_token"] != login_payload["access_token"]
+    assert new_session["refresh_token"] != refresh_token
+    new_hdr = {"Authorization": f"Bearer {new_session['access_token']}"}
+
+    # Old refresh token must be rejected after rotation
+    reused = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert reused.status_code == 401
+
+    # Verify both Command Centre and NEON authenticated endpoints succeed with the rotated access token
+    for path in (
+        "/api/v1/monitoring/overview",
+        "/api/v1/agents",
+        "/api/v1/tasks",
+        "/api/v1/notifications",
+        "/api/v1/audit/logs?limit=25",
+        "/api/v1/neon/conversations",
+        "/api/v1/neon/models",
+        "/api/v1/neon/tiers",
+        "/api/v1/neon/usage",
+        "/api/v1/neon/gemini/diagnostics?discover=false",
+    ):
+        r = client.get(path, headers=new_hdr)
+        assert r.status_code == 200, f"{path} failed with {r.status_code}: {r.text}"
+
+    # Verify consistent Gemini configured status across /health, /health/ready, and /api/v1/neon/gemini/diagnostics
+    h = client.get("/health").json()
+    rdy = client.get("/health/ready").json()
+    diag = client.get("/api/v1/neon/gemini/diagnostics?discover=false", headers=new_hdr).json()
+    assert h["integrations"]["providers"]["gemini"]["configured"] is True
+    assert h["integrations"]["capabilities"]["gemini"]["configured"] is True
+    assert rdy["config"]["integrations_configured"]["gemini"] is True
+    assert diag["configured"] is True
+

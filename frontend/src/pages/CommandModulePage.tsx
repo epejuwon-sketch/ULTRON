@@ -16,7 +16,7 @@ import {
   Sparkles,
   Workflow,
 } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, resolveGeminiProviderStatus } from "../lib/api";
 import { getModule, getSubPage, ModuleId } from "../catalog/navigation";
 import type { ModulePageProps } from "../types/module";
 import { EarthGlobe } from "../components/EarthGlobe";
@@ -50,6 +50,7 @@ export default function CommandModulePage({
 
   const [health, setHealth] = useState<any>(null);
   const [ready, setReady] = useState<any>(null);
+  const [geminiDiag, setGeminiDiag] = useState<any>(null);
   const [overview, setOverview] = useState<any>(null);
   const [agents, setAgents] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
@@ -68,25 +69,35 @@ export default function CommandModulePage({
 
   async function refresh() {
     setError("");
+    const authErrors: string[] = [];
+    const trackErr = <T,>(fallback: T) => (err: any): T => {
+      if (err?.message) authErrors.push(String(err.message));
+      return fallback;
+    };
     try {
-      const [h, r, ov, ag, tk, notif, aud, conv] = await Promise.all([
+      const [h, r, gd, ov, ag, tk, notif, aud, conv] = await Promise.all([
         apiFetch<any>("/health").catch(() => null),
         apiFetch<any>("/health/ready").catch(() => null),
-        apiFetch<any>("/api/v1/monitoring/overview").catch(() => null),
-        apiFetch<any>("/api/v1/agents").catch(() => ({ agents: [] })),
-        apiFetch<any>("/api/v1/tasks").catch(() => ({ tasks: [] })),
-        apiFetch<any>("/api/v1/notifications").catch(() => ({ notifications: [] })),
-        apiFetch<any>("/api/v1/audit/logs?limit=25").catch(() => ({ logs: [] })),
-        apiFetch<any>("/api/v1/neon/conversations").catch(() => ({ conversations: [] })),
+        apiFetch<any>("/api/v1/neon/gemini/diagnostics?discover=false").catch(trackErr(null)),
+        apiFetch<any>("/api/v1/monitoring/overview").catch(trackErr(null)),
+        apiFetch<any>("/api/v1/agents").catch(trackErr({ agents: [] })),
+        apiFetch<any>("/api/v1/tasks").catch(trackErr({ tasks: [] })),
+        apiFetch<any>("/api/v1/notifications").catch(trackErr({ notifications: [] })),
+        apiFetch<any>("/api/v1/audit/logs?limit=25").catch(trackErr({ logs: [] })),
+        apiFetch<any>("/api/v1/neon/conversations").catch(trackErr({ conversations: [] })),
       ]);
       setHealth(h);
       setReady(r);
+      setGeminiDiag(gd);
       setOverview(ov);
       setAgents(ag.agents || []);
       setTasks(tk.tasks || []);
       setNotifications(notif.notifications || []);
       setAuditLogs(aud.logs || []);
       setConversations(conv.conversations || []);
+      if (authErrors.length >= 3) {
+        setError(authErrors[0]);
+      }
     } catch (e: any) {
       setError(e.message || "Failed to load Command Centre telemetry.");
     } finally {
@@ -175,7 +186,7 @@ export default function CommandModulePage({
   }
 
   const dbConnected = ready ? ready.status === "ready" || Boolean(ready.database?.connected) : null;
-  const geminiLive = Boolean(health?.providers?.gemini?.configured);
+  const geminiStatus = resolveGeminiProviderStatus({ geminiDiag, health, ready });
   const globeStatus: "ready" | "degraded" | "loading" =
     dbConnected === null ? "loading" : dbConnected ? "ready" : "degraded";
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -210,8 +221,8 @@ export default function CommandModulePage({
                   tone={dbConnected ? "success" : dbConnected === false ? "warn" : "neutral"}
                 />
                 <StatusIndicator
-                  label={geminiLive ? "GEMINI LIVE" : "GEMINI UNCONFIGURED"}
-                  tone={geminiLive ? "info" : "neutral"}
+                  label={geminiStatus.label}
+                  tone={geminiStatus.tone}
                 />
               </div>
             </div>
@@ -363,11 +374,12 @@ export default function CommandModulePage({
               <ReadableSummary
                 data={{
                   database_status: ready?.database?.connected ? "Connected" : "Degraded",
-                  environment: ready?.env || health?.env || "active",
-                  gemini_configured: Boolean(health?.providers?.gemini || health?.integrations?.capabilities?.gemini?.configured),
+                  environment: ready?.config?.env || ready?.env || health?.env || "active",
+                  gemini_configured: geminiStatus.configured,
+                  gemini_status: geminiStatus.label,
                   total_requests: overview?.total_requests ?? 0,
                   error_rate_pct: `${overview?.error_rate_pct ?? 0}%`,
-                  providers: health?.providers,
+                  providers: health?.integrations?.providers,
                   database: ready?.database,
                   monitoring: overview,
                 }}
