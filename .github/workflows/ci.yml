@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  test-and-verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -24,8 +24,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
 
-      - name: Run automated test suite
+      - name: Run full automated test suite
         run: pytest
+
+      - name: Verify database schema & Supabase migrations
+        run: python backend/scripts/verify_migrations.py
 
       - name: Verify integration diagnostic CLI
         run: python backend/scripts/verify_integrations.py
+
+      - name: Verify persistent worker single cycle
+        run: python backend/worker.py --once

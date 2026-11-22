@@ -63,7 +63,7 @@ def test_memory_ttl_pruning(client: TestClient, auth_headers: dict) -> None:
 def test_tools_execution_approval_gate_and_ssrf_guard(client: TestClient, auth_headers: dict) -> None:
     catalog = client.get("/api/v1/tools", headers=auth_headers["operator"])
     assert catalog.status_code == 200
-    assert catalog.json()["total"] == 5
+    assert catalog.json()["total"] == 9
 
     diag = client.post(
         "/api/v1/tools/system_diagnostics/execute",

@@ -1,4 +1,4 @@
-"""ARGON ApprovalGate governance workflow service."""
+"""ARGON ApprovalGate governance workflow service covering tasks, finance, deployments, comms, and agent extensions."""
 
 from __future__ import annotations
 
@@ -12,8 +12,16 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.permissions import Principal
-from app.db.models import ApprovalRecord, TaskRecord
+from app.db.models import (
+    AgentRecord,
+    ApprovalRecord,
+    DeploymentRequest,
+    FinancialTransaction,
+    TaskRecord,
+)
 from app.db.repositories import append_audit_log
+from app.services.notification_service import create_notification
+from app.services.realtime_hub import realtime_hub
 
 
 def create_approval_request(
@@ -27,15 +35,17 @@ def create_approval_request(
     financial_amount_usd: float = 0.0,
     task_id: str | None = None,
     tool_name: str | None = None,
+    resource_ref: str | None = None,
     payload: dict[str, Any] | None = None,
     commit: bool = True,
 ) -> ApprovalRecord:
-    """Create a pending ApprovalGate request and record it in the immutable audit ledger."""
+    """Create a pending ApprovalGate request, notify tenant operators/owners, and audit."""
     record = ApprovalRecord(
         approval_id=f"apr_{uuid.uuid4().hex[:16]}",
         tenant_id=tenant_id,
         task_id=task_id,
         tool_name=tool_name,
+        resource_ref=resource_ref,
         requested_by=requested_by,
         action_type=action_type,
         risk_level=risk_level,
@@ -52,12 +62,23 @@ def create_approval_request(
         actor=requested_by,
         action="APPROVAL_GATE_TRIGGERED",
         resource=record.approval_id,
-        outcome=f"PENDING|RISK={risk_level}|USD={financial_amount_usd:.2f}",
-        metadata={"task_id": task_id, "tool_name": tool_name, "action_type": action_type},
+        outcome=f"PENDING|TYPE={action_type}|RISK={risk_level}|USD={financial_amount_usd:.2f}",
+        metadata={"task_id": task_id, "tool_name": tool_name, "resource_ref": resource_ref},
+    )
+    create_notification(
+        db,
+        tenant_id=tenant_id,
+        severity="WARNING",
+        category="APPROVAL_GATE",
+        title=f"Approval Required: {action_type}",
+        message=reason,
+        metadata={"approval_id": record.approval_id, "risk_level": risk_level, "amount_usd": financial_amount_usd},
+        commit=False,
     )
     if commit:
         db.commit()
         db.refresh(record)
+    realtime_hub.publish_sync(tenant_id, "approval.pending", serialize_approval(record))
     return record
 
 
@@ -95,7 +116,7 @@ def decide_approval(
     decision: str,
     note: str = "",
 ) -> dict[str, Any]:
-    """Approve or reject a pending ApprovalGate request and transition any linked task."""
+    """Approve or reject a pending ApprovalGate request and transition any linked entity."""
     normalized = decision.strip().upper()
     if normalized not in {"APPROVED", "REJECTED"}:
         raise ConflictError("Decision must be either 'APPROVED' or 'REJECTED'.")
@@ -118,6 +139,8 @@ def decide_approval(
     record.decided_at = now
 
     linked_task_state: str | None = None
+    linked_resource_state: str | None = None
+
     if record.task_id:
         task = db.get(TaskRecord, record.task_id)
         if task is not None and task.lifecycle_state == "WAITING_FOR_APPROVAL":
@@ -127,19 +150,56 @@ def decide_approval(
                 task.error_detail = f"Rejected via ApprovalGate ({approval_id}): {note or 'No reason provided'}"
             linked_task_state = task.lifecycle_state
 
+    if record.action_type == "FINANCIAL_TRANSACTION" and record.resource_ref:
+        tx = db.get(FinancialTransaction, record.resource_ref)
+        if tx is not None:
+            tx.status = "APPROVED" if normalized == "APPROVED" else "REJECTED"
+            linked_resource_state = tx.status
+
+    if record.action_type == "PRODUCTION_DEPLOYMENT" and record.resource_ref:
+        dep = db.get(DeploymentRequest, record.resource_ref)
+        if dep is not None:
+            dep.status = "APPROVED_READY_TO_DEPLOY" if normalized == "APPROVED" else "REJECTED"
+            dep.updated_at = now
+            linked_resource_state = dep.status
+
+    if record.action_type == "AGENT_EXTENSION_REGISTRATION" and record.resource_ref:
+        agent = db.get(AgentRecord, record.resource_ref)
+        if agent is not None:
+            if normalized == "APPROVED":
+                agent.approved = True
+                agent.capability_state = "AVAILABLE"
+                linked_resource_state = "AVAILABLE"
+            else:
+                agent.approved = False
+                agent.capability_state = "UNAVAILABLE"
+                linked_resource_state = "UNAVAILABLE"
+
     append_audit_log(
         db,
         tenant_id=principal.tenant_id,
         actor=principal.username,
         action=f"APPROVAL_GATE_{normalized}",
         resource=record.approval_id,
-        outcome=f"TASK_STATE={linked_task_state or 'NONE'}",
-        metadata={"note": note, "task_id": record.task_id},
+        outcome=f"TASK_STATE={linked_task_state or 'NONE'}|RES_STATE={linked_resource_state or 'NONE'}",
+        metadata={"note": note, "task_id": record.task_id, "resource_ref": record.resource_ref},
+    )
+    create_notification(
+        db,
+        tenant_id=principal.tenant_id,
+        severity="INFO",
+        category="APPROVAL_GATE",
+        title=f"Approval {normalized}: {record.action_type}",
+        message=f"Decided by {principal.username}. {note or ''}".strip(),
+        metadata={"approval_id": record.approval_id, "decision": normalized},
+        commit=False,
     )
     db.commit()
     db.refresh(record)
     result = serialize_approval(record)
     result["linked_task_state"] = linked_task_state
+    result["linked_resource_state"] = linked_resource_state
+    realtime_hub.publish_sync(principal.tenant_id, "approval.decided", result)
     return result
 
 
@@ -149,6 +209,7 @@ def serialize_approval(record: ApprovalRecord) -> dict[str, Any]:
         "tenant_id": record.tenant_id,
         "task_id": record.task_id,
         "tool_name": record.tool_name,
+        "resource_ref": record.resource_ref,
         "requested_by": record.requested_by,
         "action_type": record.action_type,
         "risk_level": record.risk_level,

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
         default="development", alias="ULTRON_ENV"
     )
     app_name: str = Field(default="ULTRON OS 2026 Backend", alias="ULTRON_APP_NAME")
-    app_version: str = Field(default="2026.1.0", alias="ULTRON_APP_VERSION")
+    app_version: str = Field(default="2026.2.0", alias="ULTRON_APP_VERSION")
     host: str = Field(default="0.0.0.0", alias="ULTRON_HOST")
     port: int = Field(default=8000, alias="ULTRON_PORT")
     log_level: str = Field(default="INFO", alias="ULTRON_LOG_LEVEL")
@@ -42,6 +42,14 @@ class Settings(BaseSettings):
         default="http://localhost:3000,http://localhost:5173",
         alias="ULTRON_CORS_ORIGINS",
     )
+
+    # --- Rate Limiting & Orchestration Limits ---
+    rate_limit_requests_per_minute: int = Field(
+        default=180, ge=10, le=10000, alias="ULTRON_RATE_LIMIT_PER_MIN"
+    )
+    argon_max_parallel_steps: int = Field(default=4, ge=1, le=32, alias="ULTRON_ARGON_MAX_PARALLEL_STEPS")
+    argon_default_step_retries: int = Field(default=1, ge=0, le=5, alias="ULTRON_ARGON_DEFAULT_STEP_RETRIES")
+    argon_step_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0, alias="ULTRON_ARGON_STEP_TIMEOUT_SECONDS")
 
     # --- ARGON Security ---
     jwt_secret: SecretStr = Field(
@@ -64,13 +72,16 @@ class Settings(BaseSettings):
     # --- Persistence ---
     database_url: str = Field(default="", alias="ULTRON_DATABASE_URL")
     sqlite_path: str = Field(default="./data/ultron_os_2026.db", alias="ULTRON_SQLITE_PATH")
+    db_pool_size: int = Field(default=10, ge=1, le=100, alias="ULTRON_DB_POOL_SIZE")
+    db_max_overflow: int = Field(default=20, ge=0, le=100, alias="ULTRON_DB_MAX_OVERFLOW")
 
     # --- Supabase ---
     supabase_url: str = Field(default="", alias="SUPABASE_URL")
     supabase_anon_key: SecretStr | None = Field(default=None, alias="SUPABASE_ANON_KEY")
     supabase_service_role_key: SecretStr | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
+    supabase_storage_bucket: str = Field(default="ultron-artifacts", alias="SUPABASE_STORAGE_BUCKET")
 
-    # --- Google Gemini API ---
+    # --- Multi-Model LLM Providers (Gemini Primary + Optional Failover) ---
     gemini_api_key: SecretStr | None = Field(default=None, alias="GEMINI_API_KEY")
     gemini_base_url: str = Field(
         default="https://generativelanguage.googleapis.com/v1beta",
@@ -80,6 +91,17 @@ class Settings(BaseSettings):
     gemini_model_standard: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL_STANDARD")
     gemini_model_reasoning: str = Field(default="gemini-2.5-pro", alias="GEMINI_MODEL_REASONING")
     gemini_model_embedding: str = Field(default="text-embedding-004", alias="GEMINI_MODEL_EMBEDDING")
+
+    openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
+    openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
+    openai_model_fallback: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL_FALLBACK")
+
+    anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    anthropic_base_url: str = Field(default="https://api.anthropic.com/v1", alias="ANTHROPIC_BASE_URL")
+    anthropic_model_fallback: str = Field(default="claude-3-5-sonnet-latest", alias="ANTHROPIC_MODEL_FALLBACK")
+
+    ollama_base_url: str = Field(default="", alias="OLLAMA_BASE_URL")
+    ollama_model_local: str = Field(default="llama3.2", alias="OLLAMA_MODEL_LOCAL")
 
     # --- Vercel ---
     vercel_token: SecretStr | None = Field(default=None, alias="VERCEL_TOKEN")
@@ -96,6 +118,17 @@ class Settings(BaseSettings):
     cloudflare_turnstile_secret_key: SecretStr | None = Field(
         default=None, alias="CLOUDFLARE_TURNSTILE_SECRET_KEY"
     )
+
+    # --- Extended Tool Integrations ---
+    github_token: SecretStr | None = Field(default=None, alias="GITHUB_TOKEN")
+    github_default_repo: str = Field(default="epejuwon-sketch/ULTRON", alias="GITHUB_DEFAULT_REPO")
+    google_drive_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_DRIVE_ACCESS_TOKEN")
+    google_calendar_access_token: SecretStr | None = Field(default=None, alias="GOOGLE_CALENDAR_ACCESS_TOKEN")
+    email_smtp_host: str = Field(default="", alias="EMAIL_SMTP_HOST")
+    email_api_key: SecretStr | None = Field(default=None, alias="EMAIL_API_KEY")
+    whatsapp_access_token: SecretStr | None = Field(default=None, alias="WHATSAPP_ACCESS_TOKEN")
+    whatsapp_phone_number_id: str = Field(default="", alias="WHATSAPP_PHONE_NUMBER_ID")
+    payment_provider_key: SecretStr | None = Field(default=None, alias="PAYMENT_PROVIDER_KEY")
 
     @model_validator(mode="after")
     def _enforce_production_secrets(self) -> "Settings":
@@ -141,11 +174,18 @@ class Settings(BaseSettings):
             "database_backend": self.database_backend,
             "approval_soft_limit_usd": self.approval_soft_limit_usd,
             "default_tenant_id": self.default_tenant_id,
+            "rate_limit_per_min": self.rate_limit_requests_per_minute,
+            "argon_max_parallel_steps": self.argon_max_parallel_steps,
             "integrations_configured": {
                 "supabase": bool(self.supabase_url.strip() and (self.supabase_service_role_key or self.supabase_anon_key)),
                 "gemini": bool(self.gemini_api_key and self.gemini_api_key.get_secret_value().strip()),
+                "openai": bool(self.openai_api_key and self.openai_api_key.get_secret_value().strip()),
+                "anthropic": bool(self.anthropic_api_key and self.anthropic_api_key.get_secret_value().strip()),
+                "ollama": bool(self.ollama_base_url.strip()),
                 "vercel": bool(self.vercel_token and self.vercel_token.get_secret_value().strip()),
                 "cloudflare": bool(self.cloudflare_api_token and self.cloudflare_api_token.get_secret_value().strip()),
+                "github": bool(self.github_token and self.github_token.get_secret_value().strip()),
+                "google_drive": bool(self.google_drive_access_token and self.google_drive_access_token.get_secret_value().strip()),
             },
         }
 

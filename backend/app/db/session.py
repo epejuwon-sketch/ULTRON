@@ -1,31 +1,43 @@
-"""Database engine management supporting Supabase PostgreSQL and SQLite WAL."""
+"""Database engine management supporting Supabase PostgreSQL (pooled) and SQLite WAL."""
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, create_engine, event, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
-from app.db.models import Base, Tenant
+from app.db.models import Base, SchemaMigration, Tenant
 
 _ENGINE: Engine | None = None
 _SESSION_FACTORY: sessionmaker[Session] | None = None
 _ENGINE_URL: str | None = None
 
+MIGRATION_REGISTRY: list[tuple[str, str]] = [
+    ("001", "001_initial_schema.sql"),
+    ("002", "002_full_backend_schema.sql"),
+]
+
 
 def _build_engine(settings: Settings) -> Engine:
     url = settings.effective_database_url
-    connect_args: dict = {}
-    if url.startswith("sqlite:///"):
-        db_file = url.removeprefix("sqlite:///")
-        if db_file != ":memory:":
-            Path(db_file).parent.mkdir(parents=True, exist_ok=True)
-        connect_args = {"check_same_thread": False, "timeout": 30.0}
+    kwargs: dict = {"pool_pre_ping": True, "future": True}
 
-    engine = create_engine(url, connect_args=connect_args, pool_pre_ping=True, future=True)
+    if url.startswith("sqlite"):
+        if url.startswith("sqlite:///"):
+            db_file = url.removeprefix("sqlite:///")
+            if db_file != ":memory:":
+                Path(db_file).parent.mkdir(parents=True, exist_ok=True)
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30.0}
+    else:
+        kwargs["pool_size"] = settings.db_pool_size
+        kwargs["max_overflow"] = settings.db_max_overflow
+        kwargs["pool_recycle"] = 1800
+
+    engine = create_engine(url, **kwargs)
 
     if url.startswith("sqlite"):
         @event.listens_for(engine, "connect")
@@ -62,22 +74,49 @@ def reset_engine() -> None:
     _ENGINE_URL = None
 
 
+def _record_schema_migrations(db: Session) -> None:
+    mig_dir = Path(__file__).resolve().parents[2] / "migrations" / "supabase"
+    for ver, filename in MIGRATION_REGISTRY:
+        if db.get(SchemaMigration, ver) is not None:
+            continue
+        file_path = mig_dir / filename
+        content = file_path.read_bytes() if file_path.exists() else filename.encode("utf-8")
+        checksum = hashlib.sha256(content).hexdigest()
+        db.add(SchemaMigration(version=ver, name=filename, checksum=checksum))
+    db.flush()
+
+
 def init_database(settings: Settings | None = None) -> None:
-    """Create schema tables and seed default tenant + 60-agent catalog idempotently."""
+    """Create schema tables, record migration versions, and seed default tenant + 60 agents."""
     cfg = settings or get_settings()
     engine = get_engine(cfg)
     Base.metadata.create_all(bind=engine)
 
-    # Seed default tenant and 60 specialist agents idempotently
     from app.services.agent_catalog import seed_agent_catalog
 
     with get_session_factory(cfg)() as db:
+        _record_schema_migrations(db)
         tenant = db.get(Tenant, cfg.default_tenant_id)
         if tenant is None:
             db.add(Tenant(tenant_id=cfg.default_tenant_id, name="ULTRON OS Primary Organization"))
             db.flush()
         seed_agent_catalog(db)
         db.commit()
+
+
+def get_applied_migrations(settings: Settings | None = None) -> list[dict]:
+    cfg = settings or get_settings()
+    with get_session_factory(cfg)() as db:
+        rows = db.execute(select(SchemaMigration).order_by(SchemaMigration.version.asc())).scalars().all()
+        return [
+            {
+                "version": r.version,
+                "name": r.name,
+                "checksum": r.checksum,
+                "applied_at": r.applied_at.isoformat(),
+            }
+            for r in rows
+        ]
 
 
 def get_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:

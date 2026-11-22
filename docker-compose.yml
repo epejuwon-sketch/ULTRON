@@ -1,0 +1,27 @@
+services:
+  ultron-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ultron_data:/app/data
+    restart: unless-stopped
+
+  ultron-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    env_file:
+      - .env
+    volumes:
+      - ultron_data:/app/data
+    depends_on:
+      - ultron-api
+    restart: unless-stopped
+
+volumes:
+  ultron_data:

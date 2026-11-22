@@ -1,10 +1,10 @@
-"""Specialist Agent Catalog (60 Agents) and NEON cognitive routing endpoints."""
+"""Specialist Agent Catalog (60 Agents + Approved Extensions), manifests, inter-agent bus, and NEON routing endpoints."""
 
 from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,19 @@ from app.db.models import AgentRecord
 from app.db.repositories import append_audit_log
 from app.db.session import get_db
 from app.routers.deps import require_perm
-from app.schemas import AgentInvokeRequest, RoutePreviewRequest, UpdateAgentStateRequest
+from app.schemas import (
+    AgentInvokeRequest,
+    AgentMessageRequest,
+    RegisterAgentExtensionRequest,
+    RoutePreviewRequest,
+    UpdateAgentStateRequest,
+)
+from app.services.agent_service import (
+    build_agent_manifest,
+    list_agent_messages,
+    propose_agent_extension,
+    send_agent_message,
+)
 from app.services.neon_router import get_reasoning_tiers, invoke_agent_reasoning, route_objective
 
 router = APIRouter(prefix="/api/v1/agents", tags=["Agents & NEON Router"])
@@ -32,7 +44,10 @@ def _serialize_agent(a: AgentRecord) -> dict:
         "permission_scope": a.permission_scope,
         "capability_state": a.capability_state,
         "default_reasoning_tier": a.default_reasoning_tier,
+        "is_extension": a.is_extension,
+        "approved": a.approved,
         "tasks_completed": a.tasks_completed,
+        "tasks_failed": a.tasks_failed,
         "last_active": a.last_active.isoformat(),
     }
 
@@ -45,7 +60,6 @@ def list_agents(
     _principal: Principal = Depends(require_perm("agents:read")),
     db: Session = Depends(get_db),
 ) -> dict:
-    """List specialist agents from the 60-agent catalog with optional filtering."""
     stmt = select(AgentRecord)
     if tier:
         stmt = stmt.where(AgentRecord.tier == tier.upper())
@@ -62,7 +76,6 @@ def list_reasoning_tiers(
     _principal: Principal = Depends(require_perm("agents:read")),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Return the 5-tier NEON model routing matrix."""
     return {"tiers": list(get_reasoning_tiers(settings).values())}
 
 
@@ -72,13 +85,60 @@ def preview_route(
     _principal: Principal = Depends(require_perm("agents:read")),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Preview NEON dynamic agent & tier routing and ApprovalGate risk assessment."""
     return route_objective(
         body.objective,
         financial_amount_usd=body.financial_amount_usd,
         settings=settings,
         preferred_agent_id=body.preferred_agent_id,
     )
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+def register_agent_extension(
+    body: RegisterAgentExtensionRequest,
+    principal: Principal = Depends(require_perm("agents:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Propose a dynamic extension agent gated by ApprovalGate before activation."""
+    return propose_agent_extension(
+        db,
+        principal=principal,
+        agent_id=body.agent_id,
+        name=body.name,
+        domain=body.domain,
+        role_description=body.role_description,
+        tools=body.tools,
+        permission_scope=body.permission_scope,
+        default_reasoning_tier=body.default_reasoning_tier,
+    )
+
+
+@router.post("/messages", status_code=status.HTTP_201_CREATED)
+def api_send_agent_message(
+    body: AgentMessageRequest,
+    principal: Principal = Depends(require_perm("agents:invoke")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return send_agent_message(
+        db,
+        principal=principal,
+        from_agent_id=body.from_agent_id,
+        to_agent_id=body.to_agent_id,
+        subject=body.subject,
+        payload=body.payload,
+        task_id=body.task_id,
+    )
+
+
+@router.get("/messages")
+def api_list_agent_messages(
+    agent_id: str | None = Query(default=None),
+    task_id: str | None = Query(default=None),
+    principal: Principal = Depends(require_perm("agents:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    msgs = list_agent_messages(db, tenant_id=principal.tenant_id, agent_id=agent_id, task_id=task_id)
+    return {"total": len(msgs), "messages": msgs}
 
 
 @router.get("/{agent_id}")
@@ -93,6 +153,19 @@ def get_agent(
     return _serialize_agent(agent)
 
 
+@router.get("/{agent_id}/manifest")
+def get_agent_manifest(
+    agent_id: str,
+    _principal: Principal = Depends(require_perm("agents:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    agent = db.get(AgentRecord, agent_id.upper())
+    if agent is None:
+        raise NotFoundError(f"Agent '{agent_id}' not found.")
+    return build_agent_manifest(agent, settings)
+
+
 @router.patch("/{agent_id}/state")
 def update_agent_state(
     agent_id: str,
@@ -100,7 +173,6 @@ def update_agent_state(
     principal: Principal = Depends(require_perm("agents:manage")),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Transition an agent's honest capability state (OWNER/ADMIN only)."""
     agent = db.get(AgentRecord, agent_id.upper())
     if agent is None:
         raise NotFoundError(f"Agent '{agent_id}' not found.")
@@ -127,7 +199,6 @@ def invoke_agent(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Invoke a specialist agent via NEON (Gemini live when configured, honest fallback otherwise)."""
     result = invoke_agent_reasoning(
         db,
         agent_id=agent_id.upper(),
@@ -135,6 +206,10 @@ def invoke_agent(
         settings=settings,
         context=body.context,
         reasoning_tier=body.reasoning_tier,
+        response_format=body.response_format,
+        temperature=body.temperature,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
     )
     append_audit_log(
         db,

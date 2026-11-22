@@ -38,6 +38,18 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "audit:read",
             "users:manage",
             "integrations:verify",
+            "finance:read",
+            "finance:write",
+            "finance:approve",
+            "projects:read",
+            "projects:write",
+            "projects:deploy",
+            "notifications:read",
+            "notifications:write",
+            "settings:read",
+            "settings:write",
+            "monitoring:read",
+            "jobs:manage",
         }
     ),
     Role.ADMIN: frozenset(
@@ -61,6 +73,16 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "audit:read",
             "users:manage",
             "integrations:verify",
+            "finance:read",
+            "finance:write",
+            "projects:read",
+            "projects:write",
+            "notifications:read",
+            "notifications:write",
+            "settings:read",
+            "settings:write",
+            "monitoring:read",
+            "jobs:manage",
         }
     ),
     Role.OPERATOR: frozenset(
@@ -78,6 +100,14 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "tools:execute",
             "audit:read",
             "integrations:verify",
+            "finance:read",
+            "finance:write",
+            "projects:read",
+            "projects:write",
+            "notifications:read",
+            "notifications:write",
+            "settings:read",
+            "monitoring:read",
         }
     ),
     Role.VIEWER: frozenset(
@@ -88,16 +118,24 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "memory:read",
             "tools:read",
             "audit:read",
+            "finance:read",
+            "projects:read",
+            "notifications:read",
+            "settings:read",
+            "monitoring:read",
         }
     ),
     Role.AGENT: frozenset(
         {
             "agents:read",
+            "agents:invoke",
             "tasks:read",
             "memory:read",
             "memory:write",
             "tools:read",
             "tools:execute",
+            "projects:read",
+            "notifications:read",
         }
     ),
 }

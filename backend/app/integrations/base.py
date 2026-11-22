@@ -13,6 +13,9 @@ class HonestCapabilityState(StrEnum):
     DEFINED_NOT_INSTALLED = "DEFINED_NOT_INSTALLED"
     INSTALLED = "INSTALLED"
     AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+    DEGRADED = "DEGRADED"
+    REQUIRES_APPROVAL = "REQUIRES_APPROVAL"
     VERIFIED_TESTED = "VERIFIED_TESTED"
 
 
@@ -24,6 +27,7 @@ class IntegrationStatus:
     configured: bool
     capability_state: HonestCapabilityState
     live_verified: bool
+    requires_approval_for_mutations: bool = False
     missing_env_vars: list[str] = field(default_factory=list)
     endpoint: str | None = None
     latency_ms: int | None = None
@@ -36,6 +40,7 @@ class IntegrationStatus:
             "configured": self.configured,
             "capability_state": self.capability_state.value,
             "live_verified": self.live_verified,
+            "requires_approval_for_mutations": self.requires_approval_for_mutations,
             "missing_env_vars": self.missing_env_vars,
             "endpoint": self.endpoint,
             "latency_ms": self.latency_ms,
