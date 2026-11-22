@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiFetch, downloadAuthFile } from "../lib/api";
+import { ReadableSummary } from "./ui/HumanPresentation";
 
 /* 8. Creative Studio + Photo/Video Upload & Visual Multimodal */
 export function CreativeView() {
@@ -91,7 +92,11 @@ export function CreativeView() {
           Capture / Upload Photo or Video (iPhone Camera &amp; Library)
           <input type="file" accept="image/*,video/*" style={{ display: "none" }} onChange={handleMediaCapture} />
         </label>
-        {visualResult && <pre className="code-block" style={{ marginTop: 10 }}>{JSON.stringify(visualResult, null, 2)}</pre>}
+        {visualResult && (
+          <div style={{ marginTop: 10 }}>
+            <ReadableSummary title="Visual Analysis" data={visualResult} diagnosticsTitle="Technical Diagnostics — Visual Payload" />
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -685,7 +690,7 @@ export function CaravanView() {
           {liveData && (
             <div style={{ marginTop: 10 }}>
               <div className="muted">Live DB Hydration ({liveData.page?.title} · {liveData.hydrated_at}):</div>
-              <pre className="code-block">{JSON.stringify(liveData.live_data, null, 2)}</pre>
+              <ReadableSummary data={liveData.live_data} diagnosticsTitle="Technical Diagnostics — Live Page Data" />
             </div>
           )}
         </div>

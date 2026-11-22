@@ -33,6 +33,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 export type { ModulePageProps };
 
@@ -358,8 +359,20 @@ export default function CommandModulePage({
               <MetricDisplay label="Audit Events" value={auditLogs.length} sub="Hash-chained entries" tone="success" />
             </div>
             <div className="card">
-              <div className="card-title"><span>Live Provider & Backend Readiness</span></div>
-              <pre className="code-block">{JSON.stringify({ health: health?.providers, database: ready?.database, monitoring: overview }, null, 2)}</pre>
+              <div className="card-title"><span>Live Provider &amp; Backend Readiness</span></div>
+              <ReadableSummary
+                data={{
+                  database_status: ready?.database?.connected ? "Connected" : "Degraded",
+                  environment: ready?.env || health?.env || "active",
+                  gemini_configured: Boolean(health?.providers?.gemini || health?.integrations?.capabilities?.gemini?.configured),
+                  total_requests: overview?.total_requests ?? 0,
+                  error_rate_pct: `${overview?.error_rate_pct ?? 0}%`,
+                  providers: health?.providers,
+                  database: ready?.database,
+                  monitoring: overview,
+                }}
+                diagnosticsTitle="Technical Diagnostics — Readiness & Provider Telemetry"
+              />
             </div>
           </div>
         )
@@ -489,14 +502,20 @@ export default function CommandModulePage({
         <div className="grid-2">
           <div className="card">
             <div className="card-title">
-              <span><Gauge size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Readiness Probe (/health/ready)</span>
+              <span><Gauge size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />Database &amp; Readiness Status</span>
               <StatusIndicator label={dbConnected ? "HEALTHY" : "DEGRADED"} tone={dbConnected ? "success" : "warn"} />
             </div>
-            <pre className="code-block">{JSON.stringify(ready, null, 2)}</pre>
+            <ReadableSummary
+              data={ready || { status: "Loading..." }}
+              diagnosticsTitle="Technical Diagnostics — /health/ready Payload"
+            />
           </div>
           <div className="card">
-            <div className="card-title"><span>Runtime & Provider Probe (/health)</span></div>
-            <pre className="code-block">{JSON.stringify(health, null, 2)}</pre>
+            <div className="card-title"><span>Runtime &amp; Provider Status</span></div>
+            <ReadableSummary
+              data={health || { status: "Loading..." }}
+              diagnosticsTitle="Technical Diagnostics — /health Payload"
+            />
           </div>
         </div>
       )}

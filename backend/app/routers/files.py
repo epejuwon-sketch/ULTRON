@@ -25,6 +25,7 @@ from app.services.file_hub_service import (
     list_files,
     restore_file,
     soft_delete_file,
+    update_file_metadata,
 )
 from app.services.storage_adapter import get_storage_adapter
 
@@ -37,12 +38,18 @@ class GenerateFileRequest(BaseModel):
     content_base64: str | None = None
     mime_type: str = Field(default="text/markdown", max_length=120)
     project_id: str | None = None
+    folder: str | None = Field(default=None, max_length=80)
 
 
 class GenerateZipRequest(BaseModel):
     archive_name: str = Field(min_length=2, max_length=160)
     files: dict[str, str]
     project_id: str | None = None
+
+
+class UpdateFileRequest(BaseModel):
+    filename: str | None = Field(default=None, min_length=1, max_length=200)
+    folder: str | None = Field(default=None, max_length=80)
 
 
 class SignedUrlRequest(BaseModel):
@@ -66,6 +73,7 @@ def api_storage_status(
 async def api_upload_file(
     file: UploadFile = File(...),
     project_id: str | None = Form(default=None),
+    folder: str | None = Form(default=None),
     principal: Principal = Depends(require_perm("files:write")),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -79,6 +87,7 @@ async def api_upload_file(
         raw_bytes=raw_bytes,
         mime_type=file.content_type or "application/octet-stream",
         project_id=project_id,
+        folder=folder,
     )
 
 
@@ -98,6 +107,7 @@ def api_generate_file(
         content_bytes=raw,
         mime_type=body.mime_type,
         project_id=body.project_id,
+        folder=body.folder,
     )
 
 
@@ -122,6 +132,8 @@ def api_generate_zip(
 def api_list_files(
     direction: str | None = Query(default=None),
     project_id: str | None = Query(default=None),
+    folder: str | None = Query(default=None),
+    search: str | None = Query(default=None),
     include_deleted: bool = Query(default=False),
     principal: Principal = Depends(require_perm("files:read")),
     db: Session = Depends(get_db),
@@ -131,10 +143,14 @@ def api_list_files(
         tenant_id=principal.tenant_id,
         direction=direction,
         project_id=project_id,
+        folder=folder,
+        search=search,
         include_deleted=include_deleted,
     )
+    folders = sorted({str(i.get("folder") or "General") for i in items})
     return {
         "total": len(items),
+        "folders": folders,
         "files": items,
         "empty_state": None if items else "No files uploaded or generated yet.",
     }
@@ -166,6 +182,43 @@ def api_get_file(
 ) -> dict:
     rec = get_file_record(db, tenant_id=principal.tenant_id, file_id=file_id)
     return _serialize_file(rec, include_text=True)
+
+
+@router.patch("/{file_id}")
+def api_update_file(
+    file_id: str,
+    body: UpdateFileRequest,
+    principal: Principal = Depends(require_perm("files:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Rename a stored file or organize it into another folder."""
+    return update_file_metadata(
+        db,
+        principal=principal,
+        file_id=file_id,
+        filename=body.filename,
+        folder=body.folder,
+    )
+
+
+@router.get("/{file_id}/preview")
+def api_preview_file(
+    file_id: str,
+    principal: Principal = Depends(require_perm("files:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Serve an authenticated inline preview for uploaded images and documents."""
+    rec, raw = download_file_bytes(db, tenant_id=principal.tenant_id, file_id=file_id, settings=settings)
+    return Response(
+        content=raw,
+        media_type=rec.mime_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{rec.filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/{file_id}/download")

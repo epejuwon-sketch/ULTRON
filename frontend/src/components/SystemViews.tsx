@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiFetch } from "../lib/api";
+import { ReadableSummary } from "./ui/HumanPresentation";
 
 /* 14. Device Centre (ORBIT Pairing, Permissions, Location Pause/Revoke) */
 export function DevicesView() {
@@ -584,7 +585,7 @@ export function SettingsView() {
           <div className="card-title"><span>TURBO Performance Benchmarks</span></div>
           <button className="btn btn-sm" style={{ marginBottom: 12 }} onClick={runBench}>Run Real Latency Benchmark</button>
           {bench ? (
-            <pre className="code-block">{JSON.stringify(bench, null, 2)}</pre>
+            <ReadableSummary title="TURBO Benchmark Results" data={bench} diagnosticsTitle="Technical Diagnostics — Raw Latency Timings" />
           ) : (
             <div className="muted">Run live micro-benchmarks to measure real DB, NEON routing, embedding, and AES-256-GCM latencies.</div>
           )}

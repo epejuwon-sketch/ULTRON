@@ -100,11 +100,22 @@ export async function downloadAuthFile(path: string, filename: string): Promise<
   URL.revokeObjectURL(url);
 }
 
+export async function fetchAuthBlobUrl(path: string): Promise<string> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const resp = await fetch(path, { headers });
+  if (!resp.ok) throw new Error(`Preview failed (HTTP ${resp.status})`);
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
 export async function streamNeon(
   prompt: string,
   agentId: string,
   onDelta: (chunk: string) => void,
-  onMeta?: (meta: any) => void
+  onMeta?: (meta: any) => void,
+  fileIds?: string[]
 ): Promise<void> {
   const token = getStoredToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -112,7 +123,12 @@ export async function streamNeon(
   const resp = await fetch("/api/v1/neon/stream", {
     method: "POST",
     headers,
-    body: JSON.stringify({ prompt, agent_id: agentId }),
+    body: JSON.stringify({
+      prompt,
+      agent_id: agentId,
+      file_ids: fileIds && fileIds.length > 0 ? fileIds : undefined,
+      enable_web_research: true,
+    }),
   });
   if (!resp.ok || !resp.body) {
     throw new Error(`Stream failed (HTTP ${resp.status})`);

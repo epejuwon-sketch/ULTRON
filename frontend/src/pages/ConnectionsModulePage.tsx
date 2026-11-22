@@ -27,6 +27,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 /**
  * Strictly computes honest 4-stage connection status from real backend responses.
@@ -649,7 +650,9 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                 </div>
               )}
 
-              {probeResult && <pre className="code-block">{JSON.stringify(probeResult, null, 2)}</pre>}
+              {probeResult && (
+                <ReadableSummary title="Connection Verification Result" data={probeResult} diagnosticsTitle="Technical Diagnostics — Probe Payload" />
+              )}
             </div>
           );
         })()}

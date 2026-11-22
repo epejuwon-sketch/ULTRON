@@ -11,6 +11,12 @@ import {
   ResponsiveWorkspace,
   useToast,
 } from "../components/ui/DesignSystem";
+import {
+  ProvenanceBar,
+  ReadableSummary,
+  SourcesList,
+  TechnicalDiagnostics,
+} from "../components/ui/HumanPresentation";
 
 export default function ResearchModulePage({ subPage, onSelectSubPage }: ModulePageProps) {
   const mod = getModule("research");
@@ -109,20 +115,30 @@ export default function ResearchModulePage({ subPage, onSelectSubPage }: ModuleP
       {page.id === "workspace" && (
         <div className="grid-2">
           <div className="card">
-            <div className="card-title"><span>Quick Web Search (/api/v1/research/search)</span></div>
+            <div className="card-title"><span>Live Web Search</span></div>
             <form onSubmit={runWebSearch} className="row">
               <input className="input" style={{ flex: 1 }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search live public web sources..." />
               <button type="submit" className="btn btn-sm"><Search size={13} /> Search</button>
             </form>
-            {searchRes && <pre className="code-block" style={{ marginTop: 10 }}>{JSON.stringify(searchRes, null, 2)}</pre>}
+            {searchRes && (
+              <div style={{ marginTop: 10 }}>
+                <SourcesList sources={searchRes.results || []} />
+                <ProvenanceBar provenance={searchRes.provenance} />
+                <TechnicalDiagnostics title="Technical Diagnostics — Web Search Payload" data={searchRes} />
+              </div>
+            )}
           </div>
           <div className="card">
-            <div className="card-title"><span>SSRF-Guarded URL Extraction (/api/v1/research/fetch)</span></div>
+            <div className="card-title"><span>SSRF-Guarded URL Extraction</span></div>
             <form onSubmit={runWebFetch} className="row">
               <input className="input" style={{ flex: 1 }} value={fetchUrl} onChange={(e) => setFetchUrl(e.target.value)} placeholder="https://example.com/article" />
               <button type="submit" className="btn btn-secondary btn-sm"><Globe size={13} /> Fetch</button>
             </form>
-            {fetchRes && <pre className="code-block" style={{ marginTop: 10 }}>{JSON.stringify(fetchRes, null, 2)}</pre>}
+            {fetchRes && (
+              <div style={{ marginTop: 10 }}>
+                <ReadableSummary title="Extracted Page Summary" data={fetchRes} diagnosticsTitle="Technical Diagnostics — URL Fetch Payload" />
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -130,12 +146,22 @@ export default function ResearchModulePage({ subPage, onSelectSubPage }: ModuleP
       {/* 60. WEB RESEARCH */}
       {page.id === "web" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="card-title"><span>Public Web Research & Source Verification</span></div>
+          <div className="card-title"><span>Public Web Research &amp; Source Verification</span></div>
           <form onSubmit={runWebSearch} className="row">
             <input className="input" style={{ flex: 1 }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Research topic with citations..." />
             <button type="submit" className="btn">Run Search</button>
           </form>
-          {searchRes && <pre className="code-block">{JSON.stringify(searchRes, null, 2)}</pre>}
+          {searchRes && (
+            <div>
+              {searchRes.results?.length ? (
+                <SourcesList sources={searchRes.results} />
+              ) : (
+                <div className="muted">No matching public sources returned for this query.</div>
+              )}
+              <ProvenanceBar provenance={searchRes.provenance} />
+              <TechnicalDiagnostics title="Technical Diagnostics — Web Search Payload" data={searchRes} />
+            </div>
+          )}
         </div>
       )}
 
@@ -145,12 +171,14 @@ export default function ResearchModulePage({ subPage, onSelectSubPage }: ModuleP
       {/* 62. COMPETITOR INTELLIGENCE */}
       {page.id === "competitor" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="card-title"><span>Product & Competitor Research (/api/v1/atlas/shopping/research)</span></div>
+          <div className="card-title"><span>Product &amp; Competitor Research</span></div>
           <form onSubmit={runCompetitor} className="row">
             <input className="input" style={{ flex: 1 }} value={compQuery} onChange={(e) => setCompQuery(e.target.value)} placeholder="Compare competitor product, pricing, or vendor..." />
             <button type="submit" className="btn">Analyze</button>
           </form>
-          {compRes && <pre className="code-block">{JSON.stringify(compRes, null, 2)}</pre>}
+          {compRes && (
+            <ReadableSummary title="Competitive Research Summary" data={compRes} diagnosticsTitle="Technical Diagnostics — Competitor Payload" />
+          )}
         </div>
       )}
 
@@ -171,11 +199,17 @@ export default function ResearchModulePage({ subPage, onSelectSubPage }: ModuleP
           <div className="grid-2">
             <div className="card">
               <div className="card-title"><span>Financial Cash-Flow Forecast</span></div>
-              <pre className="code-block">{JSON.stringify(forecast || { status: "No recorded ledger entries yet" }, null, 2)}</pre>
+              <ReadableSummary
+                data={forecast || { status: "No recorded ledger entries yet" }}
+                diagnosticsTitle="Technical Diagnostics — Forecast Telemetry"
+              />
             </div>
             <div className="card">
               <div className="card-title"><span>TURBO Runtime Stats</span></div>
-              <pre className="code-block">{JSON.stringify(turbo || { status: "Loading..." }, null, 2)}</pre>
+              <ReadableSummary
+                data={turbo || { status: "Ready" }}
+                diagnosticsTitle="Technical Diagnostics — TURBO Stats"
+              />
             </div>
           </div>
         </div>

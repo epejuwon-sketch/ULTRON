@@ -132,6 +132,11 @@ def _extract_content(filename: str, raw_bytes: bytes) -> tuple[str, dict[str, An
     return "", meta
 
 
+def _safe_folder(folder: str | None) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._\- /]+", "_", (folder or "General").strip()).strip("/")
+    return cleaned[:80] or "General"
+
+
 def ingest_uploaded_file(
     db: Session,
     *,
@@ -141,6 +146,7 @@ def ingest_uploaded_file(
     raw_bytes: bytes,
     mime_type: str = "application/octet-stream",
     project_id: str | None = None,
+    folder: str | None = None,
     storage: BaseStorageAdapter | None = None,
 ) -> dict[str, Any]:
     """Validate, hash, scan, redact secrets, extract text, tag as untrusted, and persist via StorageAdapter."""
@@ -179,6 +185,7 @@ def ingest_uploaded_file(
     meta["storage_backend"] = adapter.backend_name
     meta["private_bucket"] = True
     meta["deleted"] = False
+    meta["folder"] = _safe_folder(folder)
 
     rec = FileRecord(
         file_id=file_id,
@@ -204,7 +211,7 @@ def ingest_uploaded_file(
         actor=principal.username,
         action="FILE_HUB_UPLOAD",
         resource=file_id,
-        outcome=f"{safe_name}|bytes={len(raw_bytes)}|scan={scan_status}|backend={adapter.backend_name}",
+        outcome=f"{safe_name}|bytes={len(raw_bytes)}|scan={scan_status}|backend={adapter.backend_name}|folder={meta['folder']}",
     )
     db.commit()
     db.refresh(rec)
@@ -220,6 +227,7 @@ def generate_and_store_file(
     content_bytes: bytes,
     mime_type: str = "text/plain",
     project_id: str | None = None,
+    folder: str | None = None,
     metadata: dict[str, Any] | None = None,
     storage: BaseStorageAdapter | None = None,
 ) -> dict[str, Any]:
@@ -243,6 +251,7 @@ def generate_and_store_file(
     meta["storage_backend"] = adapter.backend_name
     meta["private_bucket"] = True
     meta["deleted"] = False
+    meta["folder"] = _safe_folder(folder or meta.get("folder") or "Generated")
 
     rec = FileRecord(
         file_id=file_id,
@@ -439,12 +448,139 @@ def restore_file(
     return _serialize_file(rec, include_text=False)
 
 
+def update_file_metadata(
+    db: Session,
+    *,
+    principal: Principal,
+    file_id: str,
+    filename: str | None = None,
+    folder: str | None = None,
+) -> dict[str, Any]:
+    """Rename a stored file and/or move it to another folder with tenant isolation and audit logging."""
+    rec = get_file_record(db, tenant_id=principal.tenant_id, file_id=file_id)
+    meta = json.loads(rec.metadata_json or "{}")
+    if meta.get("deleted"):
+        raise ConflictError(f"File '{file_id}' is soft-deleted; restore it before editing.")
+
+    changes: list[str] = []
+    if filename is not None and filename.strip():
+        new_name = _safe_filename(filename)
+        ext = Path(new_name).suffix.lower()
+        if ext in BLOCKED_EXTENSIONS:
+            raise ValidationError(f"Executable file extension '{ext}' is blocked by AEGIS file intake policy.")
+        if new_name != rec.filename:
+            changes.append(f"rename:{rec.filename}->{new_name}")
+            rec.filename = new_name
+    if folder is not None:
+        new_folder = _safe_folder(folder)
+        prev_folder = meta.get("folder", "General")
+        if new_folder != prev_folder:
+            changes.append(f"folder:{prev_folder}->{new_folder}")
+            meta["folder"] = new_folder
+
+    rec.metadata_json = json.dumps(meta, default=str)
+    if changes:
+        append_audit_log(
+            db,
+            tenant_id=principal.tenant_id,
+            actor=principal.username,
+            action="FILE_HUB_UPDATED",
+            resource=rec.file_id,
+            outcome=";".join(changes),
+        )
+    db.commit()
+    db.refresh(rec)
+    return _serialize_file(rec, include_text=True)
+
+
+def load_files_for_neon(
+    db: Session,
+    *,
+    tenant_id: str,
+    file_ids: list[str],
+    settings: Settings,
+    storage: BaseStorageAdapter | None = None,
+) -> dict[str, Any]:
+    """Load tenant-isolated uploaded files into Gemini multimodal inlineData parts + extracted document excerpts."""
+    import base64
+
+    multimodal_parts: list[dict[str, Any]] = []
+    document_excerpts: list[dict[str, Any]] = []
+    attached_files: list[dict[str, Any]] = []
+
+    seen: set[str] = set()
+    for fid in file_ids[:8]:
+        clean_id = (fid or "").strip()
+        if not clean_id or clean_id in seen:
+            continue
+        seen.add(clean_id)
+        rec, raw = download_file_bytes(
+            db,
+            tenant_id=tenant_id,
+            file_id=clean_id,
+            settings=settings,
+            storage=storage,
+        )
+        ext = Path(rec.filename).suffix.lower()
+        is_image = rec.mime_type.lower().startswith("image/") or ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        if is_image:
+            effective_mime = rec.mime_type if rec.mime_type.lower().startswith("image/") else (
+                "image/png" if ext == ".png" else "image/webp" if ext == ".webp" else "image/gif" if ext == ".gif" else "image/jpeg"
+            )
+            multimodal_parts.append(
+                {
+                    "inlineData": {
+                        "mimeType": effective_mime,
+                        "data": base64.b64encode(raw).decode("ascii"),
+                    }
+                }
+            )
+            attached_files.append(
+                {
+                    "file_id": rec.file_id,
+                    "filename": rec.filename,
+                    "mime_type": effective_mime,
+                    "size_bytes": rec.size_bytes,
+                    "analysis_mode": "multimodal_inline_image",
+                }
+            )
+        else:
+            excerpt = (rec.extracted_text or "").strip()[:12000]
+            document_excerpts.append(
+                {
+                    "file_id": rec.file_id,
+                    "filename": rec.filename,
+                    "mime_type": rec.mime_type,
+                    "scan_status": rec.scan_status,
+                    "content": excerpt or "(Binary file without extractable text)",
+                }
+            )
+            attached_files.append(
+                {
+                    "file_id": rec.file_id,
+                    "filename": rec.filename,
+                    "mime_type": rec.mime_type,
+                    "size_bytes": rec.size_bytes,
+                    "analysis_mode": "extracted_document_text",
+                    "chars_provided": len(excerpt),
+                }
+            )
+
+    return {
+        "multimodal_parts": multimodal_parts,
+        "document_excerpts": document_excerpts,
+        "attached_files": attached_files,
+    }
+
+
 def list_files(
     db: Session,
     *,
     tenant_id: str,
     direction: str | None = None,
     project_id: str | None = None,
+    folder: str | None = None,
+    search: str | None = None,
     include_deleted: bool = False,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -455,9 +591,16 @@ def list_files(
         stmt = stmt.where(FileRecord.project_id == project_id)
     rows = db.execute(stmt.order_by(FileRecord.created_at.desc()).limit(limit)).scalars().all()
     items = []
+    folder_clean = folder.strip().lower() if folder else ""
+    search_clean = search.strip().lower() if search else ""
     for r in rows:
         meta = json.loads(r.metadata_json or "{}")
         if not include_deleted and meta.get("deleted"):
+            continue
+        item_folder = str(meta.get("folder") or "General")
+        if folder_clean and folder_clean != "all" and item_folder.lower() != folder_clean:
+            continue
+        if search_clean and search_clean not in r.filename.lower() and search_clean not in item_folder.lower():
             continue
         items.append(_serialize_file(r, include_text=False))
     return items
@@ -474,10 +617,14 @@ def get_file_record(db: Session, *, tenant_id: str, file_id: str) -> FileRecord:
 
 def _serialize_file(f: FileRecord, *, include_text: bool = False) -> dict[str, Any]:
     meta = json.loads(f.metadata_json or "{}")
+    ext = Path(f.filename).suffix.lower()
+    is_image = f.mime_type.lower().startswith("image/") or ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     data: dict[str, Any] = {
         "file_id": f.file_id,
         "filename": f.filename,
+        "folder": str(meta.get("folder") or "General"),
         "mime_type": f.mime_type,
+        "is_image": is_image,
         "size_bytes": f.size_bytes,
         "sha256_hash": f.sha256_hash,
         "direction": f.direction,
@@ -485,12 +632,14 @@ def _serialize_file(f: FileRecord, *, include_text: bool = False) -> dict[str, A
         "secrets_redacted": f.secrets_redacted,
         "untrusted_content_tagged": f.untrusted_content_tagged,
         "deleted": bool(meta.get("deleted", False)),
+        "is_deleted": bool(meta.get("deleted", False)),
         "storage_backend": meta.get("storage_backend", "local_disk"),
         "metadata": meta,
         "project_id": f.project_id,
         "created_by": f.created_by,
         "created_at": f.created_at.isoformat(),
         "download_url": f"/api/v1/files/{f.file_id}/download",
+        "preview_url": f"/api/v1/files/{f.file_id}/preview",
     }
     if include_text:
         data["extracted_text"] = f.extracted_text

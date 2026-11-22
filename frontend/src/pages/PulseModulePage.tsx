@@ -13,6 +13,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 export default function PulseModulePage({ subPage, onSelectSubPage, onNavigate }: ModulePageProps) {
   const mod = getModule("pulse");
@@ -144,7 +145,7 @@ export default function PulseModulePage({ subPage, onSelectSubPage, onNavigate }
           <div className="card">
             <div className="card-title"><span>Live Telemetry Hydration</span></div>
             {liveData ? (
-              <pre className="code-block">{JSON.stringify(liveData, null, 2)}</pre>
+              <ReadableSummary title="Hydrated Page Telemetry" data={liveData} diagnosticsTitle="Technical Diagnostics — Live Page Payload" />
             ) : (
               <EmptyState title="Select a Page" description="Click Hydrate Live to fetch current backend metrics." />
             )}
@@ -172,8 +173,11 @@ export default function PulseModulePage({ subPage, onSelectSubPage, onNavigate }
       {/* 77. PAGE ANALYTICS */}
       {page.id === "analytics" && (
         <div className="card">
-          <div className="card-title"><span>Runtime HTTP & System Analytics (/api/v1/monitoring/overview)</span></div>
-          <pre className="code-block">{JSON.stringify(monitoring || { status: "Loading..." }, null, 2)}</pre>
+          <div className="card-title"><span>Runtime HTTP &amp; System Analytics</span></div>
+          <ReadableSummary
+            data={monitoring || { status: "Loading..." }}
+            diagnosticsTitle="Technical Diagnostics — Monitoring Overview"
+          />
         </div>
       )}
 
@@ -192,7 +196,11 @@ export default function PulseModulePage({ subPage, onSelectSubPage, onNavigate }
               <textarea className="textarea mono" rows={4} value={toolArgs} onChange={(e) => setToolArgs(e.target.value)} placeholder='{"key": "value"}' />
               <button type="submit" className="btn"><Play size={14} /> Execute Tool</button>
             </form>
-            {toolOutput && <pre className="code-block" style={{ marginTop: 10 }}>{JSON.stringify(toolOutput, null, 2)}</pre>}
+            {toolOutput && (
+              <div style={{ marginTop: 10 }}>
+                <ReadableSummary title="Tool Execution Result" data={toolOutput} diagnosticsTitle="Technical Diagnostics — Raw Tool Output" />
+              </div>
+            )}
           </div>
           <div className="card">
             <div className="card-title"><span>Authorized Tool Registry</span></div>

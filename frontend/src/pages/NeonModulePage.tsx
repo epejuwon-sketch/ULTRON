@@ -1,18 +1,25 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Bot,
+  Camera,
   Check,
   Copy,
+  Mic,
+  MicOff,
   Paperclip,
   Plus,
   RefreshCw,
   Send,
+  Share2,
   Sparkles,
   Upload,
+  Volume2,
+  VolumeX,
+  X,
 } from "lucide-react";
 import { apiFetch, streamNeon } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import type { ModulePageProps } from "../types/module";
+import type { AttachedFileRef, ModulePageProps } from "../types/module";
 import {
   DataTable,
   EmptyState,
@@ -24,6 +31,12 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import {
+  ProvenanceBar,
+  ReadableSummary,
+  SourcesList,
+  TechnicalDiagnostics,
+} from "../components/ui/HumanPresentation";
 
 function renderFormattedMessage(content: string, onCopy: (code: string) => void) {
   const parts = content.split(/(```[\s\S]*?```)/g);
@@ -59,6 +72,8 @@ export default function NeonModulePage({
   onNavigate,
   pendingPrompt,
   onClearPendingPrompt,
+  pendingFiles,
+  onClearPendingFiles,
   initialShare,
 }: ModulePageProps) {
   const mod = getModule("neon");
@@ -68,16 +83,31 @@ export default function NeonModulePage({
   const [conversations, setConversations] = useState<any[]>([]);
   const [activeId, setActiveId] = useState("");
   const [messages, setMessages] = useState<any[]>([]);
+  const [messageExtras, setMessageExtras] = useState<
+    Record<
+      string,
+      {
+        provenance?: any;
+        research_sources?: any[];
+        attached_files?: any[];
+        diagnostics?: any;
+      }
+    >
+  >({});
   const [agents, setAgents] = useState<any[]>([]);
   const [selectedAgent, setSelectedAgent] = useState("AGT-01");
   const [input, setInput] = useState("");
   const [useStream, setUseStream] = useState(false);
   const [sending, setSending] = useState(false);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [warning, setWarning] = useState("");
   const [error, setError] = useState("");
   const [convSearch, setConvSearch] = useState("");
   const [newTitle, setNewTitle] = useState("");
-  const [attachedFile, setAttachedFile] = useState<{ file_id: string; filename: string; text: string } | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFileRef[]>([]);
+  const [listening, setListening] = useState(false);
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Models, tiers, usage, health, Gemini diagnostics, settings
   const [models, setModels] = useState<any>(null);
@@ -153,6 +183,36 @@ export default function NeonModulePage({
   }, [pendingPrompt]);
 
   useEffect(() => {
+    if (pendingFiles && pendingFiles.length > 0) {
+      setAttachedFiles((prev) => {
+        const seen = new Set(prev.map((p) => p.file_id));
+        const merged = [...prev];
+        for (const f of pendingFiles) {
+          if (!seen.has(f.file_id)) {
+            merged.push(f);
+            seen.add(f.file_id);
+          }
+        }
+        return merged;
+      });
+      onClearPendingFiles?.();
+    }
+  }, [pendingFiles]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        recognitionRef.current?.stop?.();
+        if (typeof window !== "undefined" && "speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+        }
+      } catch {
+        // ignore cleanup errors
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (initialShare && (initialShare.url || initialShare.text || initialShare.title)) {
       apiFetch<any>("/api/v1/bridge/share", {
         method: "POST",
@@ -178,44 +238,145 @@ export default function NeonModulePage({
     try {
       await navigator.clipboard.writeText(code);
       setCopiedFlag(true);
-      pushToast("Code block copied to clipboard.", "success");
+      pushToast("Copied to clipboard.", "success");
       window.setTimeout(() => setCopiedFlag(false), 1800);
     } catch {
       pushToast("Clipboard access unavailable.", "error");
     }
   }
 
-  async function handleAttachFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file);
+  function handleSpeak(msgId: string, text: string) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      pushToast("Voice readout (Speech Synthesis) is not supported in this browser.", "error");
+      return;
+    }
+    if (speakingMsgId === msgId) {
+      window.speechSynthesis.cancel();
+      setSpeakingMsgId(null);
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.onend = () => setSpeakingMsgId(null);
+    utter.onerror = () => setSpeakingMsgId(null);
+    setSpeakingMsgId(msgId);
+    window.speechSynthesis.speak(utter);
+  }
+
+  async function handleShareMessage(text: string) {
     try {
-      const res = await apiFetch<any>("/api/v1/files/upload", {
-        method: "POST",
-        body: fd,
-        isFormData: true,
-      });
-      setAttachedFile({
-        file_id: res.file_id,
-        filename: res.filename,
-        text: (res.extracted_text || "").slice(0, 2000),
-      });
-      pushToast(`Attached ${res.filename} (VAULT scanned).`, "success");
+      if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+        await navigator.share({ title: "ULTRON OS · NEON Response", text });
+        pushToast("Shared via system share sheet.", "success");
+      } else {
+        await navigator.clipboard.writeText(text);
+        pushToast("Native share unavailable — copied response to clipboard.", "info");
+      }
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        pushToast("Could not share response.", "error");
+      }
+    }
+  }
+
+  function handleToggleVoiceInput() {
+    if (listening) {
+      try {
+        recognitionRef.current?.stop?.();
+      } catch {
+        // ignore
+      }
+      setListening(false);
+      return;
+    }
+    const SpeechRec =
+      typeof window !== "undefined" &&
+      ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+    if (!SpeechRec) {
+      pushToast("Speech-to-Text is not supported in this browser. Check ORBIT Device Permissions.", "error");
+      return;
+    }
+    try {
+      const rec = new SpeechRec();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = "en-US";
+      rec.onresult = (ev: any) => {
+        const transcript = ev.results?.[0]?.[0]?.transcript || "";
+        if (transcript) {
+          setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+          pushToast("Voice captured into NEON composer.", "success");
+        }
+      };
+      rec.onerror = (ev: any) => {
+        pushToast(`Voice input error: ${ev?.error || "permission denied"}`, "error");
+        setListening(false);
+      };
+      rec.onend = () => setListening(false);
+      recognitionRef.current = rec;
+      rec.start();
+      setListening(true);
+      pushToast("Listening for voice command...", "info");
+    } catch (err: any) {
+      pushToast(err?.message || "Could not start microphone.", "error");
+      setListening(false);
+    }
+  }
+
+  async function handleAttachFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const fileList = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (fileList.length === 0) return;
+
+    const MAX_BYTES = 10 * 1024 * 1024;
+    setUploadingFiles(true);
+    const uploaded: AttachedFileRef[] = [];
+    try {
+      for (const file of fileList) {
+        if (file.size > MAX_BYTES) {
+          pushToast(`Skipped ${file.name}: exceeds 10 MB limit.`, "error");
+          continue;
+        }
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("folder", "neon-attachments");
+        const res = await apiFetch<any>("/api/v1/files/upload", {
+          method: "POST",
+          body: fd,
+          isFormData: true,
+        });
+        uploaded.push({
+          file_id: res.file_id,
+          filename: res.filename,
+          mime_type: res.mime_type,
+          is_image: Boolean(res.is_image || (res.mime_type || "").startsWith("image/")),
+          size_bytes: res.size_bytes,
+        });
+      }
+      if (uploaded.length > 0) {
+        setAttachedFiles((prev) => [...prev, ...uploaded]);
+        pushToast(
+          `Attached ${uploaded.length} file${uploaded.length === 1 ? "" : "s"} for multimodal Gemini analysis.`,
+          "success"
+        );
+      }
     } catch (err: any) {
       pushToast(err.message, "error");
+    } finally {
+      setUploadingFiles(false);
     }
   }
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() && attachedFiles.length === 0) return;
     setSending(true);
     setError("");
     setWarning("");
-    const composed = attachedFile
-      ? `${input.trim()}\n\n[Attached File: ${attachedFile.filename}]\n${attachedFile.text}`
-      : input.trim();
+    const promptText =
+      input.trim() ||
+      `Analyze the attached file${attachedFiles.length === 1 ? "" : "s"} (${attachedFiles.map((f) => f.filename).join(", ")}) and explain the key contents in natural language.`;
+    const fileIds = attachedFiles.map((f) => f.file_id);
 
     try {
       if (useStream) {
@@ -223,11 +384,11 @@ export default function NeonModulePage({
         const aId = `a_${Date.now() + 1}`;
         setMessages((prev) => [
           ...prev,
-          { message_id: uId, role: "user", content: composed },
+          { message_id: uId, role: "user", content: promptText },
           { message_id: aId, role: "assistant", content: "", model: "streaming..." },
         ]);
         await streamNeon(
-          composed,
+          promptText,
           selectedAgent,
           (delta) => {
             setMessages((prev) =>
@@ -240,14 +401,24 @@ export default function NeonModulePage({
                 m.message_id === aId ? { ...m, model: `${meta.model} (${meta.execution_mode})` } : m
               )
             );
-          }
+            setMessageExtras((prev) => ({
+              ...prev,
+              [aId]: {
+                provenance: meta.provenance,
+                research_sources: meta.research_sources,
+                attached_files: meta.attached_files,
+                diagnostics: meta,
+              },
+            }));
+          },
+          fileIds
         );
       } else {
         let cid = activeId;
         if (!cid) {
           const created = await apiFetch<any>("/api/v1/neon/conversations", {
             method: "POST",
-            body: { title: input.trim().slice(0, 48), agent_id: selectedAgent },
+            body: { title: promptText.slice(0, 48), agent_id: selectedAgent },
           });
           cid = created.conversation_id;
           setActiveId(cid);
@@ -255,15 +426,41 @@ export default function NeonModulePage({
         }
         const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}/messages`, {
           method: "POST",
-          body: { content: composed },
+          body: {
+            content: promptText,
+            file_ids: fileIds.length > 0 ? fileIds : undefined,
+            enable_web_research: true,
+          },
         });
         if (res.secret_interception?.warnings?.length) {
           setWarning(res.secret_interception.warnings.join(" "));
         }
+        const assistantId = res.assistant_message_id || res.assistant_message?.message_id;
+        const replyData = res.reply || res;
+        if (assistantId) {
+          setMessageExtras((prev) => ({
+            ...prev,
+            [assistantId]: {
+              provenance: res.provenance || replyData.provenance,
+              research_sources: res.research_sources || replyData.research_sources || [],
+              attached_files: res.attached_files || replyData.attached_files || [],
+              diagnostics: {
+                execution_id: replyData.execution_id,
+                provider: replyData.provider,
+                model: replyData.model,
+                execution_mode: replyData.execution_mode,
+                fallback_used: replyData.fallback_used,
+                provenance: res.provenance || replyData.provenance,
+                attached_files: res.attached_files || replyData.attached_files,
+                research_sources: res.research_sources || replyData.research_sources,
+              },
+            },
+          }));
+        }
         await loadMessages(cid);
       }
       setInput("");
-      setAttachedFile(null);
+      setAttachedFiles([]);
     } catch (err: any) {
       setError(err.message);
       pushToast(err.message, "error");
@@ -425,56 +622,143 @@ export default function NeonModulePage({
             {messages.length === 0 ? (
               <EmptyState
                 title="NEON Ready"
-                description="Type a prompt, attach a document, or switch agents. Raw secrets and card numbers are automatically intercepted by VAULT."
+                description="Ask anything in plain language, speak with voice input, take a photo, or attach images and PDFs. Live web research and VAULT protection run automatically."
               />
             ) : (
-              messages.map((m) => (
-                <div key={m.message_id} className={`neon-bubble ${m.role === "user" ? "neon-user" : "neon-assistant"}`}>
-                  <div className="row-between" style={{ marginBottom: 6 }}>
-                    <span className="mono-tag">
-                      {m.role === "user" ? "OPERATOR" : `NEON · ${selectedAgent}`}
-                    </span>
-                    <div className="row">
-                      {m.model && <span className="muted mono" style={{ fontSize: 11 }}>{m.model}</span>}
-                      {m.role === "assistant" && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => handleCopyCode(m.content || "")}
-                          aria-label="Copy response"
-                        >
-                          {copiedFlag ? <Check size={12} /> : <Copy size={12} />}
-                        </button>
-                      )}
+              messages.map((m) => {
+                const extra = messageExtras[m.message_id];
+                return (
+                  <div key={m.message_id} className={`neon-bubble ${m.role === "user" ? "neon-user" : "neon-assistant"}`}>
+                    <div className="row-between" style={{ marginBottom: 6 }}>
+                      <span className="mono-tag">
+                        {m.role === "user" ? "OPERATOR" : `NEON · ${selectedAgent}`}
+                      </span>
+                      <div className="row">
+                        {m.model && <span className="muted mono" style={{ fontSize: 11 }}>{m.model}</span>}
+                        {m.role === "assistant" && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleSpeak(m.message_id, String(m.content || ""))}
+                              aria-label={speakingMsgId === m.message_id ? "Stop voice readout" : "Read response aloud"}
+                              title={speakingMsgId === m.message_id ? "Stop voice readout" : "Read aloud"}
+                            >
+                              {speakingMsgId === m.message_id ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleShareMessage(String(m.content || ""))}
+                              aria-label="Share response"
+                              title="Share"
+                            >
+                              <Share2 size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleCopyCode(m.content || "")}
+                              aria-label="Copy response"
+                              title="Copy"
+                            >
+                              {copiedFlag ? <Check size={12} /> : <Copy size={12} />}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
+                    {renderFormattedMessage(String(m.content || ""), handleCopyCode)}
+                    {extra?.attached_files && extra.attached_files.length > 0 && (
+                      <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                        {extra.attached_files.map((af: any) => (
+                          <span key={af.file_id || af.filename} className="pill mono">
+                            {af.is_image ? "Image" : "Doc"}: {af.filename}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {extra?.research_sources && extra.research_sources.length > 0 && (
+                      <SourcesList sources={extra.research_sources} />
+                    )}
+                    {extra?.provenance && <ProvenanceBar provenance={extra.provenance} />}
+                    {extra?.diagnostics && (
+                      <TechnicalDiagnostics title="Technical Diagnostics (Authorized Debugging)" data={extra.diagnostics} />
+                    )}
                   </div>
-                  {renderFormattedMessage(String(m.content || ""), handleCopyCode)}
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
-          {attachedFile && (
-            <div className="alert-box row-between">
-              <span>Attached: <strong>{attachedFile.filename}</strong> (VAULT scanned)</span>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setAttachedFile(null)}>Remove</button>
+          {attachedFiles.length > 0 && (
+            <div className="alert-box" style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <span className="muted" style={{ fontSize: 12 }}>Attached for Gemini analysis:</span>
+              {attachedFiles.map((f) => (
+                <span key={f.file_id} className="pill pill-cyan" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  {f.is_image ? "IMG" : "FILE"} · {f.filename}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${f.filename}`}
+                    onClick={() => setAttachedFiles((prev) => prev.filter((item) => item.file_id !== f.file_id))}
+                    style={{ background: "none", border: 0, color: "inherit", cursor: "pointer", padding: 0, display: "inline-flex" }}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
             </div>
           )}
 
-          <form onSubmit={handleSend} className="row">
-            <label className="btn btn-secondary btn-sm" title="Attach file to NEON">
+          {uploadingFiles && <div className="muted mono" style={{ fontSize: 12 }}>Uploading &amp; scanning attachment(s) with AEGIS + VAULT...</div>}
+
+          <form onSubmit={handleSend} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+            <label className="btn btn-secondary btn-sm" title="Attach image, PDF, or document to NEON" aria-label="Attach files">
               <Paperclip size={14} />
-              <input type="file" style={{ display: "none" }} onChange={handleAttachFile} />
+              <input
+                id="neon-file-attach-input"
+                type="file"
+                multiple
+                accept="image/*,.pdf,.txt,.md,.csv,.json,.docx,.py,.ts,.tsx,.js"
+                style={{ display: "none" }}
+                onChange={handleAttachFiles}
+              />
             </label>
+            <label className="btn btn-secondary btn-sm" title="Take photo with iPhone camera" aria-label="Capture photo with camera">
+              <Camera size={14} />
+              <input
+                id="neon-camera-capture-input"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: "none" }}
+                onChange={handleAttachFiles}
+              />
+            </label>
+            <button
+              id="neon-voice-btn"
+              type="button"
+              className={`btn btn-sm ${listening ? "" : "btn-secondary"}`}
+              onClick={handleToggleVoiceInput}
+              title={listening ? "Stop listening" : "Voice input (Speech-to-Text)"}
+              aria-label={listening ? "Stop listening" : "Voice input"}
+            >
+              {listening ? <MicOff size={14} /> : <Mic size={14} />}
+            </button>
             <input
               id="neon-chat-input"
               className="input"
-              style={{ flex: 1 }}
+              style={{ flex: 1, minWidth: 160 }}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={useStream ? "Stream response via /api/v1/neon/stream..." : "Send message to NEON..."}
+              placeholder={useStream ? "Stream response via Gemini..." : "Ask NEON anything or attach files..."}
             />
-            <button id="neon-chat-send" type="submit" className="btn" disabled={sending || !input.trim()}>
+            <button
+              id="neon-chat-send"
+              type="submit"
+              className="btn"
+              disabled={sending || uploadingFiles || (!input.trim() && attachedFiles.length === 0)}
+            >
               <Send size={14} /> {sending ? "Working..." : "Send"}
             </button>
           </form>
@@ -736,8 +1020,11 @@ export default function NeonModulePage({
             <MetricDisplay label="Est. Cost (USD)" value={`$${Number(usage?.estimated_cost_usd || 0).toFixed(4)}`} tone="success" />
           </div>
           <div className="card">
-            <div className="card-title"><span>NEON Telemetry Breakdown (/api/v1/neon/usage)</span></div>
-            <pre className="code-block">{JSON.stringify(usage, null, 2)}</pre>
+            <div className="card-title"><span>NEON Usage &amp; Provider Breakdown</span></div>
+            <ReadableSummary
+              data={usage || { status: "No invocations recorded yet in this tenant." }}
+              diagnosticsTitle="Technical Diagnostics — Raw Usage Telemetry"
+            />
           </div>
         </div>
       )}
@@ -745,7 +1032,7 @@ export default function NeonModulePage({
       {/* 16. MULTIMODAL WORKSPACE */}
       {page.id === "multimodal" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="card-title"><span>Multimodal Vision & Document Analysis</span></div>
+          <div className="card-title"><span>Multimodal Vision &amp; Document Analysis</span></div>
           <textarea
             className="textarea"
             rows={2}
@@ -753,14 +1040,24 @@ export default function NeonModulePage({
             onChange={(e) => setMmPrompt(e.target.value)}
             placeholder="Instruction for NEON visual analysis..."
           />
-          <label className="btn" style={{ alignSelf: "flex-start" }}>
-            <Upload size={14} /> Select Image for NEON Vision Analysis
-            <input type="file" accept="image/*" style={{ display: "none" }} onChange={handleMultimodalUpload} />
-          </label>
+          <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+            <label className="btn">
+              <Upload size={14} /> Select Image for NEON Vision Analysis
+              <input type="file" accept="image/*" style={{ display: "none" }} onChange={handleMultimodalUpload} />
+            </label>
+            <label className="btn btn-secondary">
+              <Camera size={14} /> Capture Photo (Camera)
+              <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleMultimodalUpload} />
+            </label>
+          </div>
           {mmResult ? (
-            <pre className="code-block">{JSON.stringify(mmResult, null, 2)}</pre>
+            <ReadableSummary
+              title="Visual Analysis Result"
+              data={mmResult}
+              diagnosticsTitle="Technical Diagnostics — Visual Analysis Payload"
+            />
           ) : (
-            <div className="muted">Uploads are analyzed through POST /api/v1/creative/visual/analyze without fabricating findings.</div>
+            <div className="muted">Uploads are analyzed through Google Gemini Vision without fabricating findings.</div>
           )}
           <div className="row">
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigate("agents", "workspace")}>

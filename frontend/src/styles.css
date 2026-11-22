@@ -1011,11 +1011,28 @@ h3 {
   width: 100%;
   min-width: 0;
   background: var(--bg-input);
+  background-color: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 9px 11px;
   font-size: 13.5px;
   color: var(--text);
+}
+
+.select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 30px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted, #94a3b8) 50%),
+    linear-gradient(135deg, var(--text-muted, #94a3b8) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.select option {
+  background-color: var(--bg-elevated, #0f172a);
+  color: var(--text, #f8fafc);
 }
 
 .input:focus,

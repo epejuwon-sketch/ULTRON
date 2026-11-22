@@ -15,6 +15,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 export default function SecurityModulePage({ subPage, onSelectSubPage, onNavigate, user }: ModulePageProps) {
   const mod = getModule("security");
@@ -320,7 +321,9 @@ export default function SecurityModulePage({ subPage, onSelectSubPage, onNavigat
               Rebaseline FIM
             </button>
           </div>
-          {diagResult && <pre className="code-block">{JSON.stringify(diagResult, null, 2)}</pre>}
+          {diagResult && (
+            <ReadableSummary title="Security Diagnostic Result" data={diagResult} diagnosticsTitle="Technical Diagnostics — AEGIS Payload" />
+          )}
         </div>
       )}
 

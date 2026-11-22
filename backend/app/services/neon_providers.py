@@ -70,6 +70,7 @@ class BaseLLMProvider(ABC):
         response_mime_type: str | None = None,
         response_schema: dict[str, Any] | None = None,
         function_declarations: list[dict[str, Any]] | None = None,
+        multimodal_parts: list[dict[str, Any]] | None = None,
         timeout_seconds: float = 25.0,
     ) -> dict[str, Any]:
         ...
@@ -99,6 +100,7 @@ class GeminiLLMProvider(BaseLLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict[str, Any] | None = None,
         function_declarations: list[dict[str, Any]] | None = None,
+        multimodal_parts: list[dict[str, Any]] | None = None,
         timeout_seconds: float = 25.0,
     ) -> dict[str, Any]:
         return self._client.generate(
@@ -110,6 +112,7 @@ class GeminiLLMProvider(BaseLLMProvider):
             response_mime_type=response_mime_type,
             response_schema=response_schema,
             function_declarations=function_declarations,
+            multimodal_parts=multimodal_parts,
             timeout_seconds=timeout_seconds,
         )
 
@@ -142,6 +145,7 @@ class OpenAILLMProvider(BaseLLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict[str, Any] | None = None,
         function_declarations: list[dict[str, Any]] | None = None,
+        multimodal_parts: list[dict[str, Any]] | None = None,
         timeout_seconds: float = 25.0,
     ) -> dict[str, Any]:
         if not self.is_configured():
@@ -220,6 +224,7 @@ class AnthropicLLMProvider(BaseLLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict[str, Any] | None = None,
         function_declarations: list[dict[str, Any]] | None = None,
+        multimodal_parts: list[dict[str, Any]] | None = None,
         timeout_seconds: float = 25.0,
     ) -> dict[str, Any]:
         if not self.is_configured():
@@ -293,6 +298,7 @@ class OllamaLLMProvider(BaseLLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict[str, Any] | None = None,
         function_declarations: list[dict[str, Any]] | None = None,
+        multimodal_parts: list[dict[str, Any]] | None = None,
         timeout_seconds: float = 25.0,
     ) -> dict[str, Any]:
         if not self.is_configured():
@@ -507,6 +513,7 @@ def execute_with_failover(
     response_mime_type: str | None = None,
     response_schema: dict[str, Any] | None = None,
     function_declarations: list[dict[str, Any]] | None = None,
+    multimodal_parts: list[dict[str, Any]] | None = None,
     max_retries_per_provider: int = 1,
     timeout_seconds: float | None = None,
     providers: list[BaseLLMProvider] | None = None,
@@ -540,6 +547,7 @@ def execute_with_failover(
                         response_mime_type=response_mime_type,
                         response_schema=response_schema,
                         function_declarations=function_declarations,
+                        multimodal_parts=multimodal_parts,
                         timeout_seconds=effective_timeout,
                     )
                     return result, errors
@@ -568,17 +576,20 @@ def execute_with_failover(
         target_model = primary_model if provider.provider_name == "gemini" else provider.default_model()
         for attempt in range(max_retries_per_provider + 1):
             try:
-                result = provider.generate(
-                    prompt=prompt,
-                    system_instruction=system_instruction,
-                    model=target_model,
-                    temperature=temperature,
-                    max_output_tokens=max_output_tokens,
-                    response_mime_type=response_mime_type,
-                    response_schema=response_schema,
-                    function_declarations=function_declarations,
-                    timeout_seconds=effective_timeout,
-                )
+                gen_kwargs: dict[str, Any] = {
+                    "prompt": prompt,
+                    "system_instruction": system_instruction,
+                    "model": target_model,
+                    "temperature": temperature,
+                    "max_output_tokens": max_output_tokens,
+                    "response_mime_type": response_mime_type,
+                    "response_schema": response_schema,
+                    "function_declarations": function_declarations,
+                    "timeout_seconds": effective_timeout,
+                }
+                if provider.provider_name == "gemini" and multimodal_parts:
+                    gen_kwargs["multimodal_parts"] = multimodal_parts
+                result = provider.generate(**gen_kwargs)
                 return result, errors
             except Exception as exc:
                 errors.append(

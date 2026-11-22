@@ -18,6 +18,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 type AgentFilter = "all" | "core" | "specialist" | "active" | "idle" | "attention";
 
@@ -775,7 +776,10 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
 
           <div className="card">
             <div className="card-title"><span>TURBO Runtime Telemetry</span></div>
-            <pre className="code-block">{JSON.stringify(turboStats || { registered_agents: agents.length, policy: "ZERO_FABRICATION_ENFORCED" }, null, 2)}</pre>
+            <ReadableSummary
+              data={turboStats || { registered_agents: agents.length, policy: "ZERO_FABRICATION_ENFORCED" }}
+              diagnosticsTitle="Technical Diagnostics — TURBO Telemetry"
+            />
           </div>
         </div>
       )}

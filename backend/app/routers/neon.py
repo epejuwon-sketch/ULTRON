@@ -129,6 +129,8 @@ def api_neon_complete(
         context=merged_context or None,
         reasoning_tier=tier,
         response_format=body.response_format,
+        file_ids=body.file_ids,
+        enable_web_research=body.enable_web_research,
         temperature=body.temperature,
         max_output_tokens=body.max_output_tokens,
         tenant_id=principal.tenant_id,
@@ -216,6 +218,8 @@ def api_send_conversation_message(
         content=body.content,
         settings=settings,
         reasoning_tier=body.reasoning_tier,
+        file_ids=body.file_ids,
+        enable_web_research=body.enable_web_research,
     )
 
 

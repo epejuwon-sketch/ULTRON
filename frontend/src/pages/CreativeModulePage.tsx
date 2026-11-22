@@ -14,6 +14,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 export default function CreativeModulePage({ subPage, onSelectSubPage }: ModulePageProps) {
   const mod = getModule("creative");
@@ -209,7 +210,9 @@ export default function CreativeModulePage({ subPage, onSelectSubPage }: ModuleP
               <button type="button" className="btn btn-secondary" onClick={() => submitJob("3D")}>Queue 3D Studio Job</button>
             </div>
           </form>
-          {threeDOutput && <pre className="code-block">{threeDOutput.output || JSON.stringify(threeDOutput, null, 2)}</pre>}
+          {threeDOutput && (
+            <ReadableSummary title="3D Scene Specification (AGT-24)" data={threeDOutput} diagnosticsTitle="Technical Diagnostics — 3D Scene Payload" />
+          )}
         </div>
       )}
 

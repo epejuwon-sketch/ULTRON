@@ -78,6 +78,7 @@ export default function App() {
   const [probingHealth, setProbingHealth] = useState(false);
   const [initialShare, setInitialShare] = useState<{ title: string; text: string; url: string } | null>(null);
   const [pendingNeonPrompt, setPendingNeonPrompt] = useState("");
+  const [pendingNeonFiles, setPendingNeonFiles] = useState<Array<{ file_id: string; filename: string; mime_type: string; is_image?: boolean; size_bytes?: number }>>([]);
 
   const navigate = useCallback((moduleId: ModuleId, subPageId?: string, opts?: { replace?: boolean }) => {
     const mod = getModule(moduleId);
@@ -411,6 +412,10 @@ export default function App() {
     pendingPrompt: pendingNeonPrompt,
     onClearPendingPrompt: () => setPendingNeonPrompt(""),
     onSendToNeon: (p: string) => setPendingNeonPrompt(p),
+    pendingFiles: pendingNeonFiles,
+    onAttachFileToNeon: (f: { file_id: string; filename: string; mime_type: string; is_image?: boolean; size_bytes?: number }) =>
+      setPendingNeonFiles((prev) => (prev.some((x) => x.file_id === f.file_id) ? prev : [...prev, f])),
+    onClearPendingFiles: () => setPendingNeonFiles([]),
     initialShare,
   };
 

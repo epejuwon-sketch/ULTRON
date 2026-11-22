@@ -91,6 +91,8 @@ class NeonCompleteRequest(BaseModel):
     max_output_tokens: int = Field(default=1024, ge=32, le=8192)
     tool_name: str | None = None
     tool_arguments: dict[str, Any] | None = None
+    file_ids: list[str] = Field(default_factory=list, max_length=8)
+    enable_web_research: bool = True
 
 
 class CreateConversationRequest(BaseModel):
@@ -102,6 +104,8 @@ class CreateConversationRequest(BaseModel):
 class SendConversationMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=16000)
     reasoning_tier: int | None = Field(default=None, ge=1, le=5)
+    file_ids: list[str] = Field(default_factory=list, max_length=8)
+    enable_web_research: bool = True
 
 
 # --- Tasks & ARGON ---

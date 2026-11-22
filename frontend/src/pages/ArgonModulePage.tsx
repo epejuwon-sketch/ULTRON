@@ -15,6 +15,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePageProps) {
   const mod = getModule("argon");
@@ -389,7 +390,9 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
             />
             <button type="submit" className="btn">Preview Route</button>
           </form>
-          {routePreview && <pre className="code-block">{JSON.stringify(routePreview, null, 2)}</pre>}
+          {routePreview && (
+            <ReadableSummary title="NEON Route Selection" data={routePreview} diagnosticsTitle="Technical Diagnostics — Route Payload" />
+          )}
         </div>
       )}
 

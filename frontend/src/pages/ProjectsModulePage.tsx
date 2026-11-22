@@ -14,6 +14,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 export default function ProjectsModulePage({ subPage, onSelectSubPage, onNavigate }: ModulePageProps) {
   const mod = getModule("projects");
@@ -233,7 +234,9 @@ export default function ProjectsModulePage({ subPage, onSelectSubPage, onNavigat
           ) : (
             <>
               <div className="mono muted">Selected Project ID: {selectedProjId}</div>
-              {analysisResult && <pre className="code-block">{JSON.stringify(analysisResult, null, 2)}</pre>}
+              {analysisResult && (
+                <ReadableSummary title="Project Analysis Summary" data={analysisResult} diagnosticsTitle="Technical Diagnostics — Analysis Payload" />
+              )}
             </>
           )}
         </div>
@@ -332,14 +335,18 @@ export default function ProjectsModulePage({ subPage, onSelectSubPage, onNavigat
               <textarea className="textarea" rows={4} value={debugInput} onChange={(e) => setDebugInput(e.target.value)} placeholder="Paste stack trace, failing test, or bug context for AGT-04..." />
               <button type="submit" className="btn">Diagnose with AGT-04</button>
             </form>
-            {debugOutput && <pre className="code-block">{debugOutput.output || JSON.stringify(debugOutput, null, 2)}</pre>}
+            {debugOutput && (
+              <ReadableSummary title="AGT-04 Debugging Diagnosis" data={debugOutput} diagnosticsTitle="Technical Diagnostics — Debug Payload" />
+            )}
           </div>
 
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="card-title"><span><ShieldAlert size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />AEGIS Static Code Scanner</span></div>
             <textarea className="textarea mono" rows={4} value={codeToScan} onChange={(e) => setCodeToScan(e.target.value)} />
-            <button type="button" className="btn btn-secondary" onClick={runCodeScan}>Run /api/v1/aegis/scan-code</button>
-            {scanResult && <pre className="code-block">{JSON.stringify(scanResult, null, 2)}</pre>}
+            <button type="button" className="btn btn-secondary" onClick={runCodeScan}>Run AEGIS Static Security Scan</button>
+            {scanResult && (
+              <ReadableSummary title="AEGIS Security Scan Result" data={scanResult} diagnosticsTitle="Technical Diagnostics — Scan Findings" />
+            )}
           </div>
         </div>
       )}

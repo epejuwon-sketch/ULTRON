@@ -15,6 +15,7 @@ import {
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
+import { ReadableSummary, TechnicalDiagnostics } from "../components/ui/HumanPresentation";
 
 export default function SettingsModulePage({ subPage, onSelectSubPage, user, device }: ModulePageProps) {
   const mod = getModule("settings");
@@ -102,7 +103,10 @@ export default function SettingsModulePage({ subPage, onSelectSubPage, user, dev
           </div>
           <div className="card">
             <div className="card-title"><span>Persisted Backend Settings</span></div>
-            <pre className="code-block">{JSON.stringify(backendSettings, null, 2)}</pre>
+            <ReadableSummary
+              data={Object.keys(backendSettings || {}).length ? backendSettings : { status: "Using default tenant settings" }}
+              diagnosticsTitle="Technical Diagnostics — Raw Settings Map"
+            />
           </div>
         </div>
       )}
@@ -333,7 +337,10 @@ export default function SettingsModulePage({ subPage, onSelectSubPage, user, dev
               Flush TURBO Cache
             </button>
           </div>
-          <pre className="code-block">{JSON.stringify(storageStatus || { status: "Active" }, null, 2)}</pre>
+          <ReadableSummary
+            data={storageStatus || { status: "Active" }}
+            diagnosticsTitle="Technical Diagnostics — Storage & Cache Status"
+          />
         </div>
       )}
 
@@ -356,20 +363,20 @@ export default function SettingsModulePage({ subPage, onSelectSubPage, user, dev
           <div className="grid-2">
             <div className="card">
               <div className="card-title">
-                <span>/health/ready</span>
+                <span>Readiness Status</span>
                 <StatusIndicator label={ready?.status === "ready" || ready?.database?.connected ? "READY" : "DEGRADED"} tone={ready?.status === "ready" || ready?.database?.connected ? "success" : "warn"} />
               </div>
-              <pre className="code-block">{JSON.stringify(ready, null, 2)}</pre>
+              <ReadableSummary data={ready || { status: "Loading..." }} diagnosticsTitle="Technical Diagnostics — /health/ready" />
             </div>
             <div className="card">
-              <div className="card-title"><span>/health</span></div>
-              <pre className="code-block">{JSON.stringify(health, null, 2)}</pre>
+              <div className="card-title"><span>System &amp; Provider Health</span></div>
+              <ReadableSummary data={health || { status: "Loading..." }} diagnosticsTitle="Technical Diagnostics — /health" />
             </div>
           </div>
           {metricsText && (
             <div className="card">
-              <div className="card-title"><span>Prometheus Metrics (/api/v1/monitoring/metrics)</span></div>
-              <pre className="code-block">{metricsText}</pre>
+              <div className="card-title"><span>Runtime Metrics Snapshot</span></div>
+              <TechnicalDiagnostics title="Technical Diagnostics — Prometheus Metrics Text" data={metricsText} />
             </div>
           )}
         </div>
