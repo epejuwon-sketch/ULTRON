@@ -326,13 +326,18 @@ export function VoiceView() {
   );
 }
 
-/* 3. Agent Centre (All 60 Specialist Agents) */
+/* 3. Agent Centre (All 60 Specialist Agents + Individual Agent Workspace) */
 export function AgentsView() {
   const [agents, setAgents] = useState<any[]>([]);
   const [filter, setFilter] = useState("");
+  const [tierFilter, setTierFilter] = useState<"ALL" | "CORE_25" | "EXTENSIBLE_35">("ALL");
   const [selected, setSelected] = useState<any>(null);
   const [prompt, setPrompt] = useState("");
+  const [invoking, setInvoking] = useState(false);
   const [output, setOutput] = useState<any>(null);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [targetAgent, setTargetAgent] = useState("AGT-02");
+  const [msgSubject, setMsgSubject] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -343,12 +348,22 @@ export function AgentsView() {
 
   async function inspectManifest(aid: string) {
     setOutput(null);
-    const m = await apiFetch<any>(`/api/v1/agents/${aid}/manifest`);
-    setSelected(m);
+    setError("");
+    try {
+      const [m, msgs] = await Promise.all([
+        apiFetch<any>(`/api/v1/agents/${aid}/manifest`),
+        apiFetch<any>(`/api/v1/agents/messages?agent_id=${aid}`).catch(() => ({ messages: [] })),
+      ]);
+      setSelected(m);
+      setMessages(msgs.messages || []);
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   async function invokeSelected() {
     if (!selected || !prompt.trim()) return;
+    setInvoking(true);
     setError("");
     try {
       const res = await apiFetch<any>(`/api/v1/agents/${selected.agent_id}/invoke`, {
@@ -358,54 +373,164 @@ export function AgentsView() {
       setOutput(res);
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setInvoking(false);
     }
   }
 
-  const visible = agents.filter(
-    (a) =>
-      a.agent_id.toLowerCase().includes(filter.toLowerCase()) ||
-      a.name.toLowerCase().includes(filter.toLowerCase()) ||
-      a.domain.toLowerCase().includes(filter.toLowerCase())
-  );
+  async function sendInterAgentMsg(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected || !msgSubject.trim()) return;
+    setError("");
+    try {
+      await apiFetch("/api/v1/agents/messages", {
+        method: "POST",
+        body: {
+          from_agent_id: selected.agent_id,
+          to_agent_id: targetAgent,
+          subject: msgSubject.trim(),
+          payload: { initiated_from: "agent_workspace" },
+        },
+      });
+      setMsgSubject("");
+      const msgs = await apiFetch<any>(`/api/v1/agents/messages?agent_id=${selected.agent_id}`);
+      setMessages(msgs.messages || []);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  const visible = agents.filter((a) => {
+    if (tierFilter !== "ALL" && a.tier !== tierFilter) return false;
+    const q = filter.toLowerCase();
+    return (
+      a.agent_id.toLowerCase().includes(q) ||
+      a.name.toLowerCase().includes(q) ||
+      a.domain.toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="grid-2">
       <div className="card">
         <div className="card-title">
-          <span>Specialist Agent Registry ({agents.length} Agents)</span>
+          <span>Specialist Agent Directory ({visible.length}/{agents.length})</span>
+          <div className="row">
+            {(["ALL", "CORE_25", "EXTENSIBLE_35"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`btn btn-sm ${tierFilter === t ? "" : "btn-secondary"}`}
+                onClick={() => setTierFilter(t)}
+              >
+                {t === "ALL" ? "All 60" : t === "CORE_25" ? "Core 25" : "Ext 35"}
+              </button>
+            ))}
+          </div>
         </div>
-        <input className="input" style={{ marginBottom: 12 }} placeholder="Filter by ID, name, or domain..." value={filter} onChange={(e) => setFilter(e.target.value)} />
-        {error && <div className="alert-box alert-error">{error}</div>}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 520, overflowY: "auto" }}>
+        <input
+          id="agents-search-input"
+          className="input"
+          style={{ marginBottom: 12 }}
+          placeholder="Search by agent ID (AGT-01..AGT-60), name, or domain..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        {error && <div className="alert-box alert-error" style={{ marginBottom: 10 }}>{error}</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 560, overflowY: "auto" }}>
           {visible.map((a) => (
-            <div key={a.agent_id} className="list-item" style={{ cursor: "pointer" }} onClick={() => inspectManifest(a.agent_id)}>
-              <div className="row-between">
-                <strong>{a.agent_id} — {a.name}</strong>
-                <span className="pill pill-cyan">T{a.default_reasoning_tier}</span>
+            <button
+              key={a.agent_id}
+              id={`agent-row-${a.agent_id}`}
+              type="button"
+              className={`list-item list-item-btn ${selected?.agent_id === a.agent_id ? "list-item-active" : ""}`}
+              onClick={() => inspectManifest(a.agent_id)}
+            >
+              <div className="row-between" style={{ width: "100%" }}>
+                <span>
+                  <span className="mono" style={{ color: "var(--accent)", marginRight: 8 }}>{a.agent_id}</span>
+                  <strong>{a.name}</strong>
+                </span>
+                <span className="pill">T{a.default_reasoning_tier}</span>
               </div>
               <div className="muted">{a.domain} · {a.permission_scope}</div>
-            </div>
+            </button>
           ))}
         </div>
       </div>
 
       <div className="card">
-        <div className="card-title"><span>Agent Manifest & Direct Invoke</span></div>
+        <div className="card-title"><span>Individual Agent Workspace</span></div>
         {!selected ? (
-          <div className="muted">Select any specialist agent from AGT-01 to AGT-60 to inspect its contract and invoke it.</div>
+          <div className="muted">Select any specialist agent from AGT-01 to AGT-60 to inspect its independent contract, tools, workflow, and invoke it via NEON.</div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div className="row-between">
-              <strong>{selected.agent_id} · {selected.name}</strong>
+              <div>
+                <div className="mono" style={{ color: "var(--accent)", fontSize: 12 }}>{selected.agent_id} · {selected.tier}</div>
+                <strong style={{ fontSize: 16 }}>{selected.name}</strong>
+              </div>
               <span className="pill pill-green">{selected.execution_backing}</span>
             </div>
             <div className="muted">{selected.role_description}</div>
             <div className="row">
-              {(selected.tools || []).map((t: string) => <span key={t} className="pill">{t}</span>)}
+              <span className="pill pill-cyan">{selected.permission_scope}</span>
+              {(selected.tools || []).map((t: string) => <span key={t} className="pill mono">{t}</span>)}
             </div>
-            <textarea className="textarea" rows={3} placeholder={`Send directive to ${selected.agent_id}...`} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-            <button className="btn" onClick={invokeSelected}>Invoke {selected.agent_id}</button>
-            {output && <pre className="code-block">{JSON.stringify(output, null, 2)}</pre>}
+            {selected.contract?.execution_workflow && (
+              <div className="list-item">
+                <div className="telemetry-label">EXECUTION WORKFLOW</div>
+                <div className="muted mono" style={{ fontSize: 11.5 }}>
+                  {selected.contract.execution_workflow.join(" → ")}
+                </div>
+              </div>
+            )}
+            <textarea
+              id="agent-invoke-prompt"
+              className="textarea"
+              rows={3}
+              placeholder={`Issue specialist directive to ${selected.agent_id} (${selected.domain})...`}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+            <button id="agent-invoke-submit" className="btn" onClick={invokeSelected} disabled={invoking || !prompt.trim()}>
+              {invoking ? `Invoking ${selected.agent_id}...` : `Invoke ${selected.agent_id}`}
+            </button>
+            {output && (
+              <div className="dispatch-output">
+                <div className="row-between">
+                  <span className="mono-tag">{output.agent_id} · {output.execution_mode}</span>
+                  <span className="muted mono">{output.model}</span>
+                </div>
+                <div className="dispatch-text">{output.output}</div>
+              </div>
+            )}
+
+            <form onSubmit={sendInterAgentMsg} className="list-item" style={{ gap: 8 }}>
+              <div className="telemetry-label">INTER-AGENT MESSAGE BUS</div>
+              <div className="row">
+                <input
+                  className="input"
+                  style={{ width: 110 }}
+                  value={targetAgent}
+                  onChange={(e) => setTargetAgent(e.target.value.toUpperCase())}
+                  placeholder="AGT-02"
+                />
+                <input
+                  className="input"
+                  style={{ flex: 1 }}
+                  value={msgSubject}
+                  onChange={(e) => setMsgSubject(e.target.value)}
+                  placeholder={`Send handoff subject from ${selected.agent_id}...`}
+                />
+                <button type="submit" className="btn btn-secondary btn-sm">Send</button>
+              </div>
+              {messages.length > 0 && (
+                <div className="muted mono" style={{ fontSize: 11.5 }}>
+                  {messages.slice(0, 3).map((m) => `${m.from_agent_id}→${m.to_agent_id}: ${m.subject}`).join(" | ")}
+                </div>
+              )}
+            </form>
           </div>
         )}
       </div>
