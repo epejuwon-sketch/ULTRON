@@ -391,3 +391,90 @@ def test_caravan_readiness_gate_and_screen_sharing_policy(client, auth_headers):
 
 
 
+
+
+def _google_cfg() -> Settings:
+    return Settings(
+        ULTRON_ENV="test",
+        ULTRON_JWT_SECRET="test-jwt-secret-key-with-at-least-40-characters-0001",
+        ULTRON_VAULT_MASTER_KEY="test-vault-master-key-with-at-least-40-characters-0001",
+        GOOGLE_OAUTH_CLIENT_ID="test-client-id.apps.googleusercontent.com",
+        GOOGLE_OAUTH_CLIENT_SECRET="test-client-secret",
+    )
+
+
+def _owner() -> Principal:
+    return Principal(user_id="usr_owner", username="owner_admin", role=Role.OWNER, tenant_id="TENANT-ULTRON-01", jti="jti_test")
+
+
+def test_google_verify_refreshes_expired_access_token_before_live_check(client: TestClient, auth_headers: dict) -> None:
+    """Regression: an expired (>1h) Google access token must be refreshed from VAULT, not sent and rejected with 401."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.db.models import IntegrationConnectionRecord
+    from sqlalchemy import select
+
+    cfg = _google_cfg()
+    principal = _owner()
+    seen_about_tokens: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if "oauth2.googleapis.com/token" in url:
+            body = req.content.decode()
+            if "grant_type=authorization_code" in body:
+                return httpx.Response(200, json={"access_token": "ya29_old", "refresh_token": "1//rt", "expires_in": 3600, "scope": "https://www.googleapis.com/auth/drive.file"})
+            return httpx.Response(200, json={"access_token": "ya29_new", "expires_in": 3600})
+        if "oauth2/v2/userinfo" in url:
+            return httpx.Response(200, json={"email": "o@ultron.ai"})
+        if "drive/v3/about" in url:
+            tok = req.headers["authorization"].removeprefix("Bearer ")
+            seen_about_tokens.append(tok)
+            if tok != "ya29_new" and len(seen_about_tokens) > 1:
+                return httpx.Response(401, json={"error": {"message": "Invalid Credentials"}})
+            return httpx.Response(200, json={"user": {}})
+        return httpx.Response(404)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with get_session_factory()() as db:
+        started = start_oauth_flow(db, principal=principal, provider="google_drive", settings=cfg)
+        complete_oauth_callback(db, principal=principal, provider="google_drive", code="code-abc", state=started["state"], settings=cfg, http_client=http)
+        rec = db.execute(select(IntegrationConnectionRecord).where(IntegrationConnectionRecord.provider == "google_drive", IntegrationConnectionRecord.tenant_id == principal.tenant_id)).scalar_one()
+        rec.token_expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        db.commit()
+
+        result = verify_provider_live(db, principal=principal, provider="google_drive", settings=cfg, http_client=http)
+        assert result["live_verified"] is True
+        assert seen_about_tokens[-1] == "ya29_new"
+        listed = list_connections(db, tenant_id=principal.tenant_id, settings=cfg)
+        gd = next(c for c in listed["connections"] if c["provider"] == "google_drive")
+        assert gd["lifecycle_stage"] == "LIVE_VERIFIED"
+        assert gd["token_expired"] is False
+
+
+def test_google_verify_failure_is_not_verified_and_reports_google_reason(client: TestClient, auth_headers: dict) -> None:
+    """Regression: a Drive API 403 (e.g. API not enabled) never yields LIVE_VERIFIED and exposes Google's reason, not secrets."""
+    cfg = _google_cfg()
+    principal = _owner()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if "oauth2.googleapis.com/token" in url:
+            return httpx.Response(200, json={"access_token": "ya29_secret_value", "refresh_token": "1//rt", "expires_in": 3600, "scope": "https://www.googleapis.com/auth/drive.file"})
+        if "oauth2/v2/userinfo" in url:
+            return httpx.Response(401)
+        if "drive/v3/about" in url:
+            return httpx.Response(403, json={"error": {"code": 403, "message": "Google Drive API has not been used in project 123 before or it is disabled.", "errors": [{"reason": "accessNotConfigured"}]}})
+        return httpx.Response(404)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with get_session_factory()() as db:
+        started = start_oauth_flow(db, principal=principal, provider="google_drive", settings=cfg)
+        res = complete_oauth_callback(db, principal=principal, provider="google_drive", code="code-xyz", state=started["state"], settings=cfg, http_client=http)
+        assert res.get("live_verified") is not True
+        listed = list_connections(db, tenant_id=principal.tenant_id, settings=cfg)
+        gd = next(c for c in listed["connections"] if c["provider"] == "google_drive")
+        assert gd["status"] == "DEGRADED"
+        assert gd["lifecycle_stage"] != "LIVE_VERIFIED"
+        assert "accessNotConfigured" in (gd["last_error"] or "")
+        assert "ya29_secret_value" not in str(gd)

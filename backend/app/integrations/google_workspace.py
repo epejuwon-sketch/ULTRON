@@ -17,6 +17,26 @@ from app.core.exceptions import AuthorizationError, IntegrationError
 from app.integrations.base import HonestCapabilityState, IntegrationStatus, classify_http_error
 
 
+def _google_error_hint(resp: httpx.Response) -> str:
+    """Extract Google's structured error reason/message (never request headers or tokens) for diagnosis."""
+    try:
+        err = resp.json().get("error")
+    except Exception:
+        return ""
+    if not isinstance(err, dict):
+        return ""
+    reason = ""
+    details = err.get("errors")
+    if isinstance(details, list) and details and isinstance(details[0], dict):
+        reason = str(details[0].get("reason") or "")
+    for d in err.get("details") or []:
+        if isinstance(d, dict) and d.get("reason"):
+            reason = reason or str(d["reason"])
+    msg = str(err.get("message") or "")[:200]
+    parts = [x for x in (reason, msg) if x]
+    return f" [{': '.join(parts)}]" if parts else ""
+
+
 class _BaseGoogleAPI:
     provider_name: str
     verify_url: str
@@ -72,7 +92,9 @@ class _BaseGoogleAPI:
         except httpx.HTTPError as exc:
             raise IntegrationError(f"{self.provider_name} network error: {type(exc).__name__}") from exc
         if resp.status_code >= 400:
-            raise IntegrationError(f"{self.provider_name} failed: {classify_http_error(resp.status_code)}")
+            raise IntegrationError(
+                f"{self.provider_name} failed: {classify_http_error(resp.status_code)}{_google_error_hint(resp)}"
+            )
         return resp
 
     def verify_live(self, timeout_seconds: float = 8.0) -> IntegrationStatus:

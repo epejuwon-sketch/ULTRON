@@ -556,7 +556,16 @@ def complete_oauth_callback(
             http_client=http_client,
         )
         return verified
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        rec = db.execute(
+            select(IntegrationConnectionRecord).where(
+                IntegrationConnectionRecord.tenant_id == principal.tenant_id,
+                IntegrationConnectionRecord.provider == p,
+            )
+        ).scalar_one_or_none()
+        if rec is not None:
+            rec.last_error = f"Post-authorization live verification raised {type(exc).__name__}."
+            db.commit()
         return saved
 
 
@@ -740,6 +749,39 @@ def resolve_provider_token(
     return secret.get_secret_value().strip() if secret and secret.get_secret_value().strip() else None
 
 
+def _refresh_if_access_token_expired(
+    db: Session,
+    *,
+    principal: Principal,
+    provider: str,
+    settings: Settings,
+    http_client: httpx.Client | None = None,
+) -> None:
+    """Google access tokens live ~1h. Refresh with the VAULT-stored refresh token before live verification.
+
+    Failures are recorded on the connection (without secrets) and never mark it verified.
+    """
+    rec = db.execute(
+        select(IntegrationConnectionRecord).where(
+            IntegrationConnectionRecord.tenant_id == principal.tenant_id,
+            IntegrationConnectionRecord.provider == provider,
+            IntegrationConnectionRecord.disconnected_at.is_(None),
+        )
+    ).scalar_one_or_none()
+    if rec is None or rec.auth_type != "OAUTH2" or rec.token_expires_at is None:
+        return
+    exp = rec.token_expires_at if rec.token_expires_at.tzinfo else rec.token_expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) < exp - timedelta(seconds=60):
+        return
+    try:
+        refresh_connection_token(
+            db, principal=principal, provider=provider, settings=settings, http_client=http_client
+        )
+    except Exception as exc:  # noqa: BLE001 - surface reason, keep verification honest
+        rec.last_error = f"Access token expired and refresh failed: {type(exc).__name__}: {str(exc)[:160]}"
+        db.commit()
+
+
 def verify_provider_live(
     db: Session,
     *,
@@ -750,6 +792,10 @@ def verify_provider_live(
 ) -> dict[str, Any]:
     """Run live verification for a specific managed provider and update DB connection status honestly."""
     p = _validate_provider(provider)
+    if p in OAUTH_PROVIDERS and OAUTH_PROVIDERS[p].family == "google":
+        _refresh_if_access_token_expired(
+            db, principal=principal, provider=p, settings=settings, http_client=http_client
+        )
     token = resolve_provider_token(db, tenant_id=principal.tenant_id, provider=p, settings=settings)
 
     if p == "gemini":
