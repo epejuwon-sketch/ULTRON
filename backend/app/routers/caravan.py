@@ -524,3 +524,66 @@ def api_sweep_expired_caravan_opportunities(
 
     return sweep_expired_opportunities(db, principal=principal)
 
+
+class DiscoveryExtractPreviewRequest(BaseModel):
+    source_url: str = Field(min_length=8, max_length=500)
+    provider_org: str = Field(default="Official Source", max_length=180)
+    raw_text: str = Field(default="", max_length=50000)
+
+
+class DiscoveryReviewRequest(BaseModel):
+    decision: str = Field(min_length=3, max_length=24)
+    supporting_evidence: str = Field(default="")
+
+
+@router.post("/discovery/ingest/{source_id}")
+def api_caravan_discovery_ingest(
+    source_id: str,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_discovery_service import run_argon_source_ingestion
+
+    return run_argon_source_ingestion(db, principal=principal, source_id=source_id)
+
+
+@router.post("/discovery/extract-preview")
+def api_caravan_discovery_extract_preview(
+    body: DiscoveryExtractPreviewRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+) -> dict:
+    from app.core.config import get_settings
+    from app.services.caravan_discovery_service import (
+        fetch_public_source_with_argon_guards,
+        summarize_source_with_neon,
+    )
+
+    raw = body.raw_text
+    if not raw.strip():
+        fetched = fetch_public_source_with_argon_guards(body.source_url)
+        raw = fetched["raw_text"]
+    return summarize_source_with_neon(
+        source_url=body.source_url,
+        provider_org=body.provider_org,
+        raw_text=raw,
+        settings=get_settings(),
+    )
+
+
+@router.post("/discovery/opportunities/{opportunity_id}/review")
+def api_caravan_discovery_review(
+    opportunity_id: str,
+    body: DiscoveryReviewRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_discovery_service import review_discovered_opportunity
+
+    return review_discovered_opportunity(
+        db,
+        principal=principal,
+        opportunity_id=opportunity_id,
+        decision=body.decision,
+        supporting_evidence=body.supporting_evidence,
+    )
+

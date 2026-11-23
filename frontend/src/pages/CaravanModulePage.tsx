@@ -72,6 +72,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
   const [sourceName, setSourceName] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceType, setSourceType] = useState("PUBLIC_PORTAL");
+  const [adminStageFilter, setAdminStageFilter] = useState("ALL");
 
   async function loadAll() {
     try {
@@ -621,23 +622,42 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
               <div key={s.source_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
                 <div>
                   <strong>{s.name}</strong>
-                  <div className="muted mono" style={{ fontSize: 11 }}>{s.base_url} · {s.status}</div>
+                  <div className="muted mono" style={{ fontSize: 11 }}>
+                    {s.base_url} · {s.status} {s.last_checked_at ? `· Checked ${s.last_checked_at}` : ""}
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={async () => {
-                    try {
-                      const res = await apiFetch<any>(`/api/v1/caravan/sources/${s.source_id}/verify`, { method: "POST" });
-                      pushToast(`ARGON Probe: ${res.detail}`, res.reachable ? "success" : "info");
-                      await loadAll();
-                    } catch (err: any) {
-                      pushToast(err.message, "error");
-                    }
-                  }}
-                >
-                  ARGON Live Probe
-                </button>
+                <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={async () => {
+                      try {
+                        const res = await apiFetch<any>(`/api/v1/caravan/discovery/ingest/${s.source_id}`, { method: "POST" });
+                        pushToast(`ARGON Ingestion: ${res.created_count} created (${res.duplicates_skipped} duplicates skipped).`, "success");
+                        await loadAll();
+                      } catch (err: any) {
+                        pushToast(err.message, "error");
+                      }
+                    }}
+                  >
+                    Run ARGON Ingestion
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={async () => {
+                      try {
+                        const res = await apiFetch<any>(`/api/v1/caravan/sources/${s.source_id}/verify`, { method: "POST" });
+                        pushToast(`ARGON Probe: ${res.detail}`, res.reachable ? "success" : "info");
+                        await loadAll();
+                      } catch (err: any) {
+                        pushToast(err.message, "error");
+                      }
+                    }}
+                  >
+                    ARGON Live Probe
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -661,48 +681,81 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
                 <RefreshCw size={12} /> Sweep Expired Deadlines
               </button>
             </div>
-            <input className="input" placeholder="Verification supporting evidence (required to mark VERIFIED)" value={verifyEvidence} onChange={(e) => setVerifyEvidence(e.target.value)} />
-            {opportunities.slice(0, 10).map((o) => (
-              <div key={o.opportunity_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
-                <div>
-                  <strong>{o.title}</strong>
-                  <div className="muted" style={{ fontSize: 11 }}>{o.provider_org} · {o.verification_status} · {o.freshness_status || "UNVERIFIED"}</div>
-                </div>
-                <div className="row" style={{ gap: 6 }}>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={async () => {
-                      try {
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              {["ALL", "NEEDS_REVIEW", "DISCOVERED", "EXTRACTED", "VERIFIED", "REJECTED", "EXPIRED"].map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  className={`btn btn-sm ${adminStageFilter === st ? "" : "btn-secondary"}`}
+                  onClick={() => setAdminStageFilter(st)}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+            <input className="input" placeholder="Verification supporting evidence or rejection reason" value={verifyEvidence} onChange={(e) => setVerifyEvidence(e.target.value)} />
+            {opportunities
+              .filter((o) => adminStageFilter === "ALL" || o.verification_status === adminStageFilter)
+              .slice(0, 15)
+              .map((o) => (
+                <div key={o.opportunity_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <strong>{o.title}</strong>
+                    <div className="muted" style={{ fontSize: 11 }}>{o.provider_org} · {o.verification_status} · {o.freshness_status || "UNVERIFIED"}</div>
+                  </div>
+                  <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={async () => {
+                        try {
+                          await apiFetch(`/api/v1/caravan/discovery/opportunities/${o.opportunity_id}/review`, {
+                            method: "POST",
+                            body: { decision: "VERIFIED", supporting_evidence: verifyEvidence.trim() },
+                          });
+                          pushToast(`Verified '${o.title}'.`, "success");
+                          await loadAll();
+                        } catch (err: any) {
+                          pushToast(err.message, "error");
+                        }
+                      }}
+                    >
+                      <CheckCircle2 size={12} /> Verify
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={async () => {
+                        try {
+                          await apiFetch(`/api/v1/caravan/discovery/opportunities/${o.opportunity_id}/review`, {
+                            method: "POST",
+                            body: { decision: "REJECTED", supporting_evidence: verifyEvidence.trim() || "Rejected by administrator review." },
+                          });
+                          pushToast(`Rejected '${o.title}'.`, "info");
+                          await loadAll();
+                        } catch (err: any) {
+                          pushToast(err.message, "error");
+                        }
+                      }}
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={async () => {
                         await apiFetch(`/api/v1/caravan/opportunities/${o.opportunity_id}/verify`, {
                           method: "POST",
-                          body: { verification_status: "VERIFIED", supporting_evidence: verifyEvidence.trim() },
+                          body: { verification_status: "CLOSED", supporting_evidence: verifyEvidence.trim() || "Marked closed by reviewer." },
                         });
-                        pushToast(`Verified '${o.title}'.`, "success");
                         await loadAll();
-                      } catch (err: any) {
-                        pushToast(err.message, "error");
-                      }
-                    }}
-                  >
-                    <CheckCircle2 size={12} /> Verify
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={async () => {
-                      await apiFetch(`/api/v1/caravan/opportunities/${o.opportunity_id}/verify`, {
-                        method: "POST",
-                        body: { verification_status: "CLOSED", supporting_evidence: verifyEvidence.trim() || "Marked closed by reviewer." },
-                      });
-                      await loadAll();
-                    }}
-                  >
-                    Mark Closed
-                  </button>
+                      }}
+                    >
+                      Mark Closed
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
           </div>
         </div>
       )}
