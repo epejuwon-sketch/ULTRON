@@ -823,6 +823,27 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
               </div>
 
               <p className="muted" style={{ margin: 0 }}>{selected.shortDescription}</p>
+              {(selected.setupInstructions || selected.docsUrl) && (
+                <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div className="telemetry-label">ACTIVATION INSTRUCTIONS</div>
+                  {selected.setupInstructions && (
+                    <div className="muted" style={{ fontSize: 12, lineHeight: 1.45 }}>
+                      {selected.setupInstructions}
+                    </div>
+                  )}
+                  {selected.docsUrl && (
+                    <a
+                      href={selected.docsUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="btn btn-secondary btn-sm"
+                      style={{ alignSelf: "flex-start" }}
+                    >
+                      <ExternalLink size={12} /> Provider Documentation
+                    </a>
+                  )}
+                </div>
+              )}
               <div className="alert-box">
                 <div>{info.detail}</div>
                 {info.lastVerifiedAt && (

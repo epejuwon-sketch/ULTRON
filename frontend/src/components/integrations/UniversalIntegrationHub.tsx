@@ -547,6 +547,28 @@ export function UniversalIntegrationHub() {
 
             <div className="muted">{activeConfigItem.entry.shortDescription}</div>
 
+            {(activeConfigItem.entry.setupInstructions || activeConfigItem.entry.docsUrl) && (
+              <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div className="telemetry-label">ACTIVATION INSTRUCTIONS</div>
+                {activeConfigItem.entry.setupInstructions && (
+                  <div className="muted" style={{ fontSize: 12, lineHeight: 1.45 }}>
+                    {activeConfigItem.entry.setupInstructions}
+                  </div>
+                )}
+                {activeConfigItem.entry.docsUrl && (
+                  <a
+                    href={activeConfigItem.entry.docsUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="btn btn-secondary btn-sm"
+                    style={{ alignSelf: "flex-start" }}
+                  >
+                    <ExternalLink size={12} /> Provider Documentation
+                  </a>
+                )}
+              </div>
+            )}
+
             {/* Account & Health Metadata */}
             <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <div><strong>Authorized Account:</strong> {activeConfigItem.record?.account_label || "Not linked"}</div>

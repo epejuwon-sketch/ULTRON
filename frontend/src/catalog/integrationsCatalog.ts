@@ -33,6 +33,8 @@ export interface IntegrationCatalogEntry {
   permissions: string[];
   capabilities: string[];
   connectFields?: { key: string; label: string; placeholder: string; sensitive?: boolean }[];
+  docsUrl?: string;
+  setupInstructions?: string;
 }
 
 export const INTEGRATION_CATEGORIES: IntegrationCategory[] = [
@@ -224,6 +226,8 @@ export const INTEGRATIONS_CATALOG: IntegrationCatalogEntry[] = [
     connectFields: [
       { key: "api_key", label: "GitHub Personal Access Token (PAT)", placeholder: "ghp_... or github_pat_... (encrypted in VAULT)", sensitive: true },
     ],
+    docsUrl: "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
+    setupInstructions: "Option A (Immediate): Generate a fine-grained or classic PAT with repo, read:user, and workflow scopes and save it in VAULT below. Option B (OAuth): Have an OWNER/ADMIN configure GITHUB_OAUTH_CLIENT_ID and SECRET in VAULT, then click Authorize in Browser. Run Health Check after saving.",
   },
   {
     id: "vercel",
@@ -238,6 +242,8 @@ export const INTEGRATIONS_CATALOG: IntegrationCatalogEntry[] = [
     permissions: ["projects.read", "deployments.read", "logs.read"],
     capabilities: ["projects", "deployments", "build_logs", "domains", "env_metadata"],
     connectFields: [{ key: "api_key", label: "Vercel API Token", placeholder: "Encrypted on backend", sensitive: true }],
+    docsUrl: "https://vercel.com/docs/rest-api#authentication",
+    setupInstructions: "Create an Account Token in Vercel Settings → Tokens (scoped to the target team/project), paste it into Encrypted VAULT Credentials below, save, and click Run Health Check to verify account and project discovery.",
   },
   {
     id: "cloudflare",
@@ -252,6 +258,8 @@ export const INTEGRATIONS_CATALOG: IntegrationCatalogEntry[] = [
     permissions: ["workers.read", "kv.read", "dns.read"],
     capabilities: ["dns", "workers", "kv", "r2", "security_settings"],
     connectFields: [{ key: "api_key", label: "Cloudflare API Token", placeholder: "Encrypted on backend", sensitive: true }],
+    docsUrl: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/",
+    setupInstructions: "Create a scoped API Token in Cloudflare Dashboard → My Profile → API Tokens (Zone/DNS Read, Workers Scripts Read), save it in Encrypted VAULT Credentials below, and click Run Health Check.",
   },
   {
     id: "supabase",
@@ -265,6 +273,8 @@ export const INTEGRATIONS_CATALOG: IntegrationCatalogEntry[] = [
     requiredEnvVars: ["ULTRON_DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"],
     permissions: ["postgres.rls", "storage.private_bucket", "postgrest"],
     capabilities: ["postgres", "postgrest", "storage", "pgvector", "rls"],
+    docsUrl: "https://supabase.com/docs/guides/api/api-keys",
+    setupInstructions: "Server-only configuration: set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (never exposed to frontend), and ULTRON_DATABASE_URL (Supavisor Transaction Pooler) in the backend secret environment, then click Run Health Check.",
   },
   {
     id: "gitlab",
