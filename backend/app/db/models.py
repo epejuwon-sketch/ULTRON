@@ -1271,5 +1271,78 @@ class CaravanNotificationRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class CaravanPaymentEventRecord(Base):
+    __tablename__ = "caravan_payment_events"
+    __table_args__ = (UniqueConstraint("tenant_id", "provider", "provider_ref", name="uq_caravan_pay_tenant_prov_ref"),)
+
+    payment_event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    currency: Mapped[str] = mapped_column(String(16), nullable=False, default="USD")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING")
+    sandbox_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    signature_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CaravanOperatingExpenseRecord(Base):
+    __tablename__ = "caravan_operating_expenses"
+
+    expense_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(48), nullable=False)
+    description: Mapped[str] = mapped_column(String(240), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    currency: Mapped[str] = mapped_column(String(16), nullable=False, default="USD")
+    recorded_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CaravanCrmNoteRecord(Base):
+    __tablename__ = "caravan_crm_notes"
+
+    note_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    author: Mapped[str] = mapped_column(String(120), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    segment_tag: Mapped[str] = mapped_column(String(64), nullable=False, default="GENERAL")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CaravanGrowthDraftRecord(Base):
+    __tablename__ = "caravan_growth_drafts"
+
+    draft_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    draft_type: Mapped[str] = mapped_column(String(32), nullable=False, default="CAMPAIGN")
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    target_segment: Mapped[str] = mapped_column(String(64), nullable=False, default="ALL")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanPrivacyConsentRecord(Base):
+    __tablename__ = "caravan_privacy_consents"
+
+    consent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    analytics_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deletion_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deletion_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 
 

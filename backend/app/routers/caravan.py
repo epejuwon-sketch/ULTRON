@@ -684,3 +684,220 @@ def api_trigger_caravan_discovery(
     return trigger_caravan_discovery_now(db, principal=principal)
 
 
+@router.get("/pricing")
+def api_caravan_pricing() -> dict:
+    from app.services.caravan_growth_service import get_public_pricing_catalog
+
+    return get_public_pricing_catalog()
+
+
+@router.get("/business-intelligence")
+def api_caravan_business_intelligence(
+    period: str = Query(default="monthly", pattern="^(daily|weekly|monthly|quarterly|annual)$"),
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.caravan_growth_service import get_caravan_business_intelligence
+
+    return get_caravan_business_intelligence(db, principal=principal, settings=settings, period=period)
+
+
+class SandboxPaymentWebhookRequest(BaseModel):
+    account_id: str = Field(min_length=4, max_length=64)
+    provider: str = Field(default="sandbox", max_length=32)
+    provider_ref: str = Field(min_length=4, max_length=128)
+    event_type: str = Field(default="CHARGE_SUCCEEDED", max_length=48)
+    amount: float = Field(ge=0.0)
+    currency: str = Field(default="USD", max_length=16)
+    status: str = Field(default="SUCCEEDED", max_length=24)
+    signature: str = Field(min_length=8, max_length=256)
+    sandbox_mode: bool = True
+
+
+@router.post("/payments/webhook")
+def api_caravan_payment_webhook(
+    body: SandboxPaymentWebhookRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    import json as _json
+    from app.services.caravan_growth_service import ingest_payment_webhook
+
+    raw = _json.dumps(
+        {
+            "account_id": body.account_id,
+            "provider": body.provider,
+            "provider_ref": body.provider_ref,
+            "event_type": body.event_type,
+            "amount": body.amount,
+            "currency": body.currency,
+            "status": body.status,
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+    secret = (
+        settings.flutterwave_webhook_hash.get_secret_value()
+        if (body.provider == "flutterwave" and settings.flutterwave_webhook_hash)
+        else settings.vault_master_key.get_secret_value()
+    )
+    return ingest_payment_webhook(
+        db,
+        tenant_id=principal.tenant_id,
+        account_id=body.account_id,
+        provider=body.provider,
+        provider_ref=body.provider_ref,
+        event_type=body.event_type,
+        amount=body.amount,
+        currency=body.currency,
+        status=body.status,
+        raw_body=raw,
+        signature=body.signature,
+        webhook_secret=secret,
+        sandbox_mode=body.sandbox_mode,
+        actor=principal.username,
+    )
+
+
+class RecordExpenseRequest(BaseModel):
+    category: str = Field(min_length=3, max_length=48)
+    description: str = Field(min_length=3, max_length=240)
+    amount: float = Field(ge=0.0)
+    currency: str = Field(default="USD", max_length=16)
+
+
+@router.post("/expenses", status_code=status.HTTP_201_CREATED)
+def api_record_caravan_expense(
+    body: RecordExpenseRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_growth_service import record_operating_expense
+
+    return record_operating_expense(
+        db,
+        principal=principal,
+        category=body.category,
+        description=body.description,
+        amount=body.amount,
+        currency=body.currency,
+    )
+
+
+@router.get("/crm/customers")
+def api_list_caravan_crm(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_growth_service import list_crm_customers
+
+    items = list_crm_customers(db, principal=principal)
+    return {"total": len(items), "customers": items}
+
+
+class CreateCrmNoteRequest(BaseModel):
+    note: str = Field(min_length=2)
+    segment_tag: str = Field(default="GENERAL", max_length=64)
+
+
+@router.post("/crm/customers/{account_id}/notes", status_code=status.HTTP_201_CREATED)
+def api_add_caravan_crm_note(
+    account_id: str,
+    body: CreateCrmNoteRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_growth_service import add_crm_note
+
+    return add_crm_note(db, principal=principal, account_id=account_id, note=body.note, segment_tag=body.segment_tag)
+
+
+class CreateGrowthDraftRequest(BaseModel):
+    draft_type: str = Field(default="CAMPAIGN", max_length=32)
+    title: str = Field(min_length=3, max_length=200)
+    content: str = Field(min_length=3)
+    target_segment: str = Field(default="ALL", max_length=64)
+
+
+@router.get("/growth/drafts")
+def api_list_caravan_growth_drafts(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from sqlalchemy import select
+    from app.db.models import CaravanGrowthDraftRecord
+    from app.services.caravan_growth_service import _serialize_draft
+
+    rows = db.execute(
+        select(CaravanGrowthDraftRecord)
+        .where(CaravanGrowthDraftRecord.tenant_id == principal.tenant_id)
+        .order_by(CaravanGrowthDraftRecord.created_at.desc())
+    ).scalars().all()
+    return {"total": len(rows), "drafts": [_serialize_draft(r) for r in rows]}
+
+
+@router.post("/growth/drafts", status_code=status.HTTP_201_CREATED)
+def api_create_caravan_growth_draft(
+    body: CreateGrowthDraftRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_growth_service import create_growth_draft
+
+    return create_growth_draft(
+        db,
+        principal=principal,
+        draft_type=body.draft_type,
+        title=body.title,
+        content=body.content,
+        target_segment=body.target_segment,
+    )
+
+
+@router.post("/growth/drafts/{draft_id}/request-approval")
+def api_request_caravan_growth_approval(
+    draft_id: str,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_growth_service import request_growth_draft_approval
+
+    return request_growth_draft_approval(db, principal=principal, draft_id=draft_id)
+
+
+@router.get("/privacy")
+def api_get_caravan_privacy(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_growth_service import get_privacy_consent
+
+    return get_privacy_consent(db, principal=principal)
+
+
+class UpdatePrivacyRequest(BaseModel):
+    analytics_consent: bool | None = None
+    marketing_consent: bool | None = None
+    deletion_requested: bool | None = None
+    deletion_reason: str | None = None
+
+
+@router.put("/privacy")
+def api_update_caravan_privacy(
+    body: UpdatePrivacyRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_growth_service import update_privacy_consent
+
+    return update_privacy_consent(
+        db,
+        principal=principal,
+        analytics_consent=body.analytics_consent,
+        marketing_consent=body.marketing_consent,
+        deletion_requested=body.deletion_requested,
+        deletion_reason=body.deletion_reason,
+    )
+
+

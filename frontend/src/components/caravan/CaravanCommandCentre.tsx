@@ -38,12 +38,24 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
     onConfirm: () => Promise<void>;
   } | null>(null);
 
+  const [bi, setBi] = useState<any>(null);
+  const [biPeriod, setBiPeriod] = useState<"daily" | "weekly" | "monthly" | "quarterly" | "annual">("monthly");
+  const [drafts, setDrafts] = useState<any[]>([]);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftContent, setDraftContent] = useState("");
+
   async function loadCommandCentre() {
     setLoading(true);
     setError("");
     try {
-      const res = await apiFetch<any>(`/api/v1/caravan/command-centre?days=${days}`);
+      const [res, biRes, drRes] = await Promise.all([
+        apiFetch<any>(`/api/v1/caravan/command-centre?days=${days}`),
+        apiFetch<any>(`/api/v1/caravan/business-intelligence?period=${biPeriod}`).catch(() => null),
+        apiFetch<any>("/api/v1/caravan/growth/drafts").catch(() => ({ drafts: [] })),
+      ]);
       setData(res);
+      setBi(biRes);
+      setDrafts(drRes?.drafts || []);
     } catch (err: any) {
       const msg = err?.message || "Failed to load Caravan Command Centre.";
       setError(msg);
@@ -55,7 +67,7 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
 
   useEffect(() => {
     loadCommandCentre();
-  }, [days]);
+  }, [days, biPeriod]);
 
   const ov = data?.executive_overview || {};
   const neon = data?.neon_monitoring || {};
@@ -550,6 +562,124 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
             },
           ]}
         />
+      </div>
+
+      {/* Business & Revenue Intelligence + Acquisition Funnel + NEON BI */}
+      {bi && (
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+            <strong>Business, Revenue &amp; Growth Intelligence ({bi.period})</strong>
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              {(["daily", "weekly", "monthly", "quarterly", "annual"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={`btn btn-sm ${biPeriod === p ? "" : "btn-secondary"}`}
+                  onClick={() => setBiPeriod(p)}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid-4" style={{ gap: 8 }}>
+            <MetricDisplay
+              label="Onboarding / Paid Conv."
+              value={`${bi.business_command_centre?.onboarding_completion_pct ?? 0}% / ${bi.business_command_centre?.free_to_paid_conversion_pct ?? 0}%`}
+              sub={`Customers: ${bi.business_command_centre?.total_customers ?? 0}`}
+              tone="info"
+            />
+            <MetricDisplay
+              label="Committed MRR / ARR"
+              value={`$${Number(bi.business_command_centre?.subscription_commitments_mrr_usd || 0).toFixed(2)} / $${Number(bi.business_command_centre?.subscription_commitments_arr_usd || 0).toFixed(2)}`}
+              sub="Commitments (not collected)"
+              tone="neutral"
+            />
+            <MetricDisplay
+              label="Net Collected / Margin (USD)"
+              value={`$${Number(bi.financial_intelligence?.net_collected_usd || 0).toFixed(2)} / $${Number(bi.financial_intelligence?.estimated_operating_margin_usd || 0).toFixed(2)}`}
+              sub={`Retention ${bi.business_command_centre?.retention_pct ?? 0}% · Churn ${bi.business_command_centre?.churn_pct ?? 0}%`}
+              tone="success"
+            />
+            <MetricDisplay
+              label="ARPU / LTV (USD)"
+              value={`$${Number(bi.business_command_centre?.arpu_usd || 0).toFixed(2)} / $${Number(bi.business_command_centre?.ltv_usd || 0).toFixed(2)}`}
+              sub={`NEON Mode: ${bi.neon_business_intelligence?.neon_mode || "DETERMINISTIC"}`}
+              tone="info"
+            />
+          </div>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", fontSize: 12 }}>
+            <span className="pill mono">Funnel Reg: {bi.acquisition_funnel?.registered_customers ?? 0}</span>
+            <span className="pill mono">Onboarded: {bi.acquisition_funnel?.onboarded_customers ?? 0}</span>
+            <span className="pill mono">Assessed: {bi.acquisition_funnel?.customers_with_assessments ?? 0}</span>
+            <span className="pill mono">Saved: {bi.acquisition_funnel?.customers_with_saved ?? 0}</span>
+            <span className="pill mono">Apps: {bi.acquisition_funnel?.customers_with_applications ?? 0}</span>
+            <span className="pill mono">Paid: {bi.acquisition_funnel?.paid_subscriptions ?? 0}</span>
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            <strong>NEON BI ({bi.neon_business_intelligence?.neon_mode}):</strong>{" "}
+            {bi.neon_business_intelligence?.ai_interpretation?.summary}{" "}
+            <em>({bi.neon_business_intelligence?.ai_interpretation?.note})</em>
+          </div>
+        </div>
+      )}
+
+      {/* ARGON Growth Operations (AEGIS-Gated) */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <strong>ARGON Growth Operations &amp; Campaign Drafts ({drafts.length})</strong>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <input className="input" style={{ flex: 1 }} placeholder="Campaign or message draft title" value={draftTitle} onChange={(e) => setDraftTitle(e.target.value)} />
+          <input className="input" style={{ flex: 2 }} placeholder="Draft content (external publish requires AEGIS approval)" value={draftContent} onChange={(e) => setDraftContent(e.target.value)} />
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={busy || !draftTitle.trim() || !draftContent.trim()}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await apiFetch("/api/v1/caravan/growth/drafts", {
+                  method: "POST",
+                  body: { draft_type: "CAMPAIGN", title: draftTitle.trim(), content: draftContent.trim() },
+                });
+                setDraftTitle("");
+                setDraftContent("");
+                pushToast("Growth draft saved.", "success");
+                await loadCommandCentre();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Save Draft
+          </button>
+        </div>
+        {drafts.slice(0, 5).map((d) => (
+          <div key={d.draft_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+            <div>
+              <strong>{d.title}</strong>
+              <div className="muted" style={{ fontSize: 11 }}>{d.draft_type} · {d.status}{d.approval_id ? ` · ${d.approval_id}` : ""}</div>
+            </div>
+            {d.status === "DRAFT" && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await apiFetch(`/api/v1/caravan/growth/drafts/${d.draft_id}/request-approval`, { method: "POST" });
+                    pushToast("Submitted to AEGIS approval gate.", "info");
+                    await loadCommandCentre();
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Request AEGIS Approval
+              </button>
+            )}
+          </div>
+        ))}
       </div>
 
       {/* Activity Timeline */}

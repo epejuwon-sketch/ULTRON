@@ -82,10 +82,12 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceType, setSourceType] = useState("PUBLIC_PORTAL");
   const [adminStageFilter, setAdminStageFilter] = useState("ALL");
+  const [pricing, setPricing] = useState<any>(null);
+  const [privacy, setPrivacy] = useState<any>(null);
 
   async function loadAll() {
     try {
-      const [ov, oppRes, recRes, assRes, appRes, savRes, tktRes, notRes, srcRes] = await Promise.all([
+      const [ov, oppRes, recRes, assRes, appRes, savRes, tktRes, notRes, srcRes, prcRes, prvRes] = await Promise.all([
         apiFetch<any>("/api/v1/caravan/overview"),
         apiFetch<any>(`/api/v1/caravan/opportunities?query=${encodeURIComponent(query)}&funding_type=${encodeURIComponent(typeFilter)}&verification_status=${encodeURIComponent(statusFilter)}`),
         apiFetch<any>("/api/v1/caravan/recommendations"),
@@ -95,6 +97,8 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
         apiFetch<any>("/api/v1/caravan/support/tickets"),
         apiFetch<any>("/api/v1/caravan/notifications"),
         apiFetch<any>("/api/v1/caravan/sources"),
+        apiFetch<any>("/api/v1/caravan/pricing").catch(() => null),
+        apiFetch<any>("/api/v1/caravan/privacy").catch(() => null),
       ]);
       setOverview(ov);
       setOpportunities(oppRes.opportunities || []);
@@ -105,6 +109,8 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
       setTickets(tktRes.tickets || []);
       setNotifications(notRes.notifications || []);
       setSources(srcRes.sources || []);
+      setPricing(prcRes);
+      setPrivacy(prvRes);
       if (ov?.account) {
         setOrgName(ov.account.organization_name || "");
         setEntityType(ov.account.entity_type || "STARTUP");
@@ -662,7 +668,75 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
                 </button>
               ))}
             </div>
+            {Array.isArray(pricing?.plans) && (
+              <div className="grid-3" style={{ gap: 8, paddingTop: 4 }}>
+                {pricing.plans.map((pl: any) => (
+                  <div key={pl.tier} className="list-item" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <strong>{pl.label}</strong>
+                    <div className="mono" style={{ fontSize: 12 }}>${pl.monthly_usd}/mo · NGN {Number(pl.monthly_ngn || 0).toLocaleString()}/mo</div>
+                    <div className="muted" style={{ fontSize: 11 }}>{pl.target_audience}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="muted" style={{ fontSize: 11 }}>
+              {pricing?.cancellation_policy || "Cancel anytime; live payments disabled until explicitly authorized."}
+            </div>
           </div>
+
+          {privacy && (
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <strong>Privacy, Consent &amp; Account Controls</strong>
+              <label className="row" style={{ gap: 8, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(privacy.analytics_consent)}
+                  onChange={async () => {
+                    await apiFetch("/api/v1/caravan/privacy", {
+                      method: "PUT",
+                      body: { analytics_consent: !privacy.analytics_consent },
+                    });
+                    await loadAll();
+                  }}
+                />
+                Allow privacy-preserving product analytics
+              </label>
+              <label className="row" style={{ gap: 8, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(privacy.marketing_consent)}
+                  onChange={async () => {
+                    await apiFetch("/api/v1/caravan/privacy", {
+                      method: "PUT",
+                      body: { marketing_consent: !privacy.marketing_consent },
+                    });
+                    await loadAll();
+                  }}
+                />
+                Allow funding alerts and product updates
+              </label>
+              <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  disabled={Boolean(privacy.deletion_requested)}
+                  onClick={async () => {
+                    await apiFetch("/api/v1/caravan/privacy", {
+                      method: "PUT",
+                      body: { deletion_requested: true, deletion_reason: "User requested account deletion from Caravan Account settings." },
+                    });
+                    pushToast("Account deletion request recorded for administrator review.", "info");
+                    await loadAll();
+                  }}
+                >
+                  {privacy.deletion_requested ? "Deletion Requested" : "Request Account Deletion"}
+                </button>
+                <span className="muted" style={{ fontSize: 11 }}>
+                  {pricing?.legal_notice || "NDPR/GDPR consent & cancellation transparency."}
+                </span>
+              </div>
+            </div>
+          )}
 
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <strong>Alerts &amp; Notifications ({notifications.length})</strong>
