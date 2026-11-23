@@ -890,18 +890,40 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                 </div>
               )}
 
-              {selected.backendProviderKey && info.record?.connection_id && !info.record?.disconnected_at && (
-                <div className="row" style={{ gap: 8 }}>
+              {selected.authFlow === "SERVER_ENV" && (
+                <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div className="telemetry-label">SERVER-MANAGED CONFIGURATION</div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {selected.id === "supabase"
+                      ? "Requires server-side Supabase Project URL (SUPABASE_URL), backend-only service-role key (SUPABASE_SERVICE_ROLE_KEY — never exposed to frontend), and Transaction Pooler / Supavisor connection string (ULTRON_DATABASE_URL) with migration and RLS permissions."
+                      : selected.id === "webhooks" || selected.id === "rest_apis" || selected.id === "mcp"
+                      ? "Server-level defaults are managed by the backend runtime. Register custom MCP servers, signed webhooks, or custom REST APIs in Universal Connections Centre 2.0."
+                      : "Managed via server environment configuration. Use Run Health Check below to verify live runtime connectivity."}
+                  </div>
+                  {selected.requiredEnvVars.length > 0 && (
+                    <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                      {selected.requiredEnvVars.map((envVar) => (
+                        <span key={envVar} className="pill mono" style={{ fontSize: 11 }}>{envVar}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {selected.backendProviderKey && (
+                <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleTestProvider(selected)}>
                     <Play size={12} /> Run Health Check
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    onClick={() => setConfirmDisconnect(selected)}
-                  >
-                    <Unplug size={13} /> Disconnect &amp; Revoke
-                  </button>
+                  {info.record?.connection_id && !info.record?.disconnected_at && (
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={() => setConfirmDisconnect(selected)}
+                    >
+                      <Unplug size={13} /> Disconnect &amp; Revoke
+                    </button>
+                  )}
                 </div>
               )}
 

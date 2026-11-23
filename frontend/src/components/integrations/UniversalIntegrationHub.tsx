@@ -625,12 +625,21 @@ export function UniversalIntegrationHub() {
               <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <strong><ShieldCheck size={12} /> Server-Managed Integration</strong>
                 <div className="muted" style={{ fontSize: 12 }}>
-                  {activeConfigItem.entry.id === "webhooks" ||
-                  activeConfigItem.entry.id === "rest_apis" ||
-                  activeConfigItem.entry.id === "mcp"
+                  {activeConfigItem.entry.id === "supabase"
+                    ? "Requires server-side Supabase Project URL (SUPABASE_URL), backend-only service-role key (SUPABASE_SERVICE_ROLE_KEY — never exposed to frontend), and Transaction Pooler / Supavisor connection string (ULTRON_DATABASE_URL) with migration and RLS permissions. Use Run Health Check below to verify live PostgREST and database connectivity."
+                    : activeConfigItem.entry.id === "webhooks" ||
+                      activeConfigItem.entry.id === "rest_apis" ||
+                      activeConfigItem.entry.id === "mcp"
                     ? "Server-level defaults are managed by the backend runtime. To register custom MCP servers, signed webhooks, or custom REST API endpoints, use Universal Connections Centre 2.0 → Connect a Service below."
                     : "Managed via server environment configuration. Use Run Health Check below to verify live runtime connectivity."}
                 </div>
+                {activeConfigItem.entry.requiredEnvVars.length > 0 && (
+                  <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                    {activeConfigItem.entry.requiredEnvVars.map((envVar) => (
+                      <span key={envVar} className="pill mono" style={{ fontSize: 11 }}>{envVar}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
