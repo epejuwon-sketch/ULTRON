@@ -165,6 +165,7 @@ class RegisterUniversalConnectorRequest(BaseModel):
     credentials: dict[str, Any] = Field(default_factory=dict)
     webhook_secret: str = Field(default="", max_length=500)
     subscribed_events: list[str] = Field(default_factory=list)
+    mcp_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class WebsiteInspectRequest(BaseModel):
@@ -182,6 +183,15 @@ class RotateConnectorRequest(BaseModel):
 
 class ExecuteConnectorActionRequest(BaseModel):
     capability: str = Field(min_length=2, max_length=120)
+    project_id: str = Field(default="*", max_length=64)
+    agent_id: str = Field(default="*", max_length=64)
+
+
+class GrantConnectorScopeRequest(BaseModel):
+    user_id: str = Field(default="*", max_length=64)
+    project_id: str = Field(default="*", max_length=64)
+    agent_id: str = Field(default="*", max_length=64)
+    allowed_tools: list[str] = Field(default_factory=list)
 
 
 @router.get("/universal/catalogue")
@@ -221,6 +231,7 @@ def api_register_universal_connector(
         credentials=body.credentials,
         webhook_secret=body.webhook_secret,
         subscribed_events=body.subscribed_events,
+        mcp_config=body.mcp_config,
         settings=settings,
     )
 
@@ -353,5 +364,93 @@ def api_authorize_connector_action(
         principal=principal,
         connector_id=connector_id,
         capability=body.capability,
+        project_id=body.project_id,
+        agent_id=body.agent_id,
     )
+
+
+@router.post("/universal/connectors/{connector_id}/mcp-probe")
+def api_probe_mcp_connector(
+    connector_id: str,
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.universal_connections_service import probe_mcp_streamable_http
+
+    return probe_mcp_streamable_http(
+        db,
+        principal=principal,
+        connector_id=connector_id,
+        settings=settings,
+    )
+
+
+@router.get("/universal/google-adc/status")
+def api_google_adc_status(
+    principal: Principal = Depends(require_perm("integrations:verify")),
+) -> dict:
+    from app.services.universal_connections_service import probe_google_adc
+
+    _ = principal
+    return probe_google_adc()
+
+
+@router.get("/universal/connectors/{connector_id}/diagnose")
+def api_diagnose_universal_connector(
+    connector_id: str,
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.universal_connections_service import diagnose_universal_connector
+
+    return diagnose_universal_connector(
+        db,
+        tenant_id=principal.tenant_id,
+        connector_id=connector_id,
+    )
+
+
+@router.get("/universal/connectors/{connector_id}/scopes")
+def api_list_connector_scopes(
+    connector_id: str,
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.universal_connections_service import list_connector_scopes
+
+    items = list_connector_scopes(db, tenant_id=principal.tenant_id, connector_id=connector_id)
+    return {"total": len(items), "scopes": items}
+
+
+@router.post("/universal/connectors/{connector_id}/scopes")
+def api_grant_connector_scope(
+    connector_id: str,
+    body: GrantConnectorScopeRequest,
+    principal: Principal = Depends(require_perm("integrations:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.universal_connections_service import grant_connector_scope
+
+    return grant_connector_scope(
+        db,
+        principal=principal,
+        connector_id=connector_id,
+        user_id=body.user_id,
+        project_id=body.project_id,
+        agent_id=body.agent_id,
+        allowed_tools=body.allowed_tools,
+    )
+
+
+@router.post("/universal/scopes/{grant_id}/revoke")
+def api_revoke_connector_scope(
+    grant_id: str,
+    principal: Principal = Depends(require_perm("integrations:manage")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.universal_connections_service import revoke_connector_scope
+
+    return revoke_connector_scope(db, principal=principal, grant_id=grant_id)
+
 

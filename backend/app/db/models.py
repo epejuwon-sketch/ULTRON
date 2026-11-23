@@ -1081,6 +1081,8 @@ class UniversalConnectorRecord(Base):
     encrypted_webhook_secret_b64: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_secret_nonce_b64: Mapped[str | None] = mapped_column(String(128), nullable=True)
     subscribed_events_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    mcp_config_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    mcp_tools_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1101,5 +1103,22 @@ class WebhookDeliveryRecord(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACCEPTED")
     payload_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class ConnectorScopeGrantRecord(Base):
+    __tablename__ = "connector_scope_grants"
+
+    grant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, default="*")
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, default="*")
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False, default="*")
+    allowed_tools_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    granted_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
 
 

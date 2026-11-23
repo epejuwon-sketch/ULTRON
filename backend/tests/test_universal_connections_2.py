@@ -228,3 +228,184 @@ def test_universal_connections_ssrf_website_and_webhooks(client: TestClient, aut
     delivs = client.get(f"/api/v1/integrations/universal/connectors/{wh_cid}/deliveries", headers=auth_headers["owner"])
     assert delivs.status_code == 200
     assert delivs.json()["total"] == 2
+
+
+def test_antigravity_mcp_adc_scopes_and_diagnostics(client, auth_headers):
+    from types import SimpleNamespace
+
+    import httpx
+    from app.core.config import get_settings
+    from app.db.session import get_engine
+    from app.services import universal_connections_service
+    from sqlalchemy import text
+    from sqlalchemy.orm import sessionmaker
+
+    # (a) MCP_STDIO: reject disallowed commands & shell metacharacters, allow safe allowlisted binary
+    bad_cmd = client.post(
+        "/api/v1/integrations/universal/connectors",
+        headers=auth_headers["owner"],
+        json={
+            "name": "Unsafe Shell MCP",
+            "connection_method": "MCP_STDIO",
+            "mcp_config": {"command": "bash", "args": ["-c", "echo pwned"]},
+        },
+    )
+    assert bad_cmd.status_code in (400, 403, 422)
+
+    bad_meta = client.post(
+        "/api/v1/integrations/universal/connectors",
+        headers=auth_headers["owner"],
+        json={
+            "name": "Injection Args MCP",
+            "connection_method": "MCP_STDIO",
+            "mcp_config": {"command": "npx", "args": ["-y", "foo; rm -rf /"]},
+        },
+    )
+    assert bad_meta.status_code in (400, 403, 422)
+
+    good_stdio = client.post(
+        "/api/v1/integrations/universal/connectors",
+        headers=auth_headers["owner"],
+        json={
+            "name": "Filesystem STDIO MCP",
+            "connection_method": "MCP_STDIO",
+            "mcp_config": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]},
+        },
+    )
+    assert good_stdio.status_code == 201, good_stdio.text
+    stdio_data = good_stdio.json()
+    assert stdio_data["connection_method"] == "MCP_STDIO"
+    assert stdio_data["mcp_config"]["command"] == "npx"
+
+    # (b) MCP_STREAMABLE_HTTP: JSON-RPC 2.0 initialize + tools/list discovery
+    mcp_reg = client.post(
+        "/api/v1/integrations/universal/connectors",
+        headers=auth_headers["owner"],
+        json={
+            "name": "Remote GitHub MCP",
+            "connection_method": "MCP_STREAMABLE_HTTP",
+            "api_base_url": "https://mcp.example.com/mcp",
+            "mcp_config": {"transport": "streamable_http", "url": "https://mcp.example.com/mcp"},
+            "credentials": {"api_key": "mcp-secret-token-123"},
+        },
+    )
+    assert mcp_reg.status_code == 201, mcp_reg.text
+    mcp_cid = mcp_reg.json()["connector_id"]
+
+    def _mcp_transport(req: httpx.Request) -> httpx.Response:
+        body = req.read().decode("utf-8")
+        if '"initialize"' in body:
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-03-26"}})
+        if '"tools/list"' in body:
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": {
+                        "tools": [
+                            {"name": "search_issues", "description": "Search repo issues"},
+                            {"name": "create_pr", "description": "Open a pull request"},
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    settings = get_settings()
+    db = sessionmaker(bind=get_engine(settings), autocommit=False, autoflush=False, expire_on_commit=False)()
+    try:
+        tid = db.execute(text("SELECT tenant_id FROM tenants LIMIT 1")).scalar_one()
+        principal = SimpleNamespace(user_id="owner-1", username="owner", tenant_id=tid, role="OWNER")
+        with httpx.Client(transport=httpx.MockTransport(_mcp_transport)) as mock_http:
+            probed = universal_connections_service.probe_mcp_streamable_http(
+                db,
+                principal=principal,
+                connector_id=mcp_cid,
+                settings=settings,
+                http_client=mock_http,
+            )
+        assert probed["lifecycle_state"] == "LIVE_VERIFIED"
+        tool_names = [t["name"] for t in probed["mcp_tools"]]
+        assert "search_issues" in tool_names
+        assert "create_pr" in tool_names
+    finally:
+        db.close()
+
+    # (c) GOOGLE_ADC safe status check & connector registration
+    adc_status = client.get("/api/v1/integrations/universal/google-adc/status", headers=auth_headers["owner"])
+    assert adc_status.status_code == 200
+    assert "adc_available" in adc_status.json()
+
+    adc_reg = client.post(
+        "/api/v1/integrations/universal/connectors",
+        headers=auth_headers["owner"],
+        json={"name": "Vertex AI ADC", "connection_method": "GOOGLE_ADC"},
+    )
+    assert adc_reg.status_code == 201
+
+    # (d) Per-user, per-project, per-agent scope grants + approval enforcement
+    approve_res = client.post(
+        f"/api/v1/integrations/universal/connectors/{mcp_cid}/approve",
+        headers=auth_headers["owner"],
+        json={},
+    )
+    assert approve_res.status_code == 200
+
+    # Grant scope restricted to proj-alpha and agent-coder for tool search_issues
+    grant_res = client.post(
+        f"/api/v1/integrations/universal/connectors/{mcp_cid}/scopes",
+        headers=auth_headers["owner"],
+        json={
+            "user_id": "*",
+            "project_id": "proj-alpha",
+            "agent_id": "agent-coder",
+            "allowed_tools": ["search_issues"],
+        },
+    )
+    assert grant_res.status_code == 200, grant_res.text
+    grant_id = grant_res.json()["grant_id"]
+
+    # Mismatched project -> blocked with SCOPE_GRANT_REQUIRED
+    denied_proj = client.post(
+        f"/api/v1/integrations/universal/connectors/{mcp_cid}/authorize-action",
+        headers=auth_headers["owner"],
+        json={"capability": "search_issues", "project_id": "proj-other", "agent_id": "agent-coder"},
+    )
+    assert denied_proj.status_code == 200
+    assert denied_proj.json()["authorized"] is False
+    assert denied_proj.json()["status"] == "SCOPE_GRANT_REQUIRED"
+
+    # Matching project + agent + allowed tool -> AUTHORIZED
+    ok_exec = client.post(
+        f"/api/v1/integrations/universal/connectors/{mcp_cid}/authorize-action",
+        headers=auth_headers["owner"],
+        json={"capability": "search_issues", "project_id": "proj-alpha", "agent_id": "agent-coder"},
+    )
+    assert ok_exec.status_code == 200
+    assert ok_exec.json()["authorized"] is True
+    assert ok_exec.json()["status"] == "AUTHORIZED"
+
+    # Revoke scope -> blocked again
+    rev_res = client.post(f"/api/v1/integrations/universal/scopes/{grant_id}/revoke", headers=auth_headers["owner"])
+    assert rev_res.status_code == 200
+    assert rev_res.json()["status"] == "REVOKED"
+
+    after_rev = client.post(
+        f"/api/v1/integrations/universal/connectors/{mcp_cid}/authorize-action",
+        headers=auth_headers["owner"],
+        json={"capability": "search_issues", "project_id": "proj-alpha", "agent_id": "agent-coder"},
+    )
+    assert after_rev.status_code == 200
+    assert after_rev.json()["authorized"] is False
+    assert after_rev.json()["status"] == "SCOPE_GRANT_REQUIRED"
+
+    # (e) Diagnostics endpoint
+    diag = client.get(f"/api/v1/integrations/universal/connectors/{mcp_cid}/diagnose", headers=auth_headers["owner"])
+    assert diag.status_code == 200
+    diag_data = diag.json()
+    assert diag_data["connector_id"] == mcp_cid
+    assert diag_data["ssrf_validated"] is True
+    assert diag_data["active_scope_grants"] == 0
+    assert diag_data["lifecycle_state"] == "LIVE_VERIFIED"
+

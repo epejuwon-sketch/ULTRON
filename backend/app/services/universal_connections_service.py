@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import os
 import re
 import socket
 import uuid
@@ -27,7 +28,12 @@ from app.core.exceptions import (
 )
 from app.core.permissions import Principal
 from app.core.security import decrypt_vault_secret, encrypt_vault_secret
-from app.db.models import IntegrationConnectionRecord, UniversalConnectorRecord, WebhookDeliveryRecord
+from app.db.models import (
+    ConnectorScopeGrantRecord,
+    IntegrationConnectionRecord,
+    UniversalConnectorRecord,
+    WebhookDeliveryRecord,
+)
 from app.db.repositories import append_audit_log
 from app.services.integration_manager import (
     SUPPORTED_MANAGED_PROVIDERS,
@@ -166,6 +172,30 @@ def list_universal_catalogue(
     }
 
 
+_ALLOWED_STDIO_COMMANDS = frozenset({"npx", "uvx", "node", "python", "python3", "docker"})
+_STDIO_BAD_CHARS_RE = re.compile(r"[;|&`$<>\\\r\n\x00]")
+
+
+def _validate_stdio_mcp_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
+    if not cfg or not isinstance(cfg, dict):
+        raise ValidationError("mcp_config with command and args is required for MCP_STDIO.")
+    cmd = str(cfg.get("command") or "").strip()
+    if cmd not in _ALLOWED_STDIO_COMMANDS:
+        raise SecurityViolationError(
+            f"MCP_STDIO command '{cmd}' is not in the safe allowlist ({', '.join(sorted(_ALLOWED_STDIO_COMMANDS))})."
+        )
+    args = cfg.get("args") or []
+    if not isinstance(args, list):
+        raise ValidationError("mcp_config.args must be a list of strings.")
+    clean_args = []
+    for a in args:
+        s = str(a)
+        if _STDIO_BAD_CHARS_RE.search(s):
+            raise SecurityViolationError("MCP_STDIO args contain disallowed shell metacharacters.")
+        clean_args.append(s)
+    return {"command": cmd, "args": clean_args, "transport": "stdio"}
+
+
 def register_universal_connector(
     db: Session,
     *,
@@ -182,18 +212,29 @@ def register_universal_connector(
     credentials: dict[str, Any] | None = None,
     webhook_secret: str = "",
     subscribed_events: list[str] | None = None,
+    mcp_config: dict[str, Any] | None = None,
     settings: Settings,
 ) -> dict[str, Any]:
     clean_name = (name or "").strip()[:120]
     if not clean_name:
         raise ValidationError("Service name is required.")
     method = connection_method.strip().upper()
-    if method not in {"API_KEY", "OAUTH2", "WEBSITE", "WEBHOOK"}:
-        raise ValidationError("connection_method must be API_KEY, OAUTH2, WEBSITE, or WEBHOOK.")
+    if method not in {"API_KEY", "OAUTH2", "WEBSITE", "WEBHOOK", "MCP_STDIO", "MCP_STREAMABLE_HTTP", "GOOGLE_ADC"}:
+        raise ValidationError(
+            "connection_method must be API_KEY, OAUTH2, WEBSITE, WEBHOOK, MCP_STDIO, MCP_STREAMABLE_HTTP, or GOOGLE_ADC."
+        )
 
     safe_web = validate_public_https_url(website_url) if website_url else ""
     safe_docs = validate_public_https_url(docs_url) if docs_url else ""
     safe_api = validate_public_https_url(api_base_url) if api_base_url else ""
+
+    validated_mcp: dict[str, Any] = {}
+    if method == "MCP_STDIO":
+        validated_mcp = _validate_stdio_mcp_config(mcp_config)
+    elif method == "MCP_STREAMABLE_HTTP":
+        if not safe_api:
+            raise ValidationError("api_base_url is required for MCP_STREAMABLE_HTTP.")
+        validated_mcp = {"endpoint": safe_api, "transport": "streamable_http"}
 
     provider_key = _slugify_provider(clean_name)
     connector_id = f"ucon_{uuid.uuid4().hex[:14]}"
@@ -207,8 +248,12 @@ def register_universal_connector(
         state = "AWAITING_AUTHORIZATION"
     elif method == "WEBSITE":
         state = "DISCOVERED" if safe_web else "NOT_CONFIGURED"
-    else:  # WEBHOOK
+    elif method == "WEBHOOK":
         state = "CONNECTED" if webhook_secret.strip() else "CONFIGURATION_REQUIRED"
+    elif method in {"MCP_STDIO", "MCP_STREAMABLE_HTTP"}:
+        state = "CONFIGURATION_REQUIRED" if (method == "MCP_STREAMABLE_HTTP" and not safe_api) else "DISCOVERED"
+    else:  # GOOGLE_ADC
+        state = "AUTHENTICATED" if probe_google_adc()["adc_available"] else "CONFIGURATION_REQUIRED"
 
     enc_wh_b64 = None
     wh_nonce_b64 = None
@@ -240,6 +285,7 @@ def register_universal_connector(
         encrypted_webhook_secret_b64=enc_wh_b64,
         webhook_secret_nonce_b64=wh_nonce_b64,
         subscribed_events_json=json.dumps(subscribed_events or []),
+        mcp_config_json=json.dumps(validated_mcp),
         created_by=principal.username,
     )
     db.add(rec)
@@ -684,8 +730,10 @@ def execute_authorized_connector_action(
     principal: Principal,
     connector_id: str,
     capability: str,
+    project_id: str = "*",
+    agent_id: str = "*",
 ) -> dict[str, Any]:
-    """Enforce action-level capability & explicit user approval before ARGON executes on a connector."""
+    """Enforce user, project, agent, and action-level capability approval before ARGON executes on a connector."""
     rec = _get_connector(db, tenant_id=principal.tenant_id, connector_id=connector_id)
     if rec.lifecycle_state in {"REVOKED", "EXPIRED", "FAILED", "NOT_CONFIGURED", "CONFIGURATION_REQUIRED"}:
         raise ConflictError(f"Connector '{rec.name}' is in state '{rec.lifecycle_state}' and cannot execute actions.")
@@ -697,6 +745,38 @@ def execute_authorized_connector_action(
             "capability": capability,
             "message": f"Explicit user approval is required before ARGON may use '{rec.name}'.",
         }
+
+    # Check per-user, per-project, per-agent scope grants if any have been configured for this connector
+    all_grants = db.execute(
+        select(ConnectorScopeGrantRecord).where(
+            ConnectorScopeGrantRecord.tenant_id == principal.tenant_id,
+            ConnectorScopeGrantRecord.connector_id == rec.connector_id,
+        )
+    ).scalars().all()
+    if all_grants:
+        matched = False
+        for g in all_grants:
+            if g.status != "ACTIVE":
+                continue
+            u_ok = g.user_id in {principal.user_id, "*"}
+            p_ok = g.project_id in {project_id, "*"}
+            a_ok = g.agent_id in {agent_id, "*"}
+            tools = json.loads(g.allowed_tools_json or "[]")
+            t_ok = (not tools) or (capability in tools) or ("*" in tools)
+            if u_ok and p_ok and a_ok and t_ok:
+                matched = True
+                break
+        if not matched:
+            return {
+                "authorized": False,
+                "status": "SCOPE_GRANT_REQUIRED",
+                "connector_id": rec.connector_id,
+                "capability": capability,
+                "project_id": project_id,
+                "agent_id": agent_id,
+                "message": f"No active scope grant authorizes user '{principal.user_id}', project '{project_id}', agent '{agent_id}' for '{capability}'.",
+            }
+
     caps = json.loads(rec.capabilities_json or "[]")
     if caps and capability not in caps:
         return {
@@ -712,7 +792,7 @@ def execute_authorized_connector_action(
         actor=principal.username,
         action="ARGON_CONNECTOR_ACTION_AUTHORIZED",
         resource=f"{rec.connector_id}:{capability}",
-        outcome="AUTHORIZED",
+        outcome=f"AUTHORIZED|project={project_id}|agent={agent_id}",
     )
     db.commit()
     return {
@@ -721,6 +801,228 @@ def execute_authorized_connector_action(
         "connector_id": rec.connector_id,
         "provider_key": rec.provider_key,
         "capability": capability,
+        "project_id": project_id,
+        "agent_id": agent_id,
+    }
+
+
+def probe_google_adc() -> dict[str, Any]:
+    """Safely inspect Google Application Default Credentials availability without exposing secrets."""
+    cred_file = (os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+    if cred_file and os.path.isfile(cred_file):
+        return {"adc_available": True, "source": "GOOGLE_APPLICATION_CREDENTIALS", "detail": "ADC JSON file path configured."}
+    try:
+        import google.auth  # type: ignore
+
+        creds, project = google.auth.default()
+        if creds is not None:
+            return {"adc_available": True, "source": "google.auth.default", "project_id": project or ""}
+    except Exception:
+        pass
+    return {"adc_available": False, "source": "none", "detail": "No Google Application Default Credentials detected in environment."}
+
+
+def probe_mcp_streamable_http(
+    db: Session,
+    *,
+    principal: Principal,
+    connector_id: str,
+    settings: Settings,
+    http_client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Discover tools from a remote Streamable HTTP MCP server via JSON-RPC 2.0 initialize + tools/list."""
+    rec = _get_connector(db, tenant_id=principal.tenant_id, connector_id=connector_id)
+    if rec.connection_method != "MCP_STREAMABLE_HTTP":
+        raise ValidationError("Connector is not configured as MCP_STREAMABLE_HTTP.")
+    if rec.lifecycle_state == "REVOKED":
+        raise ConflictError("Cannot probe a REVOKED MCP connector.")
+
+    endpoint = validate_public_https_url(rec.api_base_url)
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        **json.loads(rec.required_headers_json or "{}"),
+    }
+
+    ic = db.execute(
+        select(IntegrationConnectionRecord).where(
+            IntegrationConnectionRecord.tenant_id == principal.tenant_id,
+            IntegrationConnectionRecord.provider == rec.provider_key,
+        )
+    ).scalar_one_or_none()
+    if ic and ic.encrypted_credentials_b64 and ic.credentials_nonce_b64:
+        creds = json.loads(
+            decrypt_vault_secret(
+                ic.encrypted_credentials_b64,
+                ic.credentials_nonce_b64,
+                master_secret=settings.vault_master_key.get_secret_value(),
+                aad=f"ultron-integration::{principal.tenant_id}::{rec.provider_key}",
+            )
+        )
+        tok = creds.get("api_key") or creds.get("access_token") or ""
+        if tok:
+            headers.setdefault("Authorization", f"Bearer {tok}")
+
+    client = http_client or httpx.Client(timeout=10.0, follow_redirects=False)
+    should_close = http_client is None
+    now = datetime.now(timezone.utc)
+    discovered_tools: list[dict[str, Any]] = []
+    try:
+        init_resp = client.post(
+            endpoint,
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "ULTRON-OS", "version": "2026.4"}},
+            },
+        )
+        if init_resp.status_code not in (200, 202):
+            rec.lifecycle_state = "FAILED" if init_resp.status_code in (401, 403) else "DEGRADED"
+            rec.last_error = f"MCP initialize returned HTTP {init_resp.status_code}."
+            rec.updated_at = now
+            db.commit()
+            return _serialize_universal_connector(rec)
+
+        tools_resp = client.post(
+            endpoint,
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
+        if tools_resp.status_code == 200:
+            body_text = tools_resp.text or ""
+            if "data:" in body_text and "text/event-stream" in (tools_resp.headers.get("content-type") or ""):
+                for line in body_text.splitlines():
+                    if line.startswith("data:"):
+                        parsed = json.loads(line.removeprefix("data:").strip())
+                        if isinstance(parsed, dict) and "result" in parsed:
+                            discovered_tools = parsed["result"].get("tools", [])
+                            break
+            else:
+                discovered_tools = (tools_resp.json().get("result") or {}).get("tools", [])
+
+            rec.mcp_tools_json = json.dumps(discovered_tools)
+            tool_names = [t.get("name") for t in discovered_tools if isinstance(t, dict) and t.get("name")]
+            if tool_names:
+                rec.capabilities_json = json.dumps(tool_names)
+            rec.lifecycle_state = "LIVE_VERIFIED"
+            rec.last_verified_at = now
+            rec.last_error = None
+        else:
+            rec.lifecycle_state = "DEGRADED"
+            rec.last_error = f"MCP tools/list returned HTTP {tools_resp.status_code}."
+    except Exception as exc:
+        rec.lifecycle_state = "DEGRADED"
+        rec.last_error = f"MCP probe error: {type(exc).__name__}"
+    finally:
+        if should_close:
+            client.close()
+
+    rec.updated_at = now
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="UNIVERSAL_MCP_PROBED",
+        resource=rec.connector_id,
+        outcome=f"state={rec.lifecycle_state}|tools={len(discovered_tools)}",
+    )
+    db.commit()
+    db.refresh(rec)
+    return _serialize_universal_connector(rec)
+
+
+def grant_connector_scope(
+    db: Session,
+    *,
+    principal: Principal,
+    connector_id: str,
+    user_id: str = "*",
+    project_id: str = "*",
+    agent_id: str = "*",
+    allowed_tools: list[str] | None = None,
+) -> dict[str, Any]:
+    rec = _get_connector(db, tenant_id=principal.tenant_id, connector_id=connector_id)
+    if rec.lifecycle_state == "REVOKED":
+        raise ConflictError("Cannot grant scopes on a REVOKED connector.")
+    grant = ConnectorScopeGrantRecord(
+        grant_id=f"csg_{uuid.uuid4().hex[:14]}",
+        tenant_id=principal.tenant_id,
+        connector_id=rec.connector_id,
+        user_id=(user_id or "*").strip()[:64],
+        project_id=(project_id or "*").strip()[:64],
+        agent_id=(agent_id or "*").strip()[:64],
+        allowed_tools_json=json.dumps(allowed_tools or []),
+        status="ACTIVE",
+        granted_by=principal.username,
+    )
+    db.add(grant)
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CONNECTOR_SCOPE_GRANTED",
+        resource=rec.connector_id,
+        outcome=f"user={grant.user_id}|project={grant.project_id}|agent={grant.agent_id}",
+    )
+    db.commit()
+    db.refresh(grant)
+    return _serialize_scope_grant(grant)
+
+
+def list_connector_scopes(db: Session, *, tenant_id: str, connector_id: str) -> list[dict[str, Any]]:
+    rows = db.execute(
+        select(ConnectorScopeGrantRecord)
+        .where(
+            ConnectorScopeGrantRecord.tenant_id == tenant_id,
+            ConnectorScopeGrantRecord.connector_id == connector_id,
+        )
+        .order_by(ConnectorScopeGrantRecord.created_at.desc())
+    ).scalars().all()
+    return [_serialize_scope_grant(r) for r in rows]
+
+
+def revoke_connector_scope(db: Session, *, principal: Principal, grant_id: str) -> dict[str, Any]:
+    grant = db.execute(
+        select(ConnectorScopeGrantRecord).where(
+            ConnectorScopeGrantRecord.tenant_id == principal.tenant_id,
+            ConnectorScopeGrantRecord.grant_id == grant_id,
+        )
+    ).scalar_one_or_none()
+    if grant is None:
+        raise NotFoundError(f"Scope grant '{grant_id}' not found.")
+    grant.status = "REVOKED"
+    grant.updated_at = datetime.now(timezone.utc)
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CONNECTOR_SCOPE_REVOKED",
+        resource=grant.connector_id,
+        outcome=grant_id,
+    )
+    db.commit()
+    db.refresh(grant)
+    return _serialize_scope_grant(grant)
+
+
+def diagnose_universal_connector(db: Session, *, tenant_id: str, connector_id: str) -> dict[str, Any]:
+    rec = _get_connector(db, tenant_id=tenant_id, connector_id=connector_id)
+    scopes = list_connector_scopes(db, tenant_id=tenant_id, connector_id=connector_id)
+    active_scopes = [s for s in scopes if s["status"] == "ACTIVE"]
+    return {
+        "connector_id": rec.connector_id,
+        "name": rec.name,
+        "connection_method": rec.connection_method,
+        "lifecycle_state": rec.lifecycle_state,
+        "ssrf_validated": bool(rec.api_base_url or rec.website_url),
+        "approved_by": rec.approved_by,
+        "active_scope_grants": len(active_scopes),
+        "mcp_tools_discovered": len(json.loads(rec.mcp_tools_json or "[]")),
+        "google_adc": probe_google_adc() if rec.connection_method == "GOOGLE_ADC" else None,
+        "last_verified_at": rec.last_verified_at.isoformat() if rec.last_verified_at else None,
+        "last_error": rec.last_error,
     }
 
 
@@ -734,6 +1036,20 @@ def _get_connector(db: Session, *, tenant_id: str, connector_id: str) -> Univers
     if rec is None:
         raise NotFoundError(f"Universal connector '{connector_id}' not found.")
     return rec
+
+
+def _serialize_scope_grant(g: ConnectorScopeGrantRecord) -> dict[str, Any]:
+    return {
+        "grant_id": g.grant_id,
+        "connector_id": g.connector_id,
+        "user_id": g.user_id,
+        "project_id": g.project_id,
+        "agent_id": g.agent_id,
+        "allowed_tools": json.loads(g.allowed_tools_json or "[]"),
+        "status": g.status,
+        "granted_by": g.granted_by,
+        "created_at": g.created_at.isoformat(),
+    }
 
 
 def _serialize_universal_connector(r: UniversalConnectorRecord) -> dict[str, Any]:
@@ -753,6 +1069,8 @@ def _serialize_universal_connector(r: UniversalConnectorRecord) -> dict[str, Any
         "webhook_endpoint_path": r.webhook_endpoint_path,
         "has_webhook_secret": bool(r.encrypted_webhook_secret_b64),
         "subscribed_events": json.loads(r.subscribed_events_json or "[]"),
+        "mcp_config": json.loads(r.mcp_config_json or "{}"),
+        "mcp_tools": json.loads(r.mcp_tools_json or "[]"),
         "approved_by": r.approved_by,
         "last_verified_at": r.last_verified_at.isoformat() if r.last_verified_at else None,
         "last_error": r.last_error,

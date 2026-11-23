@@ -6,12 +6,11 @@ import json
 from pathlib import Path
 
 import httpx
-from fastapi.testclient import TestClient
-
 from app.core.config import Settings
 from app.core.rate_limit import SlidingWindowRateLimiter
 from app.integrations.extended import GitHubClient, GoogleDriveClient
 from app.integrations.supabase import SupabaseClient
+from fastapi.testclient import TestClient
 
 
 def test_websocket_authentication_and_ping_pong(client: TestClient, auth_headers: dict) -> None:
@@ -69,7 +68,7 @@ def test_monitoring_notifications_and_14_capability_registry(client: TestClient,
     overview = client.get("/api/v1/monitoring/overview", headers=auth_headers["owner"]).json()
     assert overview["database"]["healthy"] is True
     assert overview["agents"]["total_registered"] == 60
-    assert len(overview["applied_migrations"]) == 9
+    assert len(overview["applied_migrations"]) == 10
 
     prom = client.get("/api/v1/monitoring/metrics", headers=auth_headers["owner"])
     assert prom.status_code == 200

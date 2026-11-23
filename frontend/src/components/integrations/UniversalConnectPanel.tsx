@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import {
+  Activity,
   CheckCircle2,
+  Cloud,
+  Cpu,
   ExternalLink,
   Globe,
   KeyRound,
@@ -10,6 +13,7 @@ import {
   RotateCw,
   Search,
   ShieldCheck,
+  Terminal,
   Trash2,
   Webhook,
 } from "lucide-react";
@@ -46,9 +50,13 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
   const [connectOpen, setConnectOpen] = useState(false);
   const [configConnector, setConfigConnector] = useState<any>(null);
   const [deliveries, setDeliveries] = useState<any[]>([]);
+  const [scopeGrants, setScopeGrants] = useState<any[]>([]);
+  const [diagnostics, setDiagnostics] = useState<any>(null);
 
   // Connect form state
-  const [method, setMethod] = useState<"API_KEY" | "OAUTH2" | "WEBSITE" | "WEBHOOK">("API_KEY");
+  const [method, setMethod] = useState<
+    "API_KEY" | "OAUTH2" | "WEBSITE" | "WEBHOOK" | "MCP_STREAMABLE_HTTP" | "MCP_STDIO" | "GOOGLE_ADC"
+  >("API_KEY");
   const [svcName, setSvcName] = useState("");
   const [svcCategory, setSvcCategory] = useState("Custom websites and APIs");
   const [websiteUrl, setWebsiteUrl] = useState("");
@@ -61,9 +69,17 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
   const [capsText, setCapsText] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [eventsText, setEventsText] = useState("order.created, payment.succeeded");
+  const [mcpUrl, setMcpUrl] = useState("");
+  const [stdioCommand, setStdioCommand] = useState("npx");
+  const [stdioArgsText, setStdioArgsText] = useState("-y @modelcontextprotocol/server-filesystem /workspace");
+  const [adcStatus, setAdcStatus] = useState<any>(null);
   const [inspectResult, setInspectResult] = useState<any>(null);
   const [rotateKey, setRotateKey] = useState("");
   const [rotateWhSecret, setRotateWhSecret] = useState("");
+  const [scopeUser, setScopeUser] = useState("*");
+  const [scopeProject, setScopeProject] = useState("*");
+  const [scopeAgent, setScopeAgent] = useState("*");
+  const [scopeTools, setScopeTools] = useState("");
 
   async function loadCatalogue() {
     try {
@@ -107,6 +123,16 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
       if (clientId.trim()) creds.client_id = clientId.trim();
       if (clientSecret.trim()) creds.client_secret = clientSecret.trim();
 
+      const mcpConfig: Record<string, any> = {};
+      if (method === "MCP_STREAMABLE_HTTP") {
+        mcpConfig.transport = "streamable_http";
+        mcpConfig.url = mcpUrl.trim() || apiBaseUrl.trim();
+      } else if (method === "MCP_STDIO") {
+        mcpConfig.transport = "stdio";
+        mcpConfig.command = stdioCommand.trim();
+        mcpConfig.args = stdioArgsText.split(/\s+/).filter(Boolean);
+      }
+
       const created = await apiFetch<any>("/api/v1/integrations/universal/connectors", {
         method: "POST",
         body: {
@@ -115,12 +141,13 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
           connection_method: method,
           website_url: websiteUrl.trim(),
           docs_url: docsUrl.trim(),
-          api_base_url: apiBaseUrl.trim(),
+          api_base_url: method === "MCP_STREAMABLE_HTTP" ? (mcpUrl.trim() || apiBaseUrl.trim()) : apiBaseUrl.trim(),
           required_scopes: scopesText.split(",").map((s) => s.trim()).filter(Boolean),
           capabilities: capsText.split(",").map((s) => s.trim()).filter(Boolean),
           credentials: creds,
           webhook_secret: webhookSecret.trim(),
           subscribed_events: eventsText.split(",").map((s) => s.trim()).filter(Boolean),
+          mcp_config: mcpConfig,
         },
       });
       pushToast(`Registered '${created.name}' (${created.lifecycle_state}).`, "success");
@@ -131,7 +158,7 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
       setInspectResult(null);
       await loadCatalogue();
       onChanged?.();
-      setConfigConnector(created);
+      await openWorkspace(created);
     } catch (err: any) {
       pushToast(err.message, "error");
     }
@@ -139,6 +166,17 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
 
   async function openWorkspace(connector: any) {
     setConfigConnector(connector);
+    setDiagnostics(null);
+    if (connector.source === "CUSTOM_UNIVERSAL") {
+      try {
+        const s = await apiFetch<any>(`/api/v1/integrations/universal/connectors/${connector.connector_id}/scopes`);
+        setScopeGrants(s.scopes || []);
+      } catch {
+        setScopeGrants([]);
+      }
+    } else {
+      setScopeGrants([]);
+    }
     if (connector.source === "CUSTOM_UNIVERSAL" && connector.connection_method === "WEBHOOK") {
       try {
         const d = await apiFetch<any>(`/api/v1/integrations/universal/connectors/${connector.connector_id}/deliveries`);
@@ -233,6 +271,9 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
             {[
               { id: "API_KEY", label: "API Key", icon: KeyRound },
               { id: "OAUTH2", label: "OAuth 2.0", icon: Link2 },
+              { id: "MCP_STREAMABLE_HTTP", label: "MCP HTTP", icon: Cpu },
+              { id: "MCP_STDIO", label: "MCP STDIO", icon: Terminal },
+              { id: "GOOGLE_ADC", label: "Google ADC", icon: Cloud },
               { id: "WEBSITE", label: "Website URL", icon: Globe },
               { id: "WEBHOOK", label: "Webhook", icon: Webhook },
             ].map((tab) => {
@@ -250,7 +291,7 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
             })}
           </div>
 
-          <input className="input" placeholder="Service Name (e.g. Linear, HubSpot, Custom API)" value={svcName} onChange={(e) => setSvcName(e.target.value)} required />
+          <input className="input" placeholder="Service Name (e.g. Linear, GitHub MCP, Vertex ADC)" value={svcName} onChange={(e) => setSvcName(e.target.value)} required />
           <select className="select" value={svcCategory} onChange={(e) => setSvcCategory(e.target.value)}>
             {(categories.length ? categories : ["Custom websites and APIs"]).map((c) => (
               <option key={c} value={c}>{c}</option>
@@ -284,6 +325,49 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
                 <input className="input" style={{ flex: 1 }} type="password" placeholder="Client Secret (optional)" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
               </div>
             </>
+          )}
+
+          {method === "MCP_STREAMABLE_HTTP" && (
+            <>
+              <input className="input" placeholder="Streamable HTTP MCP Endpoint (HTTPS, e.g. https://mcp.example.com/mcp)" value={mcpUrl} onChange={(e) => setMcpUrl(e.target.value)} required />
+              <input className="input" type="password" placeholder="Bearer / API Token (optional, stored in VAULT)" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+            </>
+          )}
+
+          {method === "MCP_STDIO" && (
+            <>
+              <input className="input" placeholder="Executable (allowlisted: npx, uvx, node, python3, docker)" value={stdioCommand} onChange={(e) => setStdioCommand(e.target.value)} required />
+              <input className="input" placeholder="Arguments (space-separated, no shell metacharacters)" value={stdioArgsText} onChange={(e) => setStdioArgsText(e.target.value)} />
+            </>
+          )}
+
+          {method === "GOOGLE_ADC" && (
+            <div className="list-item" style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+              <div className="row-between">
+                <strong>Google Application Default Credentials (ADC)</strong>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={async () => {
+                    try {
+                      const res = await apiFetch<any>("/api/v1/integrations/universal/google-adc/status");
+                      setAdcStatus(res);
+                      pushToast(res.adc_available ? "Google ADC detected on server." : "Google ADC not configured on server.", res.adc_available ? "success" : "info");
+                    } catch (err: any) {
+                      pushToast(err.message, "error");
+                    }
+                  }}
+                >
+                  Check Server ADC
+                </button>
+              </div>
+              <span className="muted">Uses GOOGLE_APPLICATION_CREDENTIALS or Cloud Run/GCE metadata server without storing raw keys in the browser.</span>
+              {adcStatus && (
+                <div className="mono" style={{ fontSize: 11 }}>
+                  available={String(adcStatus.adc_available)} · source={adcStatus.source || "none"} {adcStatus.detail ? `· ${adcStatus.detail}` : ""}
+                </div>
+              )}
+            </div>
           )}
 
           {method === "WEBHOOK" && (
@@ -334,6 +418,31 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
               >
                 <RefreshCw size={12} /> Test Connection
               </button>
+              {configConnector.connection_method === "MCP_STREAMABLE_HTTP" && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={async () => {
+                    const res = await apiFetch<any>(`/api/v1/integrations/universal/connectors/${configConnector.connector_id}/mcp-probe`, { method: "POST" });
+                    setConfigConnector(res);
+                    await loadCatalogue();
+                    pushToast(`MCP probe: ${res.lifecycle_state} (${(res.mcp_tools || []).length} tools)`, res.lifecycle_state === "LIVE_VERIFIED" ? "success" : "info");
+                  }}
+                >
+                  <Cpu size={12} /> Probe MCP Tools
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  const diag = await apiFetch<any>(`/api/v1/integrations/universal/connectors/${configConnector.connector_id}/diagnose`);
+                  setDiagnostics(diag);
+                  pushToast(`Diagnostics: ${diag.lifecycle_state}`, "info");
+                }}
+              >
+                <Activity size={12} /> Run Diagnostics
+              </button>
               <button
                 type="button"
                 className="btn btn-sm"
@@ -361,6 +470,80 @@ export function UniversalConnectPanel({ onChanged }: { onChanged?: () => void })
               >
                 <Trash2 size={12} /> Revoke
               </button>
+            </div>
+
+            {diagnostics && (
+              <div className="list-item" style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                <strong>Diagnostics Summary</strong>
+                <div>
+                  SSRF Validated: {String(diagnostics.ssrf_validated)} · Active Scope Grants: {diagnostics.active_scope_grants} · MCP Tools: {diagnostics.mcp_tools_discovered}
+                </div>
+                {diagnostics.google_adc && (
+                  <div className="mono" style={{ fontSize: 11 }}>{JSON.stringify(diagnostics.google_adc)}</div>
+                )}
+              </div>
+            )}
+
+            {Array.isArray(configConnector.mcp_tools) && configConnector.mcp_tools.length > 0 && (
+              <div className="list-item" style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                <strong>Discovered MCP Tools ({configConnector.mcp_tools.length})</strong>
+                {configConnector.mcp_tools.slice(0, 8).map((tool: any, idx: number) => (
+                  <div key={tool.name || idx} className="row-between">
+                    <span className="mono">{tool.name || String(tool)}</span>
+                    <span className="muted">{tool.description ? String(tool.description).slice(0, 48) : "MCP tool"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+              <strong><ShieldCheck size={12} /> Per-User / Project / Agent Scope Grants</strong>
+              <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                <input className="input" style={{ flex: 1, minWidth: 80 }} placeholder="User (*)" value={scopeUser} onChange={(e) => setScopeUser(e.target.value)} />
+                <input className="input" style={{ flex: 1, minWidth: 80 }} placeholder="Project (*)" value={scopeProject} onChange={(e) => setScopeProject(e.target.value)} />
+                <input className="input" style={{ flex: 1, minWidth: 80 }} placeholder="Agent (*)" value={scopeAgent} onChange={(e) => setScopeAgent(e.target.value)} />
+              </div>
+              <input className="input" placeholder="Allowed tools (comma-separated, blank = all)" value={scopeTools} onChange={(e) => setScopeTools(e.target.value)} />
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  const granted = await apiFetch<any>(`/api/v1/integrations/universal/connectors/${configConnector.connector_id}/scopes`, {
+                    method: "POST",
+                    body: {
+                      user_id: scopeUser.trim() || "*",
+                      project_id: scopeProject.trim() || "*",
+                      agent_id: scopeAgent.trim() || "*",
+                      allowed_tools: scopeTools.split(",").map((t) => t.trim()).filter(Boolean),
+                    },
+                  });
+                  setScopeGrants((prev) => [granted, ...prev]);
+                  setScopeTools("");
+                  pushToast(`Scope grant ${granted.grant_id} created.`, "success");
+                }}
+              >
+                <Plus size={12} /> Grant Scope
+              </button>
+              {scopeGrants.map((g) => (
+                <div key={g.grant_id} className="row-between" style={{ paddingTop: 4 }}>
+                  <span className="mono" style={{ fontSize: 11 }}>
+                    u={g.user_id} · p={g.project_id} · a={g.agent_id} ({g.status})
+                  </span>
+                  {g.status === "ACTIVE" && (
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={async () => {
+                        const rev = await apiFetch<any>(`/api/v1/integrations/universal/scopes/${g.grant_id}/revoke`, { method: "POST" });
+                        setScopeGrants((prev) => prev.map((item) => (item.grant_id === g.grant_id ? rev : item)));
+                        pushToast(`Revoked scope ${g.grant_id}.`, "info");
+                      }}
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
 
             <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
