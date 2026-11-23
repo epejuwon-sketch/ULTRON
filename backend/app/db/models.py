@@ -1011,3 +1011,28 @@ class DeviceAppPermissionRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class OrbitRegisteredAppRecord(Base):
+    __tablename__ = "orbit_registered_apps"
+
+    app_record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    aliases_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="Custom")
+    platforms_json: Mapped[str] = mapped_column(Text, nullable=False, default='["ios","android","windows","macos","linux","web"]')
+    ios_scheme: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    universal_link: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    android_package: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    android_intent: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    desktop_app_key: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    web_fallback: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    verification_status: Mapped[str] = mapped_column(String(48), nullable=False, default="MANUAL_REGISTERED")
+    last_launch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_launch_status: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    last_launch_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+

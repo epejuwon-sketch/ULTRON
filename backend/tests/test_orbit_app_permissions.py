@@ -20,7 +20,7 @@ def test_orbit_app_launch_one_time_approval_and_scoping(client: TestClient, auth
     )
     assert first.status_code == 200
     assert first.json()["status"] == "APPROVAL_REQUIRED"
-    assert first.json()["prompt"] == "Allow ULTRON to open Spotify on this device whenever you request it?"
+    assert "Allow ULTRON to open Spotify" in first.json()["prompt"]
 
     # 2. Allow once works without persisting ALWAYS_ALLOW
     once = client.post(
@@ -100,3 +100,124 @@ def test_orbit_app_launch_one_time_approval_and_scoping(client: TestClient, auth
     )
     assert after_revoke.status_code == 200
     assert after_revoke.json()["status"] == "APPROVAL_REQUIRED"
+
+
+def test_orbit_device_wide_permission_and_universal_apps(client: TestClient, auth_headers: dict) -> None:
+    # Approve device-wide ORBIT_APPLICATION_LAUNCH on iphone_xr_pwa
+    dp = client.post(
+        "/api/v1/devices/apps/device-permission",
+        headers=auth_headers["owner"],
+        json={
+            "device_id": "iphone_xr_pwa",
+            "device_label": "iPhone XR PWA",
+            "decision": "ALWAYS_ALLOW",
+        },
+    )
+    assert dp.status_code == 200
+    assert dp.json()["permission_scope"] == "ORBIT_APPLICATION_LAUNCH"
+    assert dp.json()["status"] == "ALWAYS_ALLOW"
+
+    # Launch multiple distinct apps without repeated ULTRON approval
+    for query, expected_id, expect_url in [
+        ("YouTube", "youtube", True),
+        ("Instagram", "instagram", True),
+        ("TikTok", "tiktok", True),
+        ("my browser", "browser", True),
+        ("my gallery", "gallery", True),
+        ("my banking application", "banking", False),
+        ("my camera", "camera", False),
+        ("Notion", "notion", False),
+    ]:
+        res = client.post(
+            "/api/v1/devices/apps/launch",
+            headers=auth_headers["owner"],
+            json={"app_id": query, "device_id": "iphone_xr_pwa", "platform": "ios"},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["status"] == "READY_TO_LAUNCH"
+        assert body["app_id"] == expected_id
+        assert body["permission_mode"] == "ORBIT_APPLICATION_LAUNCH"
+        assert body["app_recognised"] is True
+        assert body["launch_url_resolved"] is expect_url
+        assert body["os_confirmed"] is False
+
+    # Different device still requires approval
+    other_dev = client.post(
+        "/api/v1/devices/apps/launch",
+        headers=auth_headers["owner"],
+        json={"app_id": "YouTube", "device_id": "android_pixel_8", "platform": "android"},
+    )
+    assert other_dev.status_code == 200
+    assert other_dev.json()["status"] == "APPROVAL_REQUIRED"
+
+    # Revoke device-wide permission restores APPROVAL_REQUIRED
+    rev = client.post(
+        "/api/v1/devices/apps/device-permission",
+        headers=auth_headers["owner"],
+        json={"device_id": "iphone_xr_pwa", "device_label": "iPhone XR PWA", "decision": "REVOKED"},
+    )
+    assert rev.status_code == 200
+    assert rev.json()["status"] == "REVOKED"
+
+    after_rev = client.post(
+        "/api/v1/devices/apps/launch",
+        headers=auth_headers["owner"],
+        json={"app_id": "YouTube", "device_id": "iphone_xr_pwa", "platform": "ios"},
+    )
+    assert after_rev.status_code == 200
+    assert after_rev.json()["status"] == "APPROVAL_REQUIRED"
+
+
+def test_orbit_custom_app_registration_security_and_library(client: TestClient, auth_headers: dict) -> None:
+    # Reject unsafe URI schemes and shell metacharacters
+    for bad_scheme in ["javascript:alert(1)", "file:///etc/passwd", "spotify://;rm -rf /"]:
+        bad = client.post(
+            "/api/v1/devices/apps/register",
+            headers=auth_headers["owner"],
+            json={"name": "BadApp", "ios_scheme": bad_scheme},
+        )
+        assert bad.status_code == 422
+
+    # Register custom banking app
+    reg = client.post(
+        "/api/v1/devices/apps/register",
+        headers=auth_headers["owner"],
+        json={
+            "name": "Monzo",
+            "aliases": ["my bank", "monzo bank"],
+            "category": "Finance",
+            "ios_scheme": "monzo://",
+            "universal_link": "https://monzo.com",
+            "android_package": "co.uk.getmondo",
+            "web_fallback": "https://web.monzo.com",
+        },
+    )
+    assert reg.status_code == 200
+    assert reg.json()["app_id"] == "monzo"
+
+    # Resolve by alias
+    resolved = client.post(
+        "/api/v1/devices/apps/resolve",
+        headers=auth_headers["owner"],
+        json={"query": "my bank", "platform": "ios"},
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["app_id"] == "monzo"
+    assert resolved.json()["launch_url"] == "monzo://"
+    assert resolved.json()["is_registered"] is True
+
+    # Library & discovery endpoints
+    lib = client.get("/api/v1/devices/apps/library?device_id=iphone_xr_pwa", headers=auth_headers["owner"])
+    assert lib.status_code == 200
+    assert lib.json()["total"] >= 20
+    assert any(a["app_id"] == "monzo" for a in lib.json()["apps"])
+
+    disc = client.get("/api/v1/devices/apps/discovery?platform=ios&device_id=iphone_xr_pwa", headers=auth_headers["owner"])
+    assert disc.status_code == 200
+    assert disc.json()["capabilities"]["ios"]["automatic_app_enumeration"] is False
+
+    # Delete custom app
+    deleted = client.delete("/api/v1/devices/apps/register/monzo", headers=auth_headers["owner"])
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == "DELETED"

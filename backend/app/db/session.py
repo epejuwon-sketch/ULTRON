@@ -30,6 +30,7 @@ MIGRATION_REGISTRY: list[tuple[str, str]] = [
     ("004", "004_full_platform_features.sql"),
     ("005", "005_finance_cards.sql"),
     ("006", "006_orbit_app_permissions.sql"),
+    ("007", "007_orbit_universal_apps.sql"),
 ]
 
 

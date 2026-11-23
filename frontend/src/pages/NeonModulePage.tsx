@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { apiFetch, resolveGeminiProviderStatus, streamNeon } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { getClientDeviceContext, parseAppLaunchCommand } from "../components/devices/OrbitAppPermissionsSection";
+import { getClientDeviceContext, parseUniversalAppLaunchCommand } from "../components/devices/OrbitAppPermissionsSection";
 import type { AttachedFileRef, ModulePageProps } from "../types/module";
 import {
   DataTable,
@@ -457,6 +457,36 @@ export default function NeonModulePage({
     const fileIds = attachedFiles.map((f) => f.file_id);
 
     try {
+      const appIntent = attachedFiles.length === 0 ? parseUniversalAppLaunchCommand(promptText) : null;
+      if (appIntent) {
+        const devCtx = getClientDeviceContext();
+        const res = await apiFetch<any>("/api/v1/devices/apps/launch", {
+          method: "POST",
+          body: {
+            app_id: appIntent.appId,
+            device_id: devCtx.deviceId,
+            device_label: devCtx.deviceLabel,
+            platform: devCtx.platform,
+            target_uri: appIntent.targetUri,
+            preferred_method: appIntent.preferredMethod,
+          },
+        });
+        setOrbitAppPrompt({ ...res, target_uri: appIntent.targetUri, preferred_method: appIntent.preferredMethod, devCtx });
+        const summary =
+          res.status === "APPROVAL_REQUIRED"
+            ? `ORBIT recognised **${res.app_name}** on ${devCtx.deviceLabel}. Approve \`ORBIT_APPLICATION_LAUNCH\` (or allow once) below to prepare the launch handoff.`
+            : res.status === "DENIED"
+            ? res.message || `Launch permission for ${res.app_name} is currently denied on this device.`
+            : `ORBIT recognised **${res.app_name}** (${res.permission_mode}). ${res.launch_url_resolved ? "Launch target resolved — tap Open below to attempt OS handoff (PWAs cannot independently confirm whether the OS opened the app)." : "No launch URL is registered yet; register its URL scheme or Universal Link in the ORBIT App Library."}`;
+        setMessages((prev) => [
+          ...prev,
+          { message_id: `u_${Date.now()}`, role: "user", content: promptText },
+          { message_id: `a_${Date.now() + 1}`, role: "assistant", content: summary, model: "ORBIT 2.0 Resolver" },
+        ]);
+        setInput("");
+        setSending(false);
+        return;
+      }
       if (useStream) {
         const uId = `u_${Date.now()}`;
         const aId = `a_${Date.now() + 1}`;
@@ -850,6 +880,9 @@ export default function NeonModulePage({
               {orbitAppPrompt.status === "APPROVAL_REQUIRED" ? (
                 <>
                   <strong>{orbitAppPrompt.prompt}</strong>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Device: {orbitAppPrompt.devCtx.deviceLabel} · Scope: {orbitAppPrompt.permission_scope || "ORBIT_APPLICATION_LAUNCH"}
+                  </div>
                   <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
                     <button
                       type="button"
@@ -863,17 +896,18 @@ export default function NeonModulePage({
                             device_label: orbitAppPrompt.devCtx.deviceLabel,
                             platform: orbitAppPrompt.devCtx.platform,
                             target_uri: orbitAppPrompt.target_uri,
+                            preferred_method: orbitAppPrompt.preferred_method,
                             allow_once: true,
                           },
                         });
-                        setOrbitAppPrompt({ ...r, target_uri: orbitAppPrompt.target_uri, devCtx: orbitAppPrompt.devCtx });
+                        setOrbitAppPrompt({ ...r, target_uri: orbitAppPrompt.target_uri, preferred_method: orbitAppPrompt.preferred_method, devCtx: orbitAppPrompt.devCtx });
                       }}
                     >
                       Allow once
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm"
+                      className="btn btn-secondary btn-sm"
                       onClick={async () => {
                         await apiFetch("/api/v1/devices/apps/permissions", {
                           method: "POST",
@@ -892,12 +926,41 @@ export default function NeonModulePage({
                             device_label: orbitAppPrompt.devCtx.deviceLabel,
                             platform: orbitAppPrompt.devCtx.platform,
                             target_uri: orbitAppPrompt.target_uri,
+                            preferred_method: orbitAppPrompt.preferred_method,
                           },
                         });
-                        setOrbitAppPrompt({ ...r, target_uri: orbitAppPrompt.target_uri, devCtx: orbitAppPrompt.devCtx });
+                        setOrbitAppPrompt({ ...r, target_uri: orbitAppPrompt.target_uri, preferred_method: orbitAppPrompt.preferred_method, devCtx: orbitAppPrompt.devCtx });
                       }}
                     >
-                      Always allow on this device
+                      Always allow {orbitAppPrompt.app_name}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={async () => {
+                        await apiFetch("/api/v1/devices/apps/device-permission", {
+                          method: "POST",
+                          body: {
+                            device_id: orbitAppPrompt.devCtx.deviceId,
+                            device_label: orbitAppPrompt.devCtx.deviceLabel,
+                            decision: "ALWAYS_ALLOW",
+                          },
+                        });
+                        const r = await apiFetch<any>("/api/v1/devices/apps/launch", {
+                          method: "POST",
+                          body: {
+                            app_id: orbitAppPrompt.app_id,
+                            device_id: orbitAppPrompt.devCtx.deviceId,
+                            device_label: orbitAppPrompt.devCtx.deviceLabel,
+                            platform: orbitAppPrompt.devCtx.platform,
+                            target_uri: orbitAppPrompt.target_uri,
+                            preferred_method: orbitAppPrompt.preferred_method,
+                          },
+                        });
+                        setOrbitAppPrompt({ ...r, target_uri: orbitAppPrompt.target_uri, preferred_method: orbitAppPrompt.preferred_method, devCtx: orbitAppPrompt.devCtx });
+                      }}
+                    >
+                      Remember ORBIT_APPLICATION_LAUNCH
                     </button>
                     <button
                       type="button"
@@ -921,18 +984,31 @@ export default function NeonModulePage({
                 </>
               ) : orbitAppPrompt.status === "READY_TO_LAUNCH" ? (
                 <>
-                  <strong>{orbitAppPrompt.app_name} Launch Ready ({orbitAppPrompt.permission_mode})</strong>
+                  <strong>{orbitAppPrompt.app_name} ({orbitAppPrompt.permission_mode})</strong>
+                  <div className="row" style={{ flexWrap: "wrap", gap: 6, fontSize: 11 }}>
+                    <span className="pill">Recognised: Yes</span>
+                    <span className="pill">URL Resolved: {orbitAppPrompt.launch_url_resolved ? "Yes" : "No"}</span>
+                    <span className="pill">Handoff: {orbitAppPrompt.handoff_tapped || orbitAppPrompt.handoff_attempted ? "Attempted" : "Awaiting Tap"}</span>
+                    <span className="pill">OS Confirmed: {orbitAppPrompt.os_confirmed ? "Yes" : "Unconfirmed"}</span>
+                  </div>
                   <div className="muted" style={{ fontSize: 12 }}>{orbitAppPrompt.platform_limitation_note}</div>
                   <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
                     {orbitAppPrompt.launch_url && (
-                      <a href={orbitAppPrompt.launch_url} className="btn btn-sm">Open {orbitAppPrompt.app_name} App</a>
+                      <a
+                        href={orbitAppPrompt.launch_url}
+                        className="btn btn-sm"
+                        onClick={() => setOrbitAppPrompt((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
+                      >
+                        Open {orbitAppPrompt.app_name} App
+                      </a>
                     )}
-                    {orbitAppPrompt.web_fallback_url && (
+                    {orbitAppPrompt.web_fallback_url && orbitAppPrompt.web_fallback_url !== orbitAppPrompt.launch_url && (
                       <a
                         href={orbitAppPrompt.web_fallback_url}
                         target={orbitAppPrompt.web_fallback_url.startsWith("http") ? "_blank" : undefined}
                         rel="noopener noreferrer"
                         className="btn btn-secondary btn-sm"
+                        onClick={() => setOrbitAppPrompt((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
                       >
                         Open Web Fallback
                       </a>

@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
-import { ExternalLink, Play, ShieldCheck, Smartphone, Trash2 } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Compass, ExternalLink, Play, Plus, Search, ShieldCheck, Smartphone, Trash2, XCircle } from "lucide-react";
 import { apiFetch } from "../../lib/api";
-import { DataTable, EmptyState, StatusIndicator, useToast } from "../ui/DesignSystem";
+import { DataTable, StatusIndicator, useToast } from "../ui/DesignSystem";
 
 export function getClientDeviceContext(): { deviceId: string; deviceLabel: string; platform: string } {
   let devId = localStorage.getItem("ultron_orbit_device_id");
@@ -25,18 +25,64 @@ export function getClientDeviceContext(): { deviceId: string; deviceLabel: strin
   return { deviceId: devId, deviceLabel: "Web Browser", platform: "web" };
 }
 
-export function parseAppLaunchCommand(text: string): { appId: string; targetUri?: string } | null {
+export interface ParsedAppLaunchIntent {
+  appId: string;
+  appName: string;
+  targetUri?: string;
+  preferredMethod?: string;
+}
+
+export function parseUniversalAppLaunchCommand(text: string): ParsedAppLaunchIntent | null {
   const clean = text.trim();
-  const lower = clean.toLowerCase();
-  if (!/\b(open|launch|start)\b/.test(lower)) return null;
-  if (lower.includes("spotify")) {
-    return { appId: "spotify", targetUri: clean };
+  if (!clean) return null;
+
+  // Match natural phrases: "open YouTube", "launch my banking application", "start Spotify playlist ...", etc.
+  const m = clean.match(/^(?:please\s+)?(?:can\s+you\s+)?(?:open|launch|start)\s+(?:up\s+)?(.+?)(?:\s+app(?:lication)?)?[.!?]*$/i);
+  if (!m) return null;
+
+  let body = m[1].trim();
+  let preferredMethod: string | undefined;
+  if (/\b(in|via|using)\s+(?:the\s+)?browser\b/i.test(body)) {
+    preferredMethod = "web_fallback";
+    body = body.replace(/\b(in|via|using)\s+(?:the\s+)?browser\b/i, "").trim();
   }
-  if (lower.includes("whatsapp")) return { appId: "whatsapp" };
-  if (lower.includes("gmail")) return { appId: "gmail" };
-  if (lower.includes("settings")) return { appId: "settings" };
-  if (lower.includes("calendar")) return { appId: "google_calendar" };
-  return null;
+
+  // Extract optional destination/content after "and search", "to", "for", or Spotify/URL tokens
+  let appPart = body;
+  let targetUri: string | undefined;
+
+  const urlMatch = body.match(/(https?:\/\/\S+|spotify:\S+)/i);
+  if (urlMatch) {
+    targetUri = urlMatch[1];
+    appPart = body.replace(urlMatch[1], "").replace(/\b(on|in|with|to)\b/gi, " ").trim() || (urlMatch[1].includes("spotify") ? "spotify" : "browser");
+  } else if (/\bspotify\b/i.test(body)) {
+    appPart = "spotify";
+    const rest = body.replace(/\bspotify\b/i, "").trim();
+    if (rest) targetUri = clean;
+  } else {
+    const destMatch = body.match(/^(.+?)\s+(?:and\s+search(?:\s+for)?|search(?:\s+for)?|for|to)\s+(.+)$/i);
+    if (destMatch) {
+      appPart = destMatch[1].trim();
+      targetUri = destMatch[2].trim();
+    }
+  }
+
+  appPart = appPart.replace(/^(my|the)\s+/i, "").replace(/\s+application$/i, "").trim();
+  if (!appPart || appPart.length > 80) return null;
+
+  return {
+    appId: appPart.toLowerCase(),
+    appName: appPart,
+    targetUri,
+    preferredMethod,
+  };
+}
+
+// Backward-compatible export
+export function parseAppLaunchCommand(text: string): { appId: string; targetUri?: string } | null {
+  const parsed = parseUniversalAppLaunchCommand(text);
+  if (!parsed) return null;
+  return { appId: parsed.appId, targetUri: parsed.targetUri };
 }
 
 export function OrbitAppPermissionsSection() {
@@ -44,18 +90,35 @@ export function OrbitAppPermissionsSection() {
   const ctx = getClientDeviceContext();
   const [apps, setApps] = useState<any[]>([]);
   const [permissions, setPermissions] = useState<any[]>([]);
-  const [spotifyTarget, setSpotifyTarget] = useState("");
+  const [devicePerm, setDevicePerm] = useState<any>(null);
+  const [discovery, setDiscovery] = useState<any>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [quickLaunchInput, setQuickLaunchInput] = useState("");
   const [pendingApproval, setPendingApproval] = useState<any>(null);
   const [launchResult, setLaunchResult] = useState<any>(null);
+  const [showRegisterForm, setShowRegisterForm] = useState(false);
+
+  // Manual registration state
+  const [regName, setRegName] = useState("");
+  const [regAliases, setRegAliases] = useState("");
+  const [regCategory, setRegCategory] = useState("Custom");
+  const [regScheme, setRegScheme] = useState("");
+  const [regUniversal, setRegUniversal] = useState("");
+  const [regAndroidPkg, setRegAndroidPkg] = useState("");
+  const [regDesktopKey, setRegDesktopKey] = useState("");
+  const [regWebFallback, setRegWebFallback] = useState("");
 
   async function load() {
     try {
-      const [cRes, pRes] = await Promise.all([
-        apiFetch<any>("/api/v1/devices/apps/catalog").catch(() => ({ apps: [] })),
-        apiFetch<any>("/api/v1/devices/apps/permissions").catch(() => ({ permissions: [] })),
+      const [libRes, pRes, discRes] = await Promise.all([
+        apiFetch<any>(`/api/v1/devices/apps/library?device_id=${encodeURIComponent(ctx.deviceId)}`).catch(() => ({ apps: [], device_permission: null })),
+        apiFetch<any>(`/api/v1/devices/apps/permissions?device_id=${encodeURIComponent(ctx.deviceId)}`).catch(() => ({ permissions: [] })),
+        apiFetch<any>(`/api/v1/devices/apps/discovery?platform=${encodeURIComponent(ctx.platform)}&device_id=${encodeURIComponent(ctx.deviceId)}`).catch(() => null),
       ]);
-      setApps(cRes.apps || []);
+      setApps(libRes.apps || []);
+      setDevicePerm(libRes.device_permission || null);
       setPermissions(pRes.permissions || []);
+      setDiscovery(discRes);
     } catch {
       // ignore
     }
@@ -65,28 +128,38 @@ export function OrbitAppPermissionsSection() {
     load();
   }, []);
 
-  async function requestLaunch(appId: string, allowOnce = false, targetUri?: string) {
+  const filteredApps = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return apps;
+    return apps.filter((a) => {
+      const hay = [a.name, a.app_id, a.category, ...(a.aliases || [])].join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+  }, [apps, searchQuery]);
+
+  async function requestLaunch(appIdOrName: string, allowOnce = false, targetUri?: string, preferredMethod?: string) {
     setLaunchResult(null);
     try {
       const res = await apiFetch<any>("/api/v1/devices/apps/launch", {
         method: "POST",
         body: {
-          app_id: appId,
+          app_id: appIdOrName,
           device_id: ctx.deviceId,
           device_label: ctx.deviceLabel,
           platform: ctx.platform,
-          target_uri: targetUri || (appId === "spotify" ? spotifyTarget : undefined),
+          target_uri: targetUri,
           allow_once: allowOnce,
+          preferred_method: preferredMethod,
         },
       });
       if (res.status === "APPROVAL_REQUIRED") {
-        setPendingApproval({ ...res, target_uri: targetUri || (appId === "spotify" ? spotifyTarget : undefined) });
+        setPendingApproval({ ...res, target_uri: targetUri, preferred_method: preferredMethod });
       } else if (res.status === "DENIED") {
         setPendingApproval(null);
         pushToast(res.message || "Launch denied by device policy.", "error");
       } else if (res.status === "READY_TO_LAUNCH") {
         setPendingApproval(null);
-        setLaunchResult(res);
+        setLaunchResult({ ...res, handoff_tapped: false });
         pushToast(`${res.app_name} launch prepared (${res.permission_mode}).`, "success");
         await load();
       }
@@ -95,28 +168,62 @@ export function OrbitAppPermissionsSection() {
     }
   }
 
-  async function decidePermission(decision: "ALLOW_ONCE" | "ALWAYS_ALLOW" | "DENIED") {
-    if (!pendingApproval) return;
-    if (decision === "ALLOW_ONCE") {
-      await requestLaunch(pendingApproval.app_id, true, pendingApproval.target_uri);
-      return;
-    }
+  async function decideDeviceWide(decision: "ALWAYS_ALLOW" | "REVOKED") {
     try {
-      await apiFetch("/api/v1/devices/apps/permissions", {
+      await apiFetch("/api/v1/devices/apps/device-permission", {
         method: "POST",
         body: {
-          app_id: pendingApproval.app_id,
           device_id: ctx.deviceId,
           device_label: ctx.deviceLabel,
           decision,
         },
       });
+      pushToast(
+        decision === "ALWAYS_ALLOW"
+          ? "ORBIT_APPLICATION_LAUNCH remembered for this device."
+          : "ORBIT_APPLICATION_LAUNCH revoked for this device.",
+        "success"
+      );
+      await load();
+    } catch (err: any) {
+      pushToast(err.message, "error");
+    }
+  }
+
+  async function decidePermission(decision: "ALLOW_ONCE" | "ALWAYS_ALLOW_APP" | "ALWAYS_ALLOW_DEVICE" | "DENIED") {
+    if (!pendingApproval) return;
+    if (decision === "ALLOW_ONCE") {
+      await requestLaunch(pendingApproval.app_id, true, pendingApproval.target_uri, pendingApproval.preferred_method);
+      return;
+    }
+    try {
       const appId = pendingApproval.app_id;
       const targetUri = pendingApproval.target_uri;
+      const preferredMethod = pendingApproval.preferred_method;
+      if (decision === "ALWAYS_ALLOW_DEVICE") {
+        await apiFetch("/api/v1/devices/apps/device-permission", {
+          method: "POST",
+          body: {
+            device_id: ctx.deviceId,
+            device_label: ctx.deviceLabel,
+            decision: "ALWAYS_ALLOW",
+          },
+        });
+      } else {
+        await apiFetch("/api/v1/devices/apps/permissions", {
+          method: "POST",
+          body: {
+            app_id: appId,
+            device_id: ctx.deviceId,
+            device_label: ctx.deviceLabel,
+            decision: decision === "ALWAYS_ALLOW_APP" ? "ALWAYS_ALLOW" : "DENIED",
+          },
+        });
+      }
       setPendingApproval(null);
       await load();
-      if (decision === "ALWAYS_ALLOW") {
-        await requestLaunch(appId, false, targetUri);
+      if (decision === "ALWAYS_ALLOW_APP" || decision === "ALWAYS_ALLOW_DEVICE") {
+        await requestLaunch(appId, false, targetUri, preferredMethod);
       } else {
         pushToast(`Denied ${appId} launch on this device.`, "info");
       }
@@ -135,52 +242,128 @@ export function OrbitAppPermissionsSection() {
     }
   }
 
+  async function handleRegisterCustomApp(e: React.FormEvent) {
+    e.preventDefault();
+    if (!regName.trim()) return;
+    try {
+      await apiFetch("/api/v1/devices/apps/register", {
+        method: "POST",
+        body: {
+          name: regName.trim(),
+          aliases: regAliases.split(",").map((s) => s.trim()).filter(Boolean),
+          category: regCategory.trim() || "Custom",
+          ios_scheme: regScheme.trim(),
+          universal_link: regUniversal.trim(),
+          android_package: regAndroidPkg.trim(),
+          desktop_app_key: regDesktopKey.trim(),
+          web_fallback: regWebFallback.trim(),
+        },
+      });
+      pushToast(`Registered ${regName.trim()} in ORBIT App Library.`, "success");
+      setRegName("");
+      setRegAliases("");
+      setRegScheme("");
+      setRegUniversal("");
+      setRegAndroidPkg("");
+      setRegDesktopKey("");
+      setRegWebFallback("");
+      setShowRegisterForm(false);
+      await load();
+    } catch (err: any) {
+      pushToast(err.message, "error");
+    }
+  }
+
+  async function handleDeleteCustomApp(appId: string) {
+    try {
+      await apiFetch(`/api/v1/devices/apps/register/${encodeURIComponent(appId)}`, { method: "DELETE" });
+      pushToast("Removed custom application from library.", "info");
+      await load();
+    } catch (err: any) {
+      pushToast(err.message, "error");
+    }
+  }
+
+  const deviceWideActive = devicePerm?.status === "ALWAYS_ALLOW";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }} data-testid="orbit-app-permissions">
-      {/* Quick App Launcher */}
+      {/* Device-Wide Remembered Permission Banner */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <strong><ShieldCheck size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />ORBIT_APPLICATION_LAUNCH (Device-Wide)</strong>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Scoped to {ctx.deviceLabel} ({ctx.platform}). Separate from microphone, camera, contacts, files, and financial permissions. OS prompts still apply.
+            </div>
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <StatusIndicator
+              label={deviceWideActive ? "REMEMBERED (ALWAYS_ALLOW)" : devicePerm?.status || "NOT_SET"}
+              tone={deviceWideActive ? "success" : "neutral"}
+            />
+            {deviceWideActive ? (
+              <button id="orbit-revoke-device-wide-btn" type="button" className="btn btn-danger btn-sm" onClick={() => decideDeviceWide("REVOKED")}>
+                Revoke Device Permission
+              </button>
+            ) : (
+              <button id="orbit-allow-device-wide-btn" type="button" className="btn btn-sm" onClick={() => decideDeviceWide("ALWAYS_ALLOW")}>
+                Approve for This Device
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Universal Launcher */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="card-title">
-          <span><Smartphone size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />ORBIT Application Launcher</span>
+          <span><Smartphone size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />ORBIT 2.0 Universal Application Launcher</span>
           <span className="pill mono">{ctx.deviceLabel} ({ctx.platform})</span>
         </div>
 
-        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        <form
+          className="row"
+          style={{ gap: 8, flexWrap: "wrap" }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!quickLaunchInput.trim()) return;
+            const parsed = parseUniversalAppLaunchCommand(quickLaunchInput) || {
+              appId: quickLaunchInput.trim(),
+              appName: quickLaunchInput.trim(),
+            };
+            requestLaunch(parsed.appId, false, parsed.targetUri, parsed.preferredMethod);
+          }}
+        >
           <input
+            id="orbit-universal-launch-input"
             className="input"
-            style={{ flex: 1, minWidth: 200 }}
-            value={spotifyTarget}
-            onChange={(e) => setSpotifyTarget(e.target.value)}
-            placeholder="Optional Spotify playlist, artist, track URL or URI..."
+            style={{ flex: 1, minWidth: 220 }}
+            value={quickLaunchInput}
+            onChange={(e) => setQuickLaunchInput(e.target.value)}
+            placeholder="Try: Open YouTube, Open Instagram, Open my banking application, Open Spotify playlist..."
           />
-        </div>
+          <button type="submit" className="btn btn-sm">
+            <Play size={12} /> Resolve &amp; Launch
+          </button>
+        </form>
 
-        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-          {apps.map((a) => (
-            <button
-              key={a.app_id}
-              id={`orbit-launch-${a.app_id}`}
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => requestLaunch(a.app_id, false)}
-            >
-              <Play size={12} /> Open {a.name}
-            </button>
-          ))}
-        </div>
-
-        {/* One-Time Approval Prompt */}
+        {/* Approval Prompt */}
         {pendingApproval && (
           <div className="alert-box" data-testid="orbit-app-approval-prompt" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <strong>{pendingApproval.prompt}</strong>
             <div className="muted" style={{ fontSize: 12 }}>
-              Device: {pendingApproval.device_label} · Scope: {pendingApproval.permission_scope} (applies only to {pendingApproval.app_name})
+              Device: {pendingApproval.device_label} · Scope: {pendingApproval.permission_scope}
             </div>
             <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
               <button id="orbit-allow-once-btn" type="button" className="btn btn-secondary btn-sm" onClick={() => decidePermission("ALLOW_ONCE")}>
                 Allow once
               </button>
-              <button id="orbit-always-allow-btn" type="button" className="btn btn-sm" onClick={() => decidePermission("ALWAYS_ALLOW")}>
-                Always allow on this device
+              <button id="orbit-always-allow-app-btn" type="button" className="btn btn-secondary btn-sm" onClick={() => decidePermission("ALWAYS_ALLOW_APP")}>
+                Always allow {pendingApproval.app_name}
+              </button>
+              <button id="orbit-always-allow-btn" type="button" className="btn btn-sm" onClick={() => decidePermission("ALWAYS_ALLOW_DEVICE")}>
+                Remember ORBIT_APPLICATION_LAUNCH on this device
               </button>
               <button id="orbit-deny-app-btn" type="button" className="btn btn-danger btn-sm" onClick={() => decidePermission("DENIED")}>
                 Deny
@@ -189,45 +372,201 @@ export function OrbitAppPermissionsSection() {
           </div>
         )}
 
-        {/* Launch Dispatch & Honest Platform Fallback */}
+        {/* Honest Launch Status & Handoff Card */}
         {launchResult && (
           <div className="list-item" data-testid="orbit-app-launch-result" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div className="row-between" style={{ flexWrap: "wrap", gap: 6 }}>
-              <strong>{launchResult.app_name} Ready ({launchResult.permission_mode})</strong>
-              <StatusIndicator label={launchResult.launch_status} tone="info" />
+              <strong>{launchResult.app_name} ({launchResult.permission_mode})</strong>
+              <StatusIndicator label={launchResult.launch_status} tone={launchResult.launch_url_resolved ? "info" : "warning"} />
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, fontSize: 12 }}>
+              <span className="pill"><CheckCircle2 size={11} /> Recognised: Yes</span>
+              <span className="pill">{launchResult.launch_url_resolved ? <CheckCircle2 size={11} /> : <XCircle size={11} />} URL Resolved: {launchResult.launch_url_resolved ? "Yes" : "No"}</span>
+              <span className="pill">Handoff Attempted: {launchResult.handoff_tapped || launchResult.handoff_attempted ? "Yes" : "Awaiting Tap"}</span>
+              <span className="pill">OS Confirmed: {launchResult.os_confirmed ? "Confirmed" : "Unconfirmed (PWA/OS limit)"}</span>
             </div>
             <div className="muted" style={{ fontSize: 12 }}>{launchResult.platform_limitation_note}</div>
             <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
               {launchResult.launch_url && (
-                <a href={launchResult.launch_url} className="btn btn-sm">
+                <a
+                  href={launchResult.launch_url}
+                  className="btn btn-sm"
+                  onClick={() => setLaunchResult((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
+                >
                   <ExternalLink size={12} /> Open {launchResult.app_name} App
                 </a>
               )}
-              {launchResult.web_fallback_url && (
+              {launchResult.web_fallback_url && launchResult.web_fallback_url !== launchResult.launch_url && (
                 <a
                   href={launchResult.web_fallback_url}
                   target={launchResult.web_fallback_url.startsWith("http") ? "_blank" : undefined}
                   rel="noopener noreferrer"
                   className="btn btn-secondary btn-sm"
+                  onClick={() => setLaunchResult((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
                 >
                   <ExternalLink size={12} /> Open Web Fallback
                 </a>
+              )}
+              {!launchResult.is_registered && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    setRegName(launchResult.app_name);
+                    setShowRegisterForm(true);
+                  }}
+                >
+                  <Plus size={12} /> Register {launchResult.app_name}
+                </button>
               )}
             </div>
           </div>
         )}
       </div>
 
-      {/* Persistent Application Permissions Table */}
+      {/* ORBIT Application Library */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+          <div className="card-title" style={{ margin: 0 }}>
+            <span><Compass size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />ORBIT Application Library ({filteredApps.length})</span>
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <div style={{ position: "relative" }}>
+              <Search size={13} style={{ position: "absolute", left: 10, top: 10, opacity: 0.6 }} />
+              <input
+                className="input"
+                style={{ paddingLeft: 28, minWidth: 180 }}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Filter apps..."
+              />
+            </div>
+            <button
+              id="orbit-toggle-register-btn"
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowRegisterForm((v) => !v)}
+            >
+              <Plus size={12} /> Register App
+            </button>
+          </div>
+        </div>
+
+        {showRegisterForm && (
+          <form onSubmit={handleRegisterCustomApp} className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <strong>Manual Application Registration</strong>
+            <div className="grid-2" style={{ gap: 8 }}>
+              <input className="input" placeholder="App Name (e.g. Monzo, Notion)" value={regName} onChange={(e) => setRegName(e.target.value)} required />
+              <input className="input" placeholder="Aliases (comma-separated, e.g. my bank)" value={regAliases} onChange={(e) => setRegAliases(e.target.value)} />
+              <input className="input" placeholder="iOS URL Scheme (e.g. monzo://)" value={regScheme} onChange={(e) => setRegScheme(e.target.value)} />
+              <input className="input" placeholder="Universal Link (e.g. https://monzo.com)" value={regUniversal} onChange={(e) => setRegUniversal(e.target.value)} />
+              <input className="input" placeholder="Android Package (e.g. co.uk.getmondo)" value={regAndroidPkg} onChange={(e) => setRegAndroidPkg(e.target.value)} />
+              <input className="input" placeholder="Web Fallback URL" value={regWebFallback} onChange={(e) => setRegWebFallback(e.target.value)} />
+              <input className="input" placeholder="Desktop App Key" value={regDesktopKey} onChange={(e) => setRegDesktopKey(e.target.value)} />
+              <input className="input" placeholder="Category (Finance, Productivity, Custom)" value={regCategory} onChange={(e) => setRegCategory(e.target.value)} />
+            </div>
+            <div className="row" style={{ gap: 8 }}>
+              <button type="submit" className="btn btn-sm">Save Application</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowRegisterForm(false)}>Cancel</button>
+            </div>
+          </form>
+        )}
+
+        <DataTable
+          rows={filteredApps}
+          rowKey={(a) => a.app_id}
+          emptyTitle="No Matching Applications"
+          emptyDescription="Register any custom application using the Register App button above."
+          columns={[
+            {
+              key: "name",
+              header: "Application",
+              render: (a) => (
+                <div>
+                  <strong>{a.name}</strong>
+                  <div className="muted" style={{ fontSize: 11 }}>{a.category} · {a.source === "CUSTOM_REGISTERED" ? "Custom" : "Catalog"}</div>
+                </div>
+              ),
+            },
+            {
+              key: "methods",
+              header: "Methods & Platforms",
+              render: (a) => (
+                <div style={{ fontSize: 11 }}>
+                  <div>{[a.universal_link && "Universal", a.ios_scheme && "Scheme", a.android_package && "Android", a.web_fallback && "Web"].filter(Boolean).join(" · ") || "Manual"}</div>
+                  <div className="muted">{(a.platforms || []).join(", ")}</div>
+                </div>
+              ),
+            },
+            {
+              key: "status",
+              header: "Last Attempt / Status",
+              render: (a) => (
+                <div style={{ fontSize: 11 }}>
+                  <StatusIndicator label={a.last_launch_status || a.verification_status || "READY"} tone={a.last_launch_error ? "danger" : "neutral"} />
+                  {a.last_launch_at && <div className="muted mono">{a.last_launch_at.slice(0, 16).replace("T", " ")}</div>}
+                </div>
+              ),
+            },
+            {
+              key: "actions",
+              header: "Actions",
+              render: (a) => (
+                <div className="row" style={{ gap: 6 }}>
+                  <button
+                    id={`orbit-launch-${a.app_id}`}
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => requestLaunch(a.app_id, false)}
+                  >
+                    <Play size={12} /> Open
+                  </button>
+                  {a.source === "CUSTOM_REGISTERED" && (
+                    <button type="button" className="btn btn-danger btn-sm" onClick={() => handleDeleteCustomApp(a.app_id)}>
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
+              ),
+            },
+          ]}
+        />
+      </div>
+
+      {/* Platform Discovery Capabilities */}
+      {discovery && (
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="card-title">
+            <span>Platform Discovery &amp; Native Companion Boundaries</span>
+            <span className="pill mono">{discovery.platform}</span>
+          </div>
+          <div className="grid-3" style={{ gap: 10, fontSize: 12 }}>
+            <div className="list-item">
+              <strong>iOS (PWA)</strong>
+              <div className="muted">Auto-enumerate installed apps: No (iOS sandbox). Uses Universal Links, URL schemes, and manual registration.</div>
+            </div>
+            <div className="list-item">
+              <strong>Android (PWA)</strong>
+              <div className="muted">Auto-enumerate installed apps: No (Android &lt;queries&gt; visibility). Uses Intent URIs, App Links, and manual package registration.</div>
+            </div>
+            <div className="list-item">
+              <strong>Desktop (Paired Agent)</strong>
+              <div className="muted">Paired: {discovery.desktop_agent_paired ? "Yes" : "No"} · Authorized: {discovery.desktop_agent_authorized ? "Yes" : "No"}. Requires explicit device authorization.</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remembered Permissions Table */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="card-title">
-          <span><ShieldCheck size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />Application Permissions ({permissions.length})</span>
+          <span><ShieldCheck size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />Remembered Permissions ({permissions.length})</span>
         </div>
         <DataTable
           rows={permissions}
           rowKey={(p) => p.permission_id}
-          emptyTitle="No Persistent App Permissions"
-          emptyDescription="Launch an app above and choose 'Always allow on this device' to persist per-app approval."
+          emptyTitle="No Remembered App Permissions"
+          emptyDescription="Approve ORBIT_APPLICATION_LAUNCH above or per-app to persist launch permissions for this device."
           columns={[
             { key: "app", header: "Application", render: (p) => <strong>{p.app_name}</strong> },
             { key: "device", header: "Device", render: (p) => p.device_label },
@@ -249,21 +588,19 @@ export function OrbitAppPermissionsSection() {
               render: (p) => (p.approved_at ? p.approved_at.slice(0, 16).replace("T", " ") : "—"),
             },
             {
-              key: "last",
-              header: "Last Launch",
-              mono: true,
-              render: (p) => (p.last_launch_at ? `${p.last_launch_at.slice(0, 16).replace("T", " ")} (${p.last_launch_status || ""})` : "Never"),
-            },
-            {
-              key: "action",
-              header: "Control",
+              key: "actions",
+              header: "Revoke",
               render: (p) =>
                 p.status === "ALWAYS_ALLOW" ? (
-                  <button type="button" className="btn btn-danger btn-sm" onClick={() => revokePermission(p.permission_id)}>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={() => revokePermission(p.permission_id)}
+                  >
                     <Trash2 size={12} /> Revoke
                   </button>
                 ) : (
-                  <span className="muted">—</span>
+                  <span className="muted" style={{ fontSize: 12 }}>—</span>
                 ),
             },
           ]}

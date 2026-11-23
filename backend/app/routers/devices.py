@@ -26,10 +26,17 @@ from app.services.device_service import (
 )
 from app.services.orbit_app_service import (
     SUPPORTED_ORBIT_APPS,
+    delete_custom_app,
+    get_device_launch_permission,
+    get_platform_discovery_report,
     list_app_permissions,
+    list_orbit_app_library,
     prepare_or_dispatch_app_launch,
+    register_custom_app,
+    resolve_universal_app,
     revoke_app_permission,
     set_app_permission,
+    set_device_launch_permission,
 )
 
 router = APIRouter(prefix="/api/v1/devices", tags=["Multi-Device Connectivity"])
@@ -330,12 +337,38 @@ class SetAppPermissionRequest(BaseModel):
 
 
 class LaunchAppRequest(BaseModel):
-    app_id: str = Field(min_length=2, max_length=64)
+    app_id: str = Field(min_length=1, max_length=120)
     device_id: str = Field(default="this_device", max_length=64)
     device_label: str = Field(default="This Device", max_length=160)
     platform: str = Field(default="ios", max_length=32)
     target_uri: str | None = Field(default=None, max_length=500)
     allow_once: bool = False
+    preferred_method: str | None = Field(default=None, max_length=32)
+
+
+class ResolveAppRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=160)
+    platform: str = Field(default="ios", max_length=32)
+    target_uri: str | None = Field(default=None, max_length=500)
+    preferred_method: str | None = Field(default=None, max_length=32)
+
+
+class RegisterCustomAppRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    aliases: list[str] = Field(default_factory=list)
+    category: str = Field(default="Custom", max_length=64)
+    platforms: list[str] = Field(default_factory=lambda: ["ios", "android", "windows", "macos", "linux", "web"])
+    ios_scheme: str = Field(default="", max_length=255)
+    universal_link: str = Field(default="", max_length=500)
+    android_package: str = Field(default="", max_length=255)
+    desktop_app_key: str = Field(default="", max_length=120)
+    web_fallback: str = Field(default="", max_length=500)
+
+
+class DeviceWidePermissionRequest(BaseModel):
+    device_id: str = Field(default="this_device", max_length=64)
+    device_label: str = Field(default="This Device", max_length=160)
+    decision: str = Field(min_length=4, max_length=24)
 
 
 @router.get("/apps/catalog")
@@ -346,6 +379,95 @@ def api_list_orbit_apps(
         "total": len(SUPPORTED_ORBIT_APPS),
         "apps": list(SUPPORTED_ORBIT_APPS.values()),
     }
+
+
+@router.get("/apps/library")
+def api_list_orbit_app_library(
+    device_id: str | None = None,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return list_orbit_app_library(db, principal=principal, device_id=device_id)
+
+
+@router.get("/apps/discovery")
+def api_get_orbit_discovery(
+    platform: str = "ios",
+    device_id: str = "this_device",
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return get_platform_discovery_report(db, principal=principal, platform=platform, device_id=device_id)
+
+
+@router.post("/apps/resolve")
+def api_resolve_orbit_app(
+    body: ResolveAppRequest,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return resolve_universal_app(
+        db,
+        principal=principal,
+        query=body.query,
+        platform=body.platform,
+        target_uri=body.target_uri,
+        preferred_method=body.preferred_method,
+    )
+
+
+@router.post("/apps/register")
+def api_register_orbit_app(
+    body: RegisterCustomAppRequest,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return register_custom_app(
+        db,
+        principal=principal,
+        name=body.name,
+        aliases=body.aliases,
+        category=body.category,
+        platforms=body.platforms,
+        ios_scheme=body.ios_scheme,
+        universal_link=body.universal_link,
+        android_package=body.android_package,
+        desktop_app_key=body.desktop_app_key,
+        web_fallback=body.web_fallback,
+    )
+
+
+@router.delete("/apps/register/{app_id}")
+def api_delete_orbit_app(
+    app_id: str,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return delete_custom_app(db, principal=principal, app_id=app_id)
+
+
+@router.get("/apps/device-permission")
+def api_get_device_launch_permission(
+    device_id: str = "this_device",
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return get_device_launch_permission(db, principal=principal, device_id=device_id)
+
+
+@router.post("/apps/device-permission")
+def api_set_device_launch_permission(
+    body: DeviceWidePermissionRequest,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return set_device_launch_permission(
+        db,
+        principal=principal,
+        device_id=body.device_id,
+        device_label=body.device_label,
+        decision=body.decision,
+    )
 
 
 @router.get("/apps/permissions")
@@ -398,4 +520,5 @@ def api_launch_orbit_app(
         platform=body.platform,
         target_uri=body.target_uri,
         allow_once=body.allow_once,
+        preferred_method=body.preferred_method,
     )
