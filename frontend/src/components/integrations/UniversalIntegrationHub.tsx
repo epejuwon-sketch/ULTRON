@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, getStoredUser } from "../../lib/api";
 import {
   INTEGRATION_CATEGORIES,
   INTEGRATIONS_CATALOG,
@@ -29,6 +29,7 @@ type HubLifecycle =
   | "Live Verified"
   | "Connected"
   | "Authenticated"
+  | "Configured"
   | "Awaiting Authorization"
   | "Configuration Required"
   | "Supported"
@@ -44,6 +45,7 @@ function hubTone(status: HubLifecycle): "success" | "info" | "warn" | "danger" |
     case "Connected":
       return "success";
     case "Authenticated":
+    case "Configured":
     case "Supported":
       return "info";
     case "Awaiting Authorization":
@@ -63,44 +65,48 @@ function resolveHubStatus(
   entry: IntegrationCatalogEntry,
   managedByKey: Map<string, any>,
   statusCaps: Record<string, any>
-): { status: HubLifecycle; record?: any; cap?: any; oauthReady: boolean } {
+): { status: HubLifecycle; record?: any; cap?: any; oauthReady: boolean; stageIndex: number } {
   if (!entry.supportedByBackend || entry.authFlow === "ROADMAP") {
-    return { status: "Unavailable", oauthReady: false };
+    return { status: "Unavailable", oauthReady: false, stageIndex: 0 };
   }
   const rec = entry.backendProviderKey ? managedByKey.get(entry.backendProviderKey) : undefined;
   const cap = entry.statusCapabilityKey ? statusCaps[entry.statusCapabilityKey] : undefined;
   const oauthReady = Boolean(rec?.oauth_client_configured);
 
   if (rec?.disconnected_at) {
-    return { status: "Revoked", record: rec, cap, oauthReady };
+    return { status: "Revoked", record: rec, cap, oauthReady, stageIndex: oauthReady ? 2 : 1 };
   }
   if (rec?.token_expired) {
-    return { status: "Expired", record: rec, cap, oauthReady };
+    return { status: "Expired", record: rec, cap, oauthReady, stageIndex: 2 };
   }
   const raw = String(rec?.status || "").toUpperCase();
   if (raw === "AVAILABLE" || (cap?.live_verified && cap?.capability_state === "AVAILABLE")) {
-    return { status: "Live Verified", record: rec, cap, oauthReady };
+    return { status: "Live Verified", record: rec, cap, oauthReady, stageIndex: 4 };
   }
   if (raw === "ERROR" || raw === "FAILED") {
-    return { status: "Failed", record: rec, cap, oauthReady };
+    return { status: "Failed", record: rec, cap, oauthReady, stageIndex: 3 };
   }
   if (raw === "DEGRADED") {
-    return { status: "Degraded", record: rec, cap, oauthReady };
+    return { status: "Degraded", record: rec, cap, oauthReady, stageIndex: 3 };
   }
   if (raw === "IMPLEMENTED_NOT_LIVE" || rec?.connection_id || rec?.configured_via_env) {
-    return { status: "Authenticated", record: rec, cap, oauthReady };
+    return { status: "Authenticated", record: rec, cap, oauthReady, stageIndex: 3 };
   }
-  if (entry.authFlow === "OAUTH2" && !oauthReady) {
-    return { status: "Configuration Required", record: rec, cap, oauthReady };
+  if (entry.authFlow === "OAUTH2") {
+    return oauthReady
+      ? { status: "Configured", record: rec, cap, oauthReady, stageIndex: 2 }
+      : { status: "Supported", record: rec, cap, oauthReady, stageIndex: 1 };
   }
   if (entry.authFlow === "API_KEY" || entry.authFlow === "SERVER_ENV") {
-    return { status: "Configuration Required", record: rec, cap, oauthReady };
+    return { status: "Configuration Required", record: rec, cap, oauthReady, stageIndex: 1 };
   }
-  return { status: "Supported", record: rec, cap, oauthReady };
+  return { status: "Supported", record: rec, cap, oauthReady, stageIndex: 1 };
 }
 
 export function UniversalIntegrationHub() {
   const { pushToast } = useToast();
+  const currentUser = getStoredUser();
+  const isAdmin = currentUser?.role === "OWNER" || currentUser?.role === "ADMIN";
   const [connections, setConnections] = useState<any[]>([]);
   const [statusData, setStatusData] = useState<any>(null);
   const [search, setSearch] = useState("");
@@ -108,6 +114,8 @@ export function UniversalIntegrationHub() {
   const [viewFilter, setViewFilter] = useState<"ALL" | "CONNECTED" | "AVAILABLE" | "ATTENTION" | "RECENT">("ALL");
   const [configuring, setConfiguring] = useState<IntegrationCatalogEntry | null>(null);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [adminClientId, setAdminClientId] = useState("");
+  const [adminClientSecret, setAdminClientSecret] = useState("");
   const [awaitingAuth, setAwaitingAuth] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -125,6 +133,16 @@ export function UniversalIntegrationHub() {
   }
 
   useEffect(() => {
+    const rawFb = sessionStorage.getItem("ultron_oauth_feedback");
+    if (rawFb) {
+      sessionStorage.removeItem("ultron_oauth_feedback");
+      try {
+        const fb = JSON.parse(rawFb);
+        pushToast(fb.message, fb.type === "error" ? "error" : "success");
+      } catch {
+        // ignore
+      }
+    }
     loadAll();
   }, []);
 
@@ -410,6 +428,31 @@ export function UniversalIntegrationHub() {
               <StatusIndicator label={activeConfigItem.status} tone={hubTone(activeConfigItem.status)} />
             </div>
 
+            {/* 4-Stage Lifecycle Progress */}
+            <div className="list-item" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, textAlign: "center" }}>
+              {[
+                { idx: 1, label: "1. Supported" },
+                { idx: 2, label: "2. Configured" },
+                { idx: 3, label: "3. Authenticated" },
+                { idx: 4, label: "4. Live Verified" },
+              ].map((st) => {
+                const reached = activeConfigItem.stageIndex >= st.idx;
+                return (
+                  <div
+                    key={st.idx}
+                    className="pill"
+                    style={{
+                      justifyContent: "center",
+                      opacity: reached ? 1 : 0.45,
+                      borderColor: reached ? "var(--accent, #38bdf8)" : undefined,
+                    }}
+                  >
+                    {st.label}
+                  </div>
+                );
+              })}
+            </div>
+
             <div className="muted">{activeConfigItem.entry.shortDescription}</div>
 
             {/* Account & Health Metadata */}
@@ -419,6 +462,9 @@ export function UniversalIntegrationHub() {
               <div><strong>Granted Scopes:</strong> {(activeConfigItem.record?.scopes?.length ? activeConfigItem.record.scopes : activeConfigItem.entry.permissions).join(", ") || "Default"}</div>
               <div><strong>Connected / Updated:</strong> {activeConfigItem.record?.updated_at || "Never"}</div>
               <div><strong>Last Health Check:</strong> {activeConfigItem.record?.last_verified_at || "Never"}</div>
+              {activeConfigItem.record?.token_expired && (
+                <div style={{ color: "#f59e0b" }}><AlertTriangle size={12} /> OAuth token expired. Click Reauthorize in Browser or Refresh Token.</div>
+              )}
               {activeConfigItem.record?.last_error && (
                 <div style={{ color: "#f87171" }}><AlertTriangle size={12} /> {activeConfigItem.record.last_error}</div>
               )}
@@ -429,9 +475,62 @@ export function UniversalIntegrationHub() {
               <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <strong><Link2 size={12} /> OAuth 2.0 + PKCE Authorization</strong>
                 {!activeConfigItem.oauthReady && (
-                  <div className="muted">
-                    {activeConfigItem.entry.name} setup is not yet available. Administrator configuration is required.
-                  </div>
+                  <>
+                    <div className="muted">
+                      {activeConfigItem.entry.name} setup is not yet available. Administrator configuration is required.
+                    </div>
+                    {isAdmin && (
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          const family = activeConfigItem.entry.backendProviderKey === "github" ? "github" : "google";
+                          setBusy(true);
+                          try {
+                            await apiFetch(`/api/v1/integrations/oauth/admin/${family}/configure`, {
+                              method: "POST",
+                              body: {
+                                client_id: adminClientId.trim(),
+                                client_secret: adminClientSecret.trim(),
+                                redirect_uri: `${window.location.origin}/oauth/callback`,
+                              },
+                            });
+                            setAdminClientId("");
+                            setAdminClientSecret("");
+                            pushToast("Administrator OAuth credentials encrypted and saved in VAULT.", "success");
+                            await loadAll();
+                          } catch (err: any) {
+                            pushToast(err.message || "Failed to save administrator OAuth credentials.", "error");
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                        style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 4 }}
+                      >
+                        <div className="telemetry-label">ADMINISTRATOR OAUTH SETUP (VAULT)</div>
+                        <input
+                          className="input"
+                          placeholder="OAuth Client ID"
+                          value={adminClientId}
+                          onChange={(e) => setAdminClientId(e.target.value)}
+                          required
+                        />
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder="OAuth Client Secret (encrypted in VAULT)"
+                          value={adminClientSecret}
+                          onChange={(e) => setAdminClientSecret(e.target.value)}
+                          required
+                        />
+                        <div className="muted mono" style={{ fontSize: 11 }}>
+                          Redirect URI: {typeof window !== "undefined" ? `${window.location.origin}/oauth/callback` : "/oauth/callback"}
+                        </div>
+                        <button type="submit" className="btn btn-secondary btn-sm" disabled={busy}>
+                          <ShieldCheck size={12} /> Save OAuth App in VAULT
+                        </button>
+                      </form>
+                    )}
+                  </>
                 )}
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <button

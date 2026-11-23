@@ -195,9 +195,9 @@ function resolveHonestStatus(
 
   return {
     status: "Supported",
-    detail: entry.requiredEnvVars.length > 0
-      ? `Connector supported. Configure ${entry.requiredEnvVars.join(", ")} or connect in VAULT.`
-      : "Connector supported — connect via OAuth 2.0 + PKCE or encrypted API key.",
+    detail: entry.authFlow === "OAUTH2"
+      ? `${entry.name} setup is not yet available. Administrator configuration is required.`
+      : "Connector supported — connect via encrypted VAULT credentials.",
   };
 }
 

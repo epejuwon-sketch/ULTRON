@@ -113,12 +113,21 @@ export default function App() {
     if (typeof window === "undefined") return;
     if (window.location.pathname === "/oauth/callback") {
       const params = new URLSearchParams(window.location.search);
+      const oauthError = params.get("error");
       const code = params.get("code");
       const state = params.get("state");
       const provider = params.get("provider") || sessionStorage.getItem("ultron_pending_oauth_provider");
       window.history.replaceState({}, document.title, "/command/integrations");
-      if (code && state && provider) {
-        apiFetch(`/api/v1/integrations/oauth/${encodeURIComponent(provider)}/callback`, {
+      if (oauthError) {
+        sessionStorage.removeItem("ultron_pending_oauth_provider");
+        const msg =
+          oauthError === "access_denied"
+            ? "Google authorization was cancelled or denied by the user."
+            : `OAuth authorization failed: ${oauthError}`;
+        sessionStorage.setItem("ultron_oauth_feedback", JSON.stringify({ type: "error", message: msg }));
+        navigate("command", "integrations", { replace: true });
+      } else if (code && state && provider) {
+        apiFetch<any>(`/api/v1/integrations/oauth/${encodeURIComponent(provider)}/callback`, {
           method: "POST",
           body: {
             code,
@@ -126,12 +135,18 @@ export default function App() {
             redirect_uri: `${window.location.origin}/oauth/callback`,
           },
         })
-          .then(() => {
+          .then((res) => {
             sessionStorage.removeItem("ultron_pending_oauth_provider");
+            const msg = `${provider} connected${res?.live_verified ? " and Live Verified" : ""}.`;
+            sessionStorage.setItem("ultron_oauth_feedback", JSON.stringify({ type: "success", message: msg }));
             navigate("command", "integrations", { replace: true });
           })
-          .catch(() => {
+          .catch((err) => {
             sessionStorage.removeItem("ultron_pending_oauth_provider");
+            sessionStorage.setItem(
+              "ultron_oauth_feedback",
+              JSON.stringify({ type: "error", message: err?.message || "OAuth callback exchange failed." })
+            );
             navigate("command", "integrations", { replace: true });
           });
       } else {

@@ -13,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
-from app.core.permissions import Principal
+from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError, ValidationError
+from app.core.permissions import Principal, Role
 from app.core.security import decrypt_vault_secret, encrypt_vault_secret
 from app.db.models import IntegrationConnectionRecord, OAuthStateRecord
 from app.db.repositories import append_audit_log
@@ -38,6 +38,7 @@ from app.integrations.oauth import (
     generate_pkce_pair,
     refresh_oauth_token,
     revoke_oauth_token,
+    validate_oauth_redirect_uri,
 )
 from app.integrations.supabase import SupabaseClient
 from app.integrations.vercel import VercelClient
@@ -192,6 +193,148 @@ def connect_with_credentials(
     return serialize_connection(rec)
 
 
+def _oauth_app_provider_key(family: str) -> str:
+    fam = family.strip().lower()
+    if fam not in {"google", "github"}:
+        raise ValidationError(f"Unsupported OAuth app family '{family}'.")
+    return f"_oauth_app_{fam}"
+
+
+def _load_vault_oauth_app_credentials(
+    db: Session,
+    *,
+    tenant_id: str,
+    family: str,
+    settings: Settings,
+) -> tuple[str, str, str] | None:
+    pkey = _oauth_app_provider_key(family)
+    rec = db.execute(
+        select(IntegrationConnectionRecord).where(
+            IntegrationConnectionRecord.tenant_id == tenant_id,
+            IntegrationConnectionRecord.provider == pkey,
+        )
+    ).scalar_one_or_none()
+    if rec is None or rec.disconnected_at is not None or not rec.encrypted_credentials_b64:
+        return None
+    data = _decrypt_credentials(rec, settings)
+    cid = str(data.get("client_id") or "").strip()
+    csec = str(data.get("client_secret") or "").strip()
+    ruri = str(data.get("redirect_uri") or "").strip()
+    if not cid or not csec:
+        return None
+    return cid, csec, ruri
+
+
+def configure_oauth_app_credentials(
+    db: Session,
+    *,
+    principal: Principal,
+    family: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Administrator-only setup of OAuth Client ID and Client Secret encrypted in VAULT."""
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may configure OAuth client credentials.")
+    pkey = _oauth_app_provider_key(family)
+    cid = (client_id or "").strip()
+    csec = (client_secret or "").strip()
+    if len(cid) < 8 or len(csec) < 8:
+        raise ValidationError("Valid OAuth Client ID and Client Secret are required.")
+    clean_redirect = validate_oauth_redirect_uri(redirect_uri)
+
+    payload = {"client_id": cid, "client_secret": csec, "redirect_uri": clean_redirect}
+    ct, nonce = _encrypt_credentials(payload, tenant_id=principal.tenant_id, provider=pkey, settings=settings)
+    now = datetime.now(timezone.utc)
+    rec = db.execute(
+        select(IntegrationConnectionRecord).where(
+            IntegrationConnectionRecord.tenant_id == principal.tenant_id,
+            IntegrationConnectionRecord.provider == pkey,
+        )
+    ).scalar_one_or_none()
+    masked_id = f"...{cid[-6:]}" if len(cid) > 6 else "***"
+    if rec is None:
+        rec = IntegrationConnectionRecord(
+            connection_id=f"oapp_{uuid.uuid4().hex[:14]}",
+            tenant_id=principal.tenant_id,
+            provider=pkey,
+            auth_type="OAUTH_APP",
+            encrypted_credentials_b64=ct,
+            credentials_nonce_b64=nonce,
+            scopes_json="[]",
+            capabilities_json="[]",
+            status="CONFIGURED",
+            account_label=masked_id,
+            connected_by=principal.username,
+        )
+        db.add(rec)
+    else:
+        rec.encrypted_credentials_b64 = ct
+        rec.credentials_nonce_b64 = nonce
+        rec.status = "CONFIGURED"
+        rec.account_label = masked_id
+        rec.disconnected_at = None
+        rec.updated_at = now
+
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="OAUTH_APP_CONFIGURED",
+        resource=family.lower(),
+        outcome=f"VAULT_ENCRYPTED|CLIENT_ID={masked_id}",
+    )
+    db.commit()
+    return {
+        "family": family.lower(),
+        "configured": True,
+        "source": "vault",
+        "client_id_masked": masked_id,
+        "redirect_uri": clean_redirect,
+    }
+
+
+def get_oauth_app_status(
+    db: Session,
+    *,
+    tenant_id: str,
+    family: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    fam = family.strip().lower()
+    if fam == "google" and settings.google_oauth_client_id.strip() and settings.google_oauth_client_secret:
+        cid = settings.google_oauth_client_id.strip()
+        return {
+            "family": fam,
+            "configured": True,
+            "source": "env",
+            "client_id_masked": f"...{cid[-6:]}" if len(cid) > 6 else "***",
+            "redirect_uri": settings.google_oauth_redirect_uri,
+        }
+    if fam == "github" and settings.github_oauth_client_id.strip() and settings.github_oauth_client_secret:
+        cid = settings.github_oauth_client_id.strip()
+        return {
+            "family": fam,
+            "configured": True,
+            "source": "env",
+            "client_id_masked": f"...{cid[-6:]}" if len(cid) > 6 else "***",
+            "redirect_uri": settings.github_oauth_redirect_uri,
+        }
+    vault = _load_vault_oauth_app_credentials(db, tenant_id=tenant_id, family=fam, settings=settings)
+    if vault:
+        cid, _csec, ruri = vault
+        return {
+            "family": fam,
+            "configured": True,
+            "source": "vault",
+            "client_id_masked": f"...{cid[-6:]}" if len(cid) > 6 else "***",
+            "redirect_uri": ruri,
+        }
+    return {"family": fam, "configured": False, "source": "none", "client_id_masked": None, "redirect_uri": None}
+
+
 def start_oauth_flow(
     db: Session,
     *,
@@ -203,9 +346,11 @@ def start_oauth_flow(
 ) -> dict[str, Any]:
     """Initiate OAuth 2.0 + PKCE (S256) flow and persist a single-use CSRF state record."""
     p = _validate_provider(provider)
-    if p not in OAUTH_PROVIDERS:
+    spec = OAUTH_PROVIDERS.get(p)
+    if spec is None:
         raise ValidationError(f"Provider '{p}' does not support OAuth 2.0 flow.")
 
+    vault_creds = _load_vault_oauth_app_credentials(db, tenant_id=principal.tenant_id, family=spec.family, settings=settings)
     verifier, challenge = generate_pkce_pair()
     state_token = f"ost_{secrets.token_urlsafe(32)}"
     auth_url, effective_scopes, effective_redirect = build_authorization_url(
@@ -215,6 +360,7 @@ def start_oauth_flow(
         scopes=scopes,
         redirect_uri=redirect_uri,
         settings=settings,
+        vault_creds=vault_creds,
     )
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
     db.add(
@@ -280,12 +426,15 @@ def complete_oauth_callback(
     if now >= exp:
         raise ConflictError("OAuth state token has expired.")
 
+    spec = OAUTH_PROVIDERS[p]
+    vault_creds = _load_vault_oauth_app_credentials(db, tenant_id=principal.tenant_id, family=spec.family, settings=settings)
     token_data = exchange_oauth_code(
         provider=p,
         code=code,
         code_verifier=st.code_verifier,
         redirect_uri=st.redirect_uri,
         settings=settings,
+        vault_creds=vault_creds,
         http_client=http_client,
     )
     st.consumed = True
@@ -384,7 +533,19 @@ def refresh_connection_token(
     if not rt:
         raise ConflictError(f"Connection '{p}' has no stored refresh_token.")
 
-    refreshed = refresh_oauth_token(provider=p, refresh_token=rt, settings=settings, http_client=http_client)
+    spec = OAUTH_PROVIDERS.get(p)
+    vault_creds = (
+        _load_vault_oauth_app_credentials(db, tenant_id=principal.tenant_id, family=spec.family, settings=settings)
+        if spec
+        else None
+    )
+    refreshed = refresh_oauth_token(
+        provider=p,
+        refresh_token=rt,
+        settings=settings,
+        vault_creds=vault_creds,
+        http_client=http_client,
+    )
     creds["access_token"] = refreshed["access_token"]
     if refreshed.get("refresh_token"):
         creds["refresh_token"] = refreshed["refresh_token"]
@@ -588,16 +749,10 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
     ).scalars().all()
     by_provider = {r.provider: serialize_connection(r) for r in rows}
 
-    google_oauth_ready = bool(
-        settings.google_oauth_client_id
-        and settings.google_oauth_client_secret
-        and settings.google_oauth_client_secret.get_secret_value()
-    )
-    github_oauth_ready = bool(
-        settings.github_oauth_client_id
-        and settings.github_oauth_client_secret
-        and settings.github_oauth_client_secret.get_secret_value()
-    )
+    google_app_status = get_oauth_app_status(db, tenant_id=tenant_id, family="google", settings=settings)
+    github_app_status = get_oauth_app_status(db, tenant_id=tenant_id, family="github", settings=settings)
+    google_oauth_ready = bool(google_app_status["configured"])
+    github_oauth_ready = bool(github_app_status["configured"])
 
     catalog: list[dict[str, Any]] = []
     for provider, meta in SUPPORTED_MANAGED_PROVIDERS.items():
@@ -614,10 +769,11 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
         if stored is not None:
             stored["configured_via_env"] = bool(env_tok)
             stored["oauth_client_configured"] = oauth_ready
-            if stored.get("lifecycle_stage") == "SUPPORTED" and env_tok:
+            if stored.get("lifecycle_stage") == "SUPPORTED" and (env_tok or oauth_ready):
                 stored["lifecycle_stage"] = "CONFIGURED"
             catalog.append(stored)
         else:
+            is_configured = bool(env_tok or oauth_ready)
             catalog.append(
                 {
                     "connection_id": None,
@@ -627,7 +783,7 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
                     "scopes": [],
                     "capabilities": meta["capabilities"],
                     "status": "IMPLEMENTED_NOT_LIVE" if env_tok else "REQUIRES_CONFIGURATION",
-                    "lifecycle_stage": "CONFIGURED" if env_tok else "SUPPORTED",
+                    "lifecycle_stage": "CONFIGURED" if is_configured else "SUPPORTED",
                     "configured_via_env": bool(env_tok),
                     "oauth_client_configured": oauth_ready,
                     "token_expired": False,

@@ -111,7 +111,30 @@ def generate_pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def get_oauth_client_credentials(provider: str, settings: Settings) -> tuple[str, str, str]:
+def validate_oauth_redirect_uri(redirect_uri: str) -> str:
+    from urllib.parse import urlparse
+
+    clean = (redirect_uri or "").strip()
+    parsed_r = urlparse(clean)
+    if (
+        parsed_r.scheme not in {"http", "https"}
+        or not parsed_r.netloc
+        or parsed_r.path != "/oauth/callback"
+        or parsed_r.query
+        or parsed_r.fragment
+    ):
+        raise ValidationError(
+            "OAuth redirect_uri must be a valid HTTP(S) URL ending in '/oauth/callback' with no query or fragment."
+        )
+    return clean
+
+
+def get_oauth_client_credentials(
+    provider: str,
+    settings: Settings,
+    *,
+    vault_creds: tuple[str, str, str] | None = None,
+) -> tuple[str, str, str]:
     spec = OAUTH_PROVIDERS.get(provider)
     if spec is None:
         raise ValidationError(f"OAuth 2.0 is not defined for provider '{provider}'.")
@@ -119,9 +142,13 @@ def get_oauth_client_credentials(provider: str, settings: Settings) -> tuple[str
         cid = settings.google_oauth_client_id.strip()
         csec = settings.google_oauth_client_secret.get_secret_value().strip() if settings.google_oauth_client_secret else ""
         ruri = settings.google_oauth_redirect_uri.strip()
+        if (not cid or not csec) and vault_creds:
+            cid, csec, vruri = vault_creds
+            if vruri:
+                ruri = vruri
         if not cid or not csec:
             raise IntegrationError(
-                "Google OAuth 2.0 client credentials are not configured.",
+                "Google OAuth setup is not yet available. Administrator configuration is required.",
                 details={"missing_env_vars": ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"]},
             )
         return cid, csec, ruri
@@ -129,9 +156,13 @@ def get_oauth_client_credentials(provider: str, settings: Settings) -> tuple[str
     cid = settings.github_oauth_client_id.strip()
     csec = settings.github_oauth_client_secret.get_secret_value().strip() if settings.github_oauth_client_secret else ""
     ruri = settings.github_oauth_redirect_uri.strip()
+    if (not cid or not csec) and vault_creds:
+        cid, csec, vruri = vault_creds
+        if vruri:
+            ruri = vruri
     if not cid or not csec:
         raise IntegrationError(
-            "GitHub OAuth 2.0 client credentials are not configured.",
+            "GitHub OAuth setup is not yet available. Administrator configuration is required.",
             details={"missing_env_vars": ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]},
         )
     return cid, csec, ruri
@@ -145,17 +176,13 @@ def build_authorization_url(
     scopes: list[str] | None,
     redirect_uri: str | None,
     settings: Settings,
+    vault_creds: tuple[str, str, str] | None = None,
 ) -> tuple[str, list[str], str]:
     spec = OAUTH_PROVIDERS.get(provider)
     if spec is None:
         raise ValidationError(f"Unsupported OAuth provider '{provider}'.")
-    cid, _csec, default_redirect = get_oauth_client_credentials(provider, settings)
-    effective_redirect = (redirect_uri or default_redirect).strip()
-    from urllib.parse import urlparse
-
-    parsed_r = urlparse(effective_redirect)
-    if parsed_r.scheme not in {"http", "https"} or not parsed_r.netloc or parsed_r.path != "/oauth/callback" or parsed_r.query or parsed_r.fragment:
-        raise ValidationError("OAuth redirect_uri must be a valid HTTP(S) URL ending in '/oauth/callback' with no query or fragment.")
+    cid, _csec, default_redirect = get_oauth_client_credentials(provider, settings, vault_creds=vault_creds)
+    effective_redirect = validate_oauth_redirect_uri(redirect_uri or default_redirect)
     effective_scopes = scopes if scopes else list(spec.default_scopes)
 
     params: dict[str, str] = {
@@ -182,12 +209,13 @@ def exchange_oauth_code(
     code_verifier: str,
     redirect_uri: str,
     settings: Settings,
+    vault_creds: tuple[str, str, str] | None = None,
     http_client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     spec = OAUTH_PROVIDERS.get(provider)
     if spec is None:
         raise ValidationError(f"Unsupported OAuth provider '{provider}'.")
-    cid, csec, _ = get_oauth_client_credentials(provider, settings)
+    cid, csec, _ = get_oauth_client_credentials(provider, settings, vault_creds=vault_creds)
     data = {
         "client_id": cid,
         "client_secret": csec,
@@ -219,12 +247,13 @@ def refresh_oauth_token(
     provider: str,
     refresh_token: str,
     settings: Settings,
+    vault_creds: tuple[str, str, str] | None = None,
     http_client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     spec = OAUTH_PROVIDERS.get(provider)
     if spec is None:
         raise ValidationError(f"Unsupported OAuth provider '{provider}'.")
-    cid, csec, _ = get_oauth_client_credentials(provider, settings)
+    cid, csec, _ = get_oauth_client_credentials(provider, settings, vault_creds=vault_creds)
     data = {
         "client_id": cid,
         "client_secret": csec,

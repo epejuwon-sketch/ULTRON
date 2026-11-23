@@ -252,3 +252,69 @@ def test_oauth_redirect_uri_consistency_user_isolation_and_replay(client: TestCl
                 http_client=http,
             )
 
+
+def test_admin_vault_oauth_app_configuration_and_lifecycle(client: TestClient, auth_headers: dict) -> None:
+    # 1. Without admin config, google_drive is SUPPORTED and OAuth start fails cleanly
+    conns_before = client.get("/api/v1/integrations/connections", headers=auth_headers["owner"]).json()
+    gd_before = next(c for c in conns_before["connections"] if c["provider"] == "google_drive")
+    assert gd_before["oauth_client_configured"] is False
+    assert gd_before["lifecycle_stage"] == "SUPPORTED"
+
+    start_fail = client.post(
+        "/api/v1/integrations/oauth/google_drive/start",
+        headers=auth_headers["owner"],
+        json={"redirect_uri": "http://localhost:5173/oauth/callback"},
+    )
+    assert start_fail.status_code >= 400
+    assert "Administrator configuration is required" in start_fail.text
+
+    # 2. Non-admin VIEWER cannot configure OAuth app credentials
+    viewer_try = client.post(
+        "/api/v1/integrations/oauth/admin/google/configure",
+        headers=auth_headers["viewer"],
+        json={
+            "client_id": "12345678-apps.googleusercontent.com",
+            "client_secret": "GOCSPX-secret-value-1234",
+            "redirect_uri": "http://localhost:5173/oauth/callback",
+        },
+    )
+    assert viewer_try.status_code == 403
+
+    # 3. OWNER configures Google OAuth app credentials in VAULT (secret never echoed back)
+    secret_val = "GOCSPX-super-secret-value-9999"
+    admin_ok = client.post(
+        "/api/v1/integrations/oauth/admin/google/configure",
+        headers=auth_headers["owner"],
+        json={
+            "client_id": "12345678-apps.googleusercontent.com",
+            "client_secret": secret_val,
+            "redirect_uri": "http://localhost:5173/oauth/callback",
+        },
+    )
+    assert admin_ok.status_code == 200, admin_ok.text
+    assert admin_ok.json()["configured"] is True
+    assert admin_ok.json()["source"] == "vault"
+    assert secret_val not in admin_ok.text
+
+    # 4. Status and Connections now advance google_drive to Stage 2 (CONFIGURED)
+    app_stat = client.get("/api/v1/integrations/oauth/admin/google/status", headers=auth_headers["owner"])
+    assert app_stat.status_code == 200
+    assert app_stat.json()["configured"] is True
+    assert secret_val not in app_stat.text
+
+    conns_after = client.get("/api/v1/integrations/connections", headers=auth_headers["owner"]).json()
+    gd_after = next(c for c in conns_after["connections"] if c["provider"] == "google_drive")
+    assert gd_after["oauth_client_configured"] is True
+    assert gd_after["lifecycle_stage"] == "CONFIGURED"
+
+    # 5. Now OAuth start succeeds using VAULT-stored OAuth app credentials
+    start_ok = client.post(
+        "/api/v1/integrations/oauth/google_drive/start",
+        headers=auth_headers["owner"],
+        json={"redirect_uri": "http://localhost:5173/oauth/callback"},
+    )
+    assert start_ok.status_code == 200, start_ok.text
+    assert "accounts.google.com/o/oauth2/v2/auth" in start_ok.json()["authorization_url"]
+    assert "drive.file" in start_ok.json()["authorization_url"]
+
+

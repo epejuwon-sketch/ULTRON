@@ -121,6 +121,45 @@ def api_oauth_callback(
     )
 
 
+class AdminOAuthAppConfigureRequest(BaseModel):
+    client_id: str = Field(min_length=8, max_length=300)
+    client_secret: str = Field(min_length=8, max_length=500)
+    redirect_uri: str = Field(min_length=10, max_length=500)
+
+
+@router.get("/oauth/admin/{family}/status")
+def api_admin_oauth_app_status(
+    family: str,
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.integration_manager import get_oauth_app_status
+
+    return get_oauth_app_status(db, tenant_id=principal.tenant_id, family=family, settings=settings)
+
+
+@router.post("/oauth/admin/{family}/configure")
+def api_admin_configure_oauth_app(
+    family: str,
+    body: AdminOAuthAppConfigureRequest,
+    principal: Principal = Depends(require_perm("integrations:manage")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.integration_manager import configure_oauth_app_credentials
+
+    return configure_oauth_app_credentials(
+        db,
+        principal=principal,
+        family=family,
+        client_id=body.client_id,
+        client_secret=body.client_secret,
+        redirect_uri=body.redirect_uri,
+        settings=settings,
+    )
+
+
 @router.post("/{provider}/refresh")
 def api_refresh_provider(
     provider: str,
