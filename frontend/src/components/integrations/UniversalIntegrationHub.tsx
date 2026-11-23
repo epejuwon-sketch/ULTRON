@@ -556,7 +556,7 @@ export function UniversalIntegrationHub() {
             )}
 
             {/* API Key / Credential Form */}
-            {(activeConfigItem.entry.authFlow === "API_KEY" || activeConfigItem.entry.authFlow === "SERVER_ENV") &&
+            {activeConfigItem.entry.authFlow === "API_KEY" &&
               activeConfigItem.entry.backendProviderKey && (
                 <form onSubmit={handleSaveApiKey} className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <strong><KeyRound size={12} /> Encrypted VAULT Credentials</strong>
@@ -578,6 +578,20 @@ export function UniversalIntegrationHub() {
                   </button>
                 </form>
               )}
+
+            {/* Server-Managed / Universal Connections 2.0 Guidance */}
+            {activeConfigItem.entry.authFlow === "SERVER_ENV" && (
+              <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <strong><ShieldCheck size={12} /> Server-Managed Integration</strong>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  {activeConfigItem.entry.id === "webhooks" ||
+                  activeConfigItem.entry.id === "rest_apis" ||
+                  activeConfigItem.entry.id === "mcp"
+                    ? "Server-level defaults are managed by the backend runtime. To register custom MCP servers, signed webhooks, or custom REST API endpoints, use Universal Connections Centre 2.0 → Connect a Service below."
+                    : "Managed via server environment configuration. Use Run Health Check below to verify live runtime connectivity."}
+                </div>
+              </div>
+            )}
 
             {/* Live Verification & Disconnect */}
             {activeConfigItem.entry.backendProviderKey && (
