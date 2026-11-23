@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { apiFetch, resolveGeminiProviderStatus, streamNeon } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
+import { getClientDeviceContext, parseAppLaunchCommand } from "../components/devices/OrbitAppPermissionsSection";
 import type { AttachedFileRef, ModulePageProps } from "../types/module";
 import {
   DataTable,
@@ -148,6 +149,7 @@ export default function NeonModulePage({
   const [listening, setListening] = useState(false);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
+  const [orbitAppPrompt, setOrbitAppPrompt] = useState<any>(null);
 
   // Models, tiers, usage, health, Gemini diagnostics, settings
   const [models, setModels] = useState<any>(null);
@@ -842,6 +844,104 @@ export default function NeonModulePage({
           )}
 
           {uploadingFiles && <div className="muted mono" style={{ fontSize: 12 }}>Uploading &amp; scanning attachment(s) with AEGIS + VAULT...</div>}
+
+          {orbitAppPrompt && (
+            <div className="alert-box" data-testid="neon-orbit-app-card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {orbitAppPrompt.status === "APPROVAL_REQUIRED" ? (
+                <>
+                  <strong>{orbitAppPrompt.prompt}</strong>
+                  <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={async () => {
+                        const r = await apiFetch<any>("/api/v1/devices/apps/launch", {
+                          method: "POST",
+                          body: {
+                            app_id: orbitAppPrompt.app_id,
+                            device_id: orbitAppPrompt.devCtx.deviceId,
+                            device_label: orbitAppPrompt.devCtx.deviceLabel,
+                            platform: orbitAppPrompt.devCtx.platform,
+                            target_uri: orbitAppPrompt.target_uri,
+                            allow_once: true,
+                          },
+                        });
+                        setOrbitAppPrompt({ ...r, target_uri: orbitAppPrompt.target_uri, devCtx: orbitAppPrompt.devCtx });
+                      }}
+                    >
+                      Allow once
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={async () => {
+                        await apiFetch("/api/v1/devices/apps/permissions", {
+                          method: "POST",
+                          body: {
+                            app_id: orbitAppPrompt.app_id,
+                            device_id: orbitAppPrompt.devCtx.deviceId,
+                            device_label: orbitAppPrompt.devCtx.deviceLabel,
+                            decision: "ALWAYS_ALLOW",
+                          },
+                        });
+                        const r = await apiFetch<any>("/api/v1/devices/apps/launch", {
+                          method: "POST",
+                          body: {
+                            app_id: orbitAppPrompt.app_id,
+                            device_id: orbitAppPrompt.devCtx.deviceId,
+                            device_label: orbitAppPrompt.devCtx.deviceLabel,
+                            platform: orbitAppPrompt.devCtx.platform,
+                            target_uri: orbitAppPrompt.target_uri,
+                          },
+                        });
+                        setOrbitAppPrompt({ ...r, target_uri: orbitAppPrompt.target_uri, devCtx: orbitAppPrompt.devCtx });
+                      }}
+                    >
+                      Always allow on this device
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={async () => {
+                        await apiFetch("/api/v1/devices/apps/permissions", {
+                          method: "POST",
+                          body: {
+                            app_id: orbitAppPrompt.app_id,
+                            device_id: orbitAppPrompt.devCtx.deviceId,
+                            device_label: orbitAppPrompt.devCtx.deviceLabel,
+                            decision: "DENIED",
+                          },
+                        });
+                        setOrbitAppPrompt(null);
+                      }}
+                    >
+                      Deny
+                    </button>
+                  </div>
+                </>
+              ) : orbitAppPrompt.status === "READY_TO_LAUNCH" ? (
+                <>
+                  <strong>{orbitAppPrompt.app_name} Launch Ready ({orbitAppPrompt.permission_mode})</strong>
+                  <div className="muted" style={{ fontSize: 12 }}>{orbitAppPrompt.platform_limitation_note}</div>
+                  <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+                    {orbitAppPrompt.launch_url && (
+                      <a href={orbitAppPrompt.launch_url} className="btn btn-sm">Open {orbitAppPrompt.app_name} App</a>
+                    )}
+                    {orbitAppPrompt.web_fallback_url && (
+                      <a
+                        href={orbitAppPrompt.web_fallback_url}
+                        target={orbitAppPrompt.web_fallback_url.startsWith("http") ? "_blank" : undefined}
+                        rel="noopener noreferrer"
+                        className="btn btn-secondary btn-sm"
+                      >
+                        Open Web Fallback
+                      </a>
+                    )}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          )}
 
           <form onSubmit={handleSend} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
             <label className="btn btn-secondary btn-sm" title="Attach image, PDF, or document to NEON" aria-label="Attach files">

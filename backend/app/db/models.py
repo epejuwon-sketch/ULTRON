@@ -989,3 +989,25 @@ class MediaJobRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+# ---------------------------------------------------------------------------
+# ORBIT — Persistent Device Application Launch Permissions
+# ---------------------------------------------------------------------------
+class DeviceAppPermissionRecord(Base):
+    __tablename__ = "device_app_permissions"
+
+    permission_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    device_label: Mapped[str] = mapped_column(String(160), nullable=False, default="This Device")
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    app_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ALWAYS_ALLOW")  # ALWAYS_ALLOW | DENIED | REVOKED
+    permission_scope: Mapped[str] = mapped_column(String(64), nullable=False, default="app_launch")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_launch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_launch_status: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+

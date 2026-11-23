@@ -24,6 +24,13 @@ from app.services.device_service import (
     revoke_device,
     update_device_permissions,
 )
+from app.services.orbit_app_service import (
+    SUPPORTED_ORBIT_APPS,
+    list_app_permissions,
+    prepare_or_dispatch_app_launch,
+    revoke_app_permission,
+    set_app_permission,
+)
 
 router = APIRouter(prefix="/api/v1/devices", tags=["Multi-Device Connectivity"])
 
@@ -310,3 +317,85 @@ def api_list_location_alerts(
 ) -> dict:
     items = list_location_alerts(db, tenant_id=principal.tenant_id, device_id=device_id)
     return {"total": len(items), "alerts": items}
+
+
+# ---------------------------------------------------------------------------
+# ORBIT Persistent Device Application Launch Permissions
+# ---------------------------------------------------------------------------
+class SetAppPermissionRequest(BaseModel):
+    app_id: str = Field(min_length=2, max_length=64)
+    device_id: str = Field(default="this_device", max_length=64)
+    device_label: str = Field(default="This Device", max_length=160)
+    decision: str = Field(min_length=4, max_length=24)
+
+
+class LaunchAppRequest(BaseModel):
+    app_id: str = Field(min_length=2, max_length=64)
+    device_id: str = Field(default="this_device", max_length=64)
+    device_label: str = Field(default="This Device", max_length=160)
+    platform: str = Field(default="ios", max_length=32)
+    target_uri: str | None = Field(default=None, max_length=500)
+    allow_once: bool = False
+
+
+@router.get("/apps/catalog")
+def api_list_orbit_apps(
+    _principal: Principal = Depends(require_perm("devices:read")),
+) -> dict:
+    return {
+        "total": len(SUPPORTED_ORBIT_APPS),
+        "apps": list(SUPPORTED_ORBIT_APPS.values()),
+    }
+
+
+@router.get("/apps/permissions")
+def api_list_app_permissions(
+    device_id: str | None = None,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = list_app_permissions(db, principal=principal, device_id=device_id)
+    return {"total": len(items), "permissions": items}
+
+
+@router.post("/apps/permissions")
+def api_set_app_permission(
+    body: SetAppPermissionRequest,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return set_app_permission(
+        db,
+        principal=principal,
+        app_id=body.app_id,
+        device_id=body.device_id,
+        device_label=body.device_label,
+        decision=body.decision,
+    )
+
+
+@router.post("/apps/permissions/{permission_id}/revoke")
+def api_revoke_app_permission(
+    permission_id: str,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return revoke_app_permission(db, principal=principal, permission_id=permission_id)
+
+
+@router.post("/apps/launch")
+def api_launch_orbit_app(
+    body: LaunchAppRequest,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return prepare_or_dispatch_app_launch(
+        db,
+        principal=principal,
+        app_id=body.app_id,
+        device_id=body.device_id,
+        device_label=body.device_label,
+        platform=body.platform,
+        target_uri=body.target_uri,
+        allow_once=body.allow_once,
+    )

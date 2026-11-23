@@ -24,6 +24,7 @@ import {
   StatusTone,
   useToast,
 } from "../components/ui/DesignSystem";
+import { OrbitAppPermissionsSection } from "../components/devices/OrbitAppPermissionsSection";
 
 interface CapabilityItem {
   id: string;
@@ -517,6 +518,7 @@ export default function DevicesModulePage({ subPage, onSelectSubPage, device }: 
       {/* 93. DEVICE PERMISSIONS (iPhone & Browser Capability Centre + Paired Device Scopes) */}
       {page.id === "permissions" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <OrbitAppPermissionsSection />
           <div className="card">
             <div className="card-title">
               <span><Shield size={15} style={{ verticalAlign: "middle", marginRight: 6 }} />iPhone &amp; Browser Hardware Permission Centre</span>
