@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { apiFetch, getStoredUser } from "../../lib/api";
+import { apiFetch } from "../../lib/api";
 import {
   INTEGRATION_CATEGORIES,
   INTEGRATIONS_CATALOG,
@@ -21,6 +21,7 @@ import {
   IntegrationCategory,
 } from "../../catalog/integrationsCatalog";
 import { DataTable, Drawer, MetricDisplay, StatusIndicator, useToast } from "../ui/DesignSystem";
+import { AdminOAuthSetupPanel } from "./AdminOAuthSetupPanel";
 import { UniversalConnectPanel } from "./UniversalConnectPanel";
 
 const PENDING_OAUTH_KEY = "ultron_pending_oauth_provider";
@@ -105,8 +106,6 @@ function resolveHubStatus(
 
 export function UniversalIntegrationHub() {
   const { pushToast } = useToast();
-  const currentUser = getStoredUser();
-  const isAdmin = currentUser?.role === "OWNER" || currentUser?.role === "ADMIN";
   const [connections, setConnections] = useState<any[]>([]);
   const [statusData, setStatusData] = useState<any>(null);
   const [search, setSearch] = useState("");
@@ -114,8 +113,6 @@ export function UniversalIntegrationHub() {
   const [viewFilter, setViewFilter] = useState<"ALL" | "CONNECTED" | "AVAILABLE" | "ATTENTION" | "RECENT">("ALL");
   const [configuring, setConfiguring] = useState<IntegrationCatalogEntry | null>(null);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
-  const [adminClientId, setAdminClientId] = useState("");
-  const [adminClientSecret, setAdminClientSecret] = useState("");
   const [awaitingAuth, setAwaitingAuth] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -474,64 +471,12 @@ export function UniversalIntegrationHub() {
             {activeConfigItem.entry.authFlow === "OAUTH2" && activeConfigItem.entry.backendProviderKey && (
               <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <strong><Link2 size={12} /> OAuth 2.0 + PKCE Authorization</strong>
-                {!activeConfigItem.oauthReady && (
-                  <>
-                    <div className="muted">
-                      {activeConfigItem.entry.name} setup is not yet available. Administrator configuration is required.
-                    </div>
-                    {isAdmin && (
-                      <form
-                        onSubmit={async (e) => {
-                          e.preventDefault();
-                          const family = activeConfigItem.entry.backendProviderKey === "github" ? "github" : "google";
-                          setBusy(true);
-                          try {
-                            await apiFetch(`/api/v1/integrations/oauth/admin/${family}/configure`, {
-                              method: "POST",
-                              body: {
-                                client_id: adminClientId.trim(),
-                                client_secret: adminClientSecret.trim(),
-                                redirect_uri: `${window.location.origin}/oauth/callback`,
-                              },
-                            });
-                            setAdminClientId("");
-                            setAdminClientSecret("");
-                            pushToast("Administrator OAuth credentials encrypted and saved in VAULT.", "success");
-                            await loadAll();
-                          } catch (err: any) {
-                            pushToast(err.message || "Failed to save administrator OAuth credentials.", "error");
-                          } finally {
-                            setBusy(false);
-                          }
-                        }}
-                        style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 4 }}
-                      >
-                        <div className="telemetry-label">ADMINISTRATOR OAUTH SETUP (VAULT)</div>
-                        <input
-                          className="input"
-                          placeholder="OAuth Client ID"
-                          value={adminClientId}
-                          onChange={(e) => setAdminClientId(e.target.value)}
-                          required
-                        />
-                        <input
-                          className="input"
-                          type="password"
-                          placeholder="OAuth Client Secret (encrypted in VAULT)"
-                          value={adminClientSecret}
-                          onChange={(e) => setAdminClientSecret(e.target.value)}
-                          required
-                        />
-                        <div className="muted mono" style={{ fontSize: 11 }}>
-                          Redirect URI: {typeof window !== "undefined" ? `${window.location.origin}/oauth/callback` : "/oauth/callback"}
-                        </div>
-                        <button type="submit" className="btn btn-secondary btn-sm" disabled={busy}>
-                          <ShieldCheck size={12} /> Save OAuth App in VAULT
-                        </button>
-                      </form>
-                    )}
-                  </>
-                )}
+                <AdminOAuthSetupPanel
+                  entry={activeConfigItem.entry}
+                  oauthReady={activeConfigItem.oauthReady}
+                  busy={busy}
+                  onConfigured={loadAll}
+                />
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <button
                     type="button"

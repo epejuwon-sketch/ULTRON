@@ -20,6 +20,7 @@ import {
 } from "../catalog/integrationsCatalog";
 import { IntegrationCard } from "../components/integrations/IntegrationCard";
 import { IntegrationLogo } from "../components/integrations/IntegrationLogo";
+import { AdminOAuthSetupPanel } from "../components/integrations/AdminOAuthSetupPanel";
 import { UniversalConnectPanel } from "../components/integrations/UniversalConnectPanel";
 import type { ModulePageProps } from "../types/module";
 import {
@@ -865,11 +866,11 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
               {selected.authFlow === "OAUTH2" && selected.backendProviderKey && (
                 <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div className="telemetry-label">OAUTH 2.0 + PKCE AUTHORIZATION</div>
-                  {!info.record?.oauth_client_configured && (
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {selected.name} setup is not yet available. Administrator configuration is required.
-                    </div>
-                  )}
+                  <AdminOAuthSetupPanel
+                    entry={selected}
+                    oauthReady={Boolean(info.record?.oauth_client_configured)}
+                    onConfigured={load}
+                  />
                   <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                     <button
                       type="button"

@@ -318,3 +318,57 @@ def test_admin_vault_oauth_app_configuration_and_lifecycle(client: TestClient, a
     assert "drive.file" in start_ok.json()["authorization_url"]
 
 
+def test_google_workspace_seven_providers_share_admin_vault_oauth_setup(client, auth_headers):
+    # Invalid / placeholder credentials are rejected clearly
+    bad = client.post(
+        "/api/v1/integrations/oauth/admin/google/configure",
+        headers=auth_headers["owner"],
+        json={
+            "client_id": "changeme",
+            "client_secret": "GOCSPX-secret with space",
+            "redirect_uri": "http://localhost:5173/oauth/callback",
+        },
+    )
+    assert bad.status_code == 422
+    assert "GOOGLE_OAUTH_CLIENT_ID" in bad.text
+
+    # Valid admin setup in VAULT
+    ok = client.post(
+        "/api/v1/integrations/oauth/admin/google/configure",
+        headers=auth_headers["owner"],
+        json={
+            "client_id": "99999999-test.apps.googleusercontent.com",
+            "client_secret": "GOCSPX-valid-secret-12345",
+            "redirect_uri": "http://localhost:5173/oauth/callback",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+
+    status_res = client.get("/api/v1/integrations/oauth/admin/google/status", headers=auth_headers["owner"])
+    assert status_res.status_code == 200
+    google_seven = [
+        "google_drive",
+        "google_gmail",
+        "google_calendar",
+        "google_docs",
+        "google_sheets",
+        "google_slides",
+        "google_cloud",
+    ]
+    assert status_res.json()["requirements"]["applies_to_providers"] == google_seven
+
+    conns = client.get("/api/v1/integrations/connections", headers=auth_headers["owner"]).json()["connections"]
+    by_provider = {c["provider"]: c for c in conns}
+    for prov in google_seven:
+        assert by_provider[prov]["oauth_client_configured"] is True
+        assert by_provider[prov]["lifecycle_stage"] == "CONFIGURED"
+        start = client.post(
+            f"/api/v1/integrations/oauth/{prov}/start",
+            headers=auth_headers["owner"],
+            json={"redirect_uri": "http://localhost:5173/oauth/callback"},
+        )
+        assert start.status_code == 200, f"{prov}: {start.text}"
+        assert "code_challenge_method=S256" in start.json()["authorization_url"]
+
+
+

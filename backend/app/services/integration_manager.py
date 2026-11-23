@@ -263,10 +263,23 @@ def configure_oauth_app_credentials(
     if principal.role not in {Role.OWNER, Role.ADMIN}:
         raise AuthorizationError("Only OWNER or ADMIN administrators may configure OAuth client credentials.")
     pkey = _oauth_app_provider_key(family)
+    fam = family.strip().lower()
     cid = (client_id or "").strip()
     csec = (client_secret or "").strip()
-    if len(cid) < 8 or len(csec) < 8:
-        raise ValidationError("Valid OAuth Client ID and Client Secret are required.")
+    placeholders = {"undefined", "null", "changeme", "your_client_id", "your_client_secret"}
+    if (
+        len(cid) < 8
+        or len(csec) < 8
+        or any(ch.isspace() for ch in cid)
+        or any(ch.isspace() for ch in csec)
+        or cid.lower() in placeholders
+        or csec.lower() in placeholders
+    ):
+        if fam == "google":
+            raise ValidationError(
+                "Both GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are required (minimum 8 characters, no whitespace)."
+            )
+        raise ValidationError("Valid OAuth Client ID and Client Secret are required (minimum 8 characters, no whitespace).")
     clean_redirect = validate_oauth_redirect_uri(redirect_uri)
 
     payload = {"client_id": cid, "client_secret": csec, "redirect_uri": clean_redirect}
@@ -307,16 +320,47 @@ def configure_oauth_app_credentials(
         tenant_id=principal.tenant_id,
         actor=principal.username,
         action="OAUTH_APP_CONFIGURED",
-        resource=family.lower(),
+        resource=fam,
         outcome=f"VAULT_ENCRYPTED|CLIENT_ID={masked_id}",
     )
     db.commit()
     return {
-        "family": family.lower(),
+        "family": fam,
         "configured": True,
         "source": "vault",
         "client_id_masked": masked_id,
         "redirect_uri": clean_redirect,
+    }
+
+
+def _oauth_family_requirements(family: str) -> dict[str, Any]:
+    if family == "google":
+        return {
+            "authorized_redirect_path": "/oauth/callback",
+            "required_env_vars": ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
+            "required_google_apis": [
+                "Google Drive API",
+                "Gmail API",
+                "Google Calendar API",
+                "Google Docs API",
+                "Google Sheets API",
+                "Google Slides API",
+                "Cloud Resource Manager API",
+            ],
+            "applies_to_providers": [
+                "google_drive",
+                "google_gmail",
+                "google_calendar",
+                "google_docs",
+                "google_sheets",
+                "google_slides",
+                "google_cloud",
+            ],
+        }
+    return {
+        "authorized_redirect_path": "/oauth/callback",
+        "required_env_vars": ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"],
+        "applies_to_providers": ["github"],
     }
 
 
@@ -328,7 +372,11 @@ def get_oauth_app_status(
     settings: Settings,
 ) -> dict[str, Any]:
     fam = family.strip().lower()
-    if fam == "google" and settings.google_oauth_client_id.strip() and settings.google_oauth_client_secret:
+    if fam not in {"google", "github"}:
+        raise ValidationError(f"Unsupported OAuth app family '{family}'.")
+    reqs = _oauth_family_requirements(fam)
+    google_sec = settings.google_oauth_client_secret.get_secret_value().strip() if settings.google_oauth_client_secret else ""
+    if fam == "google" and settings.google_oauth_client_id.strip() and google_sec:
         cid = settings.google_oauth_client_id.strip()
         return {
             "family": fam,
@@ -336,8 +384,10 @@ def get_oauth_app_status(
             "source": "env",
             "client_id_masked": f"...{cid[-6:]}" if len(cid) > 6 else "***",
             "redirect_uri": settings.google_oauth_redirect_uri,
+            "requirements": reqs,
         }
-    if fam == "github" and settings.github_oauth_client_id.strip() and settings.github_oauth_client_secret:
+    github_sec = settings.github_oauth_client_secret.get_secret_value().strip() if settings.github_oauth_client_secret else ""
+    if fam == "github" and settings.github_oauth_client_id.strip() and github_sec:
         cid = settings.github_oauth_client_id.strip()
         return {
             "family": fam,
@@ -345,6 +395,7 @@ def get_oauth_app_status(
             "source": "env",
             "client_id_masked": f"...{cid[-6:]}" if len(cid) > 6 else "***",
             "redirect_uri": settings.github_oauth_redirect_uri,
+            "requirements": reqs,
         }
     vault = _load_vault_oauth_app_credentials(db, tenant_id=tenant_id, family=fam, settings=settings)
     if vault:
@@ -355,8 +406,16 @@ def get_oauth_app_status(
             "source": "vault",
             "client_id_masked": f"...{cid[-6:]}" if len(cid) > 6 else "***",
             "redirect_uri": ruri,
+            "requirements": reqs,
         }
-    return {"family": fam, "configured": False, "source": "none", "client_id_masked": None, "redirect_uri": None}
+    return {
+        "family": fam,
+        "configured": False,
+        "source": "none",
+        "client_id_masked": None,
+        "redirect_uri": None,
+        "requirements": reqs,
+    }
 
 
 def start_oauth_flow(
