@@ -264,6 +264,7 @@ def complete_oauth_callback(
         select(OAuthStateRecord).where(
             OAuthStateRecord.state_token == state,
             OAuthStateRecord.tenant_id == principal.tenant_id,
+            OAuthStateRecord.user_id == principal.user_id,
             OAuthStateRecord.provider == p,
         )
     ).scalar_one_or_none()
