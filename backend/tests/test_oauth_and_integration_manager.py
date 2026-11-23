@@ -41,7 +41,7 @@ def test_integration_manager_api_key_encrypt_list_and_disconnect(client: TestCli
     assert "AIzaTestEncrypted1234567890" not in str(body)
 
     listed = client.get("/api/v1/integrations/connections", headers=auth_headers["owner"]).json()
-    assert listed["total_managed_providers"] == 15
+    assert listed["total_managed_providers"] == 16
     assert "AIzaTestEncrypted1234567890" not in str(listed)
 
     # Disconnect wipes credentials

@@ -75,6 +75,16 @@ SUPPORTED_MANAGED_PROVIDERS: dict[str, dict[str, Any]] = {
             "transaction_verify",
         ],
     },
+    "caravan": {
+        "auth_types": ["API_KEY"],
+        "capabilities": [
+            "funding_research",
+            "eligibility_assessment",
+            "bi_analytics",
+            "neon_intelligence",
+            "argon_orchestration",
+        ],
+    },
 }
 
 

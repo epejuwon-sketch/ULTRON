@@ -60,3 +60,55 @@ def api_caravan_summary(
     summary = get_caravan_analytics_summary(db, tenant_id=principal.tenant_id, venture=venture)
     summary["supported_event_types"] = sorted(VALID_CARAVAN_EVENTS)
     return summary
+
+
+class CaravanBridgeActionRequest(BaseModel):
+    action_category: str = Field(min_length=3, max_length=64)
+    summary: str = Field(min_length=3, max_length=500)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/bridge/status")
+def api_caravan_bridge_status(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from sqlalchemy import select
+
+    from app.db.models import IntegrationConnectionRecord
+    from app.services.operational_control_service import get_operational_control_policy
+
+    conn = db.execute(
+        select(IntegrationConnectionRecord).where(
+            IntegrationConnectionRecord.tenant_id == principal.tenant_id,
+            IntegrationConnectionRecord.provider == "caravan",
+        )
+    ).scalar_one_or_none()
+    policy = get_operational_control_policy(db, tenant_id=principal.tenant_id)
+    return {
+        "bridge": "ultron-caravan-s2s",
+        "caravan_repo_present": False,
+        "connection_status": conn.status if conn is not None else "UNCONFIGURED",
+        "degraded_mode_supported": True,
+        "degraded_mode_note": "Caravan operates independently if ULTRON intelligence is temporarily unavailable.",
+        "operational_control": policy,
+    }
+
+
+@router.post("/bridge/action")
+def api_caravan_bridge_action(
+    body: CaravanBridgeActionRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.operational_control_service import evaluate_operational_action
+
+    return evaluate_operational_action(
+        db,
+        principal=principal,
+        action_category=body.action_category,
+        summary=body.summary,
+        venture="CARAVAN",
+        payload=body.payload,
+    )
+

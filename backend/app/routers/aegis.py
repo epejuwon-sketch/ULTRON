@@ -118,3 +118,39 @@ def api_scan_code(
     _principal: Principal = Depends(require_perm("security:read")),
 ) -> dict:
     return scan_code_bundle(body.files)
+
+
+class OperationalActionRequest(BaseModel):
+    action_category: str = Field(min_length=3, max_length=64)
+    summary: str = Field(min_length=3, max_length=500)
+    venture: str = Field(default="CARAVAN", max_length=64)
+    payload: dict = Field(default_factory=dict)
+
+
+@router.get("/operational-control")
+def api_get_operational_control(
+    principal: Principal = Depends(require_perm("security:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.operational_control_service import get_operational_control_policy
+
+    return get_operational_control_policy(db, tenant_id=principal.tenant_id)
+
+
+@router.post("/operational-control/evaluate")
+def api_evaluate_operational_control(
+    body: OperationalActionRequest,
+    principal: Principal = Depends(require_perm("security:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.operational_control_service import evaluate_operational_action
+
+    return evaluate_operational_action(
+        db,
+        principal=principal,
+        action_category=body.action_category,
+        summary=body.summary,
+        venture=body.venture,
+        payload=body.payload,
+    )
+
