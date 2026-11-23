@@ -285,6 +285,20 @@ def create_funding_opportunity(
     if not clean_url:
         raise ValidationError("Every funding opportunity requires a valid source_url.")
 
+    norm_title = title.strip().lower()
+    norm_org = provider_org.strip().lower()
+    norm_url = clean_url.rstrip("/").lower()
+    existing_rows = db.execute(
+        select(CaravanFundingOpportunityRecord).where(
+            CaravanFundingOpportunityRecord.tenant_id == principal.tenant_id
+        )
+    ).scalars().all()
+    for ex in existing_rows:
+        if ex.source_url.rstrip("/").lower() == norm_url or (
+            ex.title.strip().lower() == norm_title and ex.provider_org.strip().lower() == norm_org
+        ):
+            raise ConflictError("Duplicate funding opportunity detected for this source URL or title/provider.")
+
     rec = CaravanFundingOpportunityRecord(
         opportunity_id=f"copp_{uuid.uuid4().hex[:14]}",
         tenant_id=principal.tenant_id,
@@ -402,6 +416,21 @@ def run_neon_eligibility_assessment(
     settings: Settings,
 ) -> dict[str, Any]:
     acc = _get_or_create_customer_account(db, principal=principal)
+    sub = _get_or_create_subscription(db, tenant_id=principal.tenant_id, account_id=acc.account_id)
+    entitlements = PLAN_ENTITLEMENTS.get(sub.plan_tier, PLAN_ENTITLEMENTS["FREE"])
+    month_start = _utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    monthly_used = db.execute(
+        select(func.count(CaravanEligibilityAssessmentRecord.assessment_id)).where(
+            CaravanEligibilityAssessmentRecord.tenant_id == principal.tenant_id,
+            CaravanEligibilityAssessmentRecord.account_id == acc.account_id,
+            CaravanEligibilityAssessmentRecord.created_at >= month_start,
+        )
+    ).scalar_one()
+    if int(monthly_used or 0) >= int(entitlements["neon_assessments_per_month"]):
+        raise ValidationError(
+            f"Monthly NEON eligibility limit ({entitlements['neon_assessments_per_month']}) reached for {sub.plan_tier} plan."
+        )
+
     opp = _get_opportunity(db, tenant_id=principal.tenant_id, opportunity_id=opportunity_id)
 
     req_lower = opp.eligibility_requirements.lower()
@@ -463,7 +492,16 @@ def run_neon_eligibility_assessment(
     )
     db.commit()
     db.refresh(assessment)
-    return _serialize_assessment(assessment)
+    out = _serialize_assessment(assessment)
+    out["verified_facts"] = {
+        "source_url": opp.source_url,
+        "verification_status": opp.verification_status,
+        "last_verified_at": opp.last_verified_at.isoformat() if opp.last_verified_at else None,
+        "deadline_at": opp.deadline_at.isoformat() if opp.deadline_at else None,
+        "geographic_restrictions": opp.geographic_restrictions,
+        "eligibility_requirements": opp.eligibility_requirements,
+    }
+    return out
 
 
 def list_eligibility_assessments(db: Session, *, principal: Principal) -> list[dict[str, Any]]:
@@ -629,6 +667,19 @@ def save_opportunity(db: Session, *, principal: Principal, opportunity_id: str, 
     ).scalar_one_or_none()
     if existing is not None:
         return _serialize_saved(existing)
+
+    sub = _get_or_create_subscription(db, tenant_id=principal.tenant_id, account_id=acc.account_id)
+    entitlements = PLAN_ENTITLEMENTS.get(sub.plan_tier, PLAN_ENTITLEMENTS["FREE"])
+    saved_count = db.execute(
+        select(func.count(CaravanSavedOpportunityRecord.saved_id)).where(
+            CaravanSavedOpportunityRecord.tenant_id == principal.tenant_id,
+            CaravanSavedOpportunityRecord.account_id == acc.account_id,
+        )
+    ).scalar_one()
+    if int(saved_count or 0) >= int(entitlements["max_saved_opportunities"]):
+        raise ValidationError(
+            f"Saved opportunities limit ({entitlements['max_saved_opportunities']}) reached for {sub.plan_tier} plan."
+        )
 
     rec = CaravanSavedOpportunityRecord(
         saved_id=f"csav_{uuid.uuid4().hex[:14]}",
@@ -845,6 +896,7 @@ def _serialize_opportunity(r: CaravanFundingOpportunityRecord) -> dict[str, Any]
         "geographic_restrictions": r.geographic_restrictions,
         "deadline_at": r.deadline_at.isoformat() if r.deadline_at else None,
         "verification_status": r.verification_status,
+        "freshness_status": _compute_freshness_status(r),
         "last_verified_at": r.last_verified_at.isoformat() if r.last_verified_at else None,
         "verified_by": r.verified_by,
         "supporting_evidence": r.supporting_evidence,
@@ -852,6 +904,51 @@ def _serialize_opportunity(r: CaravanFundingOpportunityRecord) -> dict[str, Any]
         "created_at": r.created_at.isoformat(),
         "updated_at": r.updated_at.isoformat(),
     }
+
+
+def _compute_freshness_status(r: CaravanFundingOpportunityRecord) -> str:
+    now = _utcnow()
+    if r.verification_status in {"EXPIRED", "CLOSED"}:
+        return r.verification_status
+    if r.deadline_at is not None:
+        dl = r.deadline_at if r.deadline_at.tzinfo is not None else r.deadline_at.replace(tzinfo=timezone.utc)
+        if dl < now:
+            return "EXPIRED"
+    if r.last_verified_at is None:
+        return "UNVERIFIED"
+    lv = r.last_verified_at if r.last_verified_at.tzinfo is not None else r.last_verified_at.replace(tzinfo=timezone.utc)
+    if (now - lv).days > 30:
+        return "STALE"
+    return "FRESH"
+
+
+def sweep_expired_opportunities(db: Session, *, principal: Principal) -> dict[str, Any]:
+    """Flag any open opportunity with a past deadline_at as EXPIRED and record an audit log."""
+    now = _utcnow()
+    rows = db.execute(
+        select(CaravanFundingOpportunityRecord).where(
+            CaravanFundingOpportunityRecord.tenant_id == principal.tenant_id,
+            CaravanFundingOpportunityRecord.verification_status.in_(["VERIFIED", "UNVERIFIED"]),
+        )
+    ).scalars().all()
+    expired_ids: list[str] = []
+    for r in rows:
+        if r.deadline_at is not None:
+            dl = r.deadline_at if r.deadline_at.tzinfo is not None else r.deadline_at.replace(tzinfo=timezone.utc)
+            if dl < now:
+                r.verification_status = "EXPIRED"
+                r.updated_at = now
+                expired_ids.append(r.opportunity_id)
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CARAVAN_EXPIRED_SWEEP",
+        resource="caravan_opportunities",
+        outcome=f"expired_count={len(expired_ids)}",
+    )
+    db.commit()
+    return {"expired_count": len(expired_ids), "expired_ids": expired_ids, "checked_at": now.isoformat()}
 
 
 def _serialize_account(r: CaravanCustomerAccountRecord) -> dict[str, Any]:

@@ -313,6 +313,9 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
       {subPage === "eligibility" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <strong><UserCheck size={14} /> NEON Eligibility Assessments ({assessments.length})</strong>
+          <div className="muted" style={{ fontSize: 12 }}>
+            NEON scores and preparation recommendations are AI-assisted assessments; always confirm verified source facts (URL, deadline, and official requirements) before submitting.
+          </div>
           <DataTable
             rows={assessments}
             rowKey={(r) => r.assessment_id}
@@ -640,13 +643,30 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
           </div>
 
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <strong><ShieldCheck size={14} /> Opportunity Verification Queue</strong>
+            <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+              <strong><ShieldCheck size={14} /> Opportunity Verification Queue</strong>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  try {
+                    const res = await apiFetch<any>("/api/v1/caravan/opportunities/sweep-expired", { method: "POST" });
+                    pushToast(`Expired sweep complete: ${res.expired_count} opportunity(s) marked EXPIRED.`, "info");
+                    await loadAll();
+                  } catch (err: any) {
+                    pushToast(err.message, "error");
+                  }
+                }}
+              >
+                <RefreshCw size={12} /> Sweep Expired Deadlines
+              </button>
+            </div>
             <input className="input" placeholder="Verification supporting evidence (required to mark VERIFIED)" value={verifyEvidence} onChange={(e) => setVerifyEvidence(e.target.value)} />
             {opportunities.slice(0, 10).map((o) => (
               <div key={o.opportunity_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
                 <div>
                   <strong>{o.title}</strong>
-                  <div className="muted" style={{ fontSize: 11 }}>{o.provider_org} · {o.verification_status}</div>
+                  <div className="muted" style={{ fontSize: 11 }}>{o.provider_org} · {o.verification_status} · {o.freshness_status || "UNVERIFIED"}</div>
                 </div>
                 <div className="row" style={{ gap: 6 }}>
                   <button

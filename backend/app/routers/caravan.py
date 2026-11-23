@@ -514,3 +514,13 @@ def api_verify_caravan_source_live(
 
     return verify_funding_source_via_argon(db, principal=principal, source_id=source_id)
 
+
+@router.post("/opportunities/sweep-expired")
+def api_sweep_expired_caravan_opportunities(
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_product_service import sweep_expired_opportunities
+
+    return sweep_expired_opportunities(db, principal=principal)
+

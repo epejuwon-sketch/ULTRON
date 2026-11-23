@@ -265,3 +265,55 @@ def test_caravan_argon_source_verification_probe(client, auth_headers, monkeypat
     assert body["status"] == "ACTIVE"
     assert body["argon_workflow"] == "SSRF_GUARDED_SOURCE_PROBE"
 
+
+def test_caravan_duplicate_detection_expiry_sweep_and_entitlements(client, auth_headers):
+    # 1. Create opportunity with past deadline
+    opp = client.post(
+        "/api/v1/caravan/opportunities",
+        headers=auth_headers["owner"],
+        json={
+            "title": "Lagos SME Seed Grant",
+            "provider_org": "Lagos State Trust",
+            "funding_type": "GRANT",
+            "source_url": "https://example.org/lagos-seed-grant",
+            "eligibility_requirements": "Nigeria Seed Technology",
+            "geographic_restrictions": "Nigeria",
+            "deadline_at": "2020-01-01T00:00:00Z",
+        },
+    )
+    assert opp.status_code == 201, opp.text
+    opp_id = opp.json()["opportunity_id"]
+    assert opp.json()["freshness_status"] == "EXPIRED"
+
+    # 2. Duplicate source_url or (title, provider_org) is rejected with 409 Conflict
+    dup = client.post(
+        "/api/v1/caravan/opportunities",
+        headers=auth_headers["owner"],
+        json={
+            "title": "Lagos SME Seed Grant",
+            "provider_org": "Lagos State Trust",
+            "funding_type": "GRANT",
+            "source_url": "https://example.org/lagos-seed-grant/",
+            "eligibility_requirements": "Nigeria Seed Technology",
+        },
+    )
+    assert dup.status_code == 409
+
+    # 3. NEON assessment separates verified_facts from AI assessment
+    assess = client.post(
+        "/api/v1/caravan/assessments",
+        headers=auth_headers["owner"],
+        json={"opportunity_id": opp_id},
+    )
+    assert assess.status_code == 201, assess.text
+    assert assess.json()["verified_facts"]["source_url"] == "https://example.org/lagos-seed-grant"
+    assert "verdict" in assess.json()
+
+    # 4. Sweep expired deadlines marks past-deadline opportunities EXPIRED
+    sweep = client.post("/api/v1/caravan/opportunities/sweep-expired", headers=auth_headers["owner"])
+    assert sweep.status_code == 200, sweep.text
+    assert opp_id in sweep.json()["expired_ids"]
+    fetched = client.get(f"/api/v1/caravan/opportunities/{opp_id}", headers=auth_headers["owner"]).json()
+    assert fetched["verification_status"] == "EXPIRED"
+
+
