@@ -195,6 +195,20 @@ def get_caravan_overview(db: Session, *, principal: Principal) -> dict[str, Any]
     ).scalar_one()
 
     analytics = get_caravan_analytics_summary(db, tenant_id=principal.tenant_id, venture="CARAVAN")
+    now = _utcnow()
+    upcoming_deadlines = []
+    for o in opps:
+        if o.verification_status in {"VERIFIED", "NEEDS_REVIEW", "UNVERIFIED"} and o.deadline_at is not None:
+            dl = o.deadline_at if o.deadline_at.tzinfo is not None else o.deadline_at.replace(tzinfo=timezone.utc)
+            if dl >= now:
+                upcoming_deadlines.append((dl, o))
+    upcoming_deadlines.sort(key=lambda x: x[0])
+
+    recently_verified = [
+        o for o in opps if o.verification_status == "VERIFIED"
+    ]
+    recently_verified.sort(key=lambda o: o.last_verified_at or o.updated_at, reverse=True)
+
     db.commit()
 
     return {
@@ -206,6 +220,8 @@ def get_caravan_overview(db: Session, *, principal: Principal) -> dict[str, Any]
         "my_applications_count": int(app_count or 0),
         "saved_opportunities_count": int(saved_count or 0),
         "unread_notifications_count": int(unread_notifs or 0),
+        "upcoming_deadlines": [_serialize_opportunity(o) for _, o in upcoming_deadlines[:5]],
+        "recently_verified": [_serialize_opportunity(o) for o in recently_verified[:5]],
         "analytics": analytics,
         "governance": {
             "live_payments_enabled": False,
@@ -599,6 +615,7 @@ def update_application(
     status_value: str | None = None,
     progress_pct: int | None = None,
     notes: str | None = None,
+    checklist: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     rec = db.execute(
         select(CaravanApplicationRecord).where(
@@ -632,6 +649,11 @@ def update_application(
         else:
             rec.status = next_status
 
+    if checklist is not None:
+        rec.checklist_json = json.dumps(checklist)
+        if progress_pct is None and len(checklist) > 0:
+            done_cnt = sum(1 for item in checklist if item.get("done"))
+            rec.progress_pct = max(10, int(round((done_cnt / len(checklist)) * 100)))
     if progress_pct is not None:
         rec.progress_pct = max(0, min(100, progress_pct))
     if notes is not None:
@@ -649,6 +671,60 @@ def update_application(
     db.commit()
     db.refresh(rec)
     return _serialize_application(rec)
+
+
+def send_approaching_deadline_reminders(
+    db: Session,
+    *,
+    principal: Principal,
+    within_days: int = 14,
+) -> dict[str, Any]:
+    """Create notifications for DRAFT/PREPARING applications whose opportunity deadline is within `within_days`."""
+    from datetime import timedelta
+
+    acc = _get_or_create_customer_account(db, principal=principal)
+    now = _utcnow()
+    horizon = now + timedelta(days=max(1, min(90, within_days)))
+    apps = db.execute(
+        select(CaravanApplicationRecord).where(
+            CaravanApplicationRecord.tenant_id == principal.tenant_id,
+            CaravanApplicationRecord.account_id == acc.account_id,
+            CaravanApplicationRecord.status.in_(["DRAFT", "PREPARING"]),
+        )
+    ).scalars().all()
+
+    reminders_created = 0
+    for ap in apps:
+        opp = db.execute(
+            select(CaravanFundingOpportunityRecord).where(
+                CaravanFundingOpportunityRecord.tenant_id == principal.tenant_id,
+                CaravanFundingOpportunityRecord.opportunity_id == ap.opportunity_id,
+            )
+        ).scalar_one_or_none()
+        if opp is None or opp.deadline_at is None:
+            continue
+        dl = opp.deadline_at if opp.deadline_at.tzinfo is not None else opp.deadline_at.replace(tzinfo=timezone.utc)
+        if now <= dl <= horizon:
+            _push_notification(
+                db,
+                tenant_id=principal.tenant_id,
+                account_id=acc.account_id,
+                title=f"Approaching Deadline: {opp.title}",
+                body=f"Application {ap.application_id} deadline is {dl.date().isoformat()}. Review and submit directly at {opp.source_url}.",
+                category="DEADLINE",
+            )
+            reminders_created += 1
+
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CARAVAN_DEADLINE_REMINDERS",
+        resource=acc.account_id,
+        outcome=f"reminders_created={reminders_created}",
+    )
+    db.commit()
+    return {"checked_applications": len(apps), "reminders_created": reminders_created}
 
 
 def list_applications(db: Session, *, principal: Principal) -> list[dict[str, Any]]:
@@ -739,9 +815,11 @@ def update_customer_account(
     organization_name: str | None = None,
     entity_type: str | None = None,
     country: str | None = None,
+    state_location: str | None = None,
     sector: str | None = None,
     stage: str | None = None,
     annual_revenue_band: str | None = None,
+    funding_goals: str | None = None,
     profile_summary: str | None = None,
     onboarding_completed: bool | None = None,
 ) -> dict[str, Any]:
@@ -758,8 +836,25 @@ def update_customer_account(
         acc.stage = stage.strip().upper()
     if annual_revenue_band is not None:
         acc.annual_revenue_band = annual_revenue_band.strip().upper()
+
+    meta: dict[str, Any] = {}
+    if acc.profile_summary.strip().startswith("{"):
+        try:
+            meta = json.loads(acc.profile_summary)
+        except Exception:
+            meta = {"notes": acc.profile_summary}
+    elif acc.profile_summary.strip():
+        meta = {"notes": acc.profile_summary.strip()}
+
+    if state_location is not None:
+        meta["state_location"] = state_location.strip()
+    if funding_goals is not None:
+        meta["funding_goals"] = funding_goals.strip()
     if profile_summary is not None:
-        acc.profile_summary = profile_summary.strip()
+        meta["notes"] = profile_summary.strip()
+    if state_location is not None or funding_goals is not None or profile_summary is not None:
+        acc.profile_summary = json.dumps(meta)
+
     if onboarding_completed is not None:
         acc.onboarding_completed = onboarding_completed
     acc.updated_at = _utcnow()
@@ -961,16 +1056,43 @@ def sweep_expired_opportunities(db: Session, *, principal: Principal) -> dict[st
 
 
 def _serialize_account(r: CaravanCustomerAccountRecord) -> dict[str, Any]:
+    meta: dict[str, Any] = {}
+    if r.profile_summary and r.profile_summary.strip().startswith("{"):
+        try:
+            meta = json.loads(r.profile_summary)
+        except Exception:
+            meta = {"notes": r.profile_summary}
+    elif r.profile_summary:
+        meta = {"notes": r.profile_summary}
+
+    state_loc = str(meta.get("state_location") or "")
+    goals = str(meta.get("funding_goals") or "")
+    notes_txt = str(meta.get("notes") or "")
+    checks = [
+        bool(r.organization_name.strip()),
+        bool(r.entity_type.strip()),
+        bool(r.country.strip()),
+        bool(state_loc.strip()),
+        bool(r.sector.strip()),
+        bool(r.stage.strip()),
+        bool(goals.strip()),
+        bool(r.onboarding_completed),
+    ]
+    completion_pct = int(round((sum(1 for c in checks if c) / len(checks)) * 100))
+
     return {
         "account_id": r.account_id,
         "user_id": r.user_id,
         "organization_name": r.organization_name,
         "entity_type": r.entity_type,
         "country": r.country,
+        "state_location": state_loc,
         "sector": r.sector,
         "stage": r.stage,
         "annual_revenue_band": r.annual_revenue_band,
-        "profile_summary": r.profile_summary,
+        "funding_goals": goals,
+        "profile_summary": notes_txt,
+        "profile_completion_pct": completion_pct,
         "onboarding_completed": r.onboarding_completed,
         "updated_at": r.updated_at.isoformat(),
     }

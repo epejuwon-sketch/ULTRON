@@ -155,6 +155,7 @@ class UpdateApplicationRequest(BaseModel):
     status: str | None = Field(default=None, max_length=32)
     progress_pct: int | None = Field(default=None, ge=0, le=100)
     notes: str | None = None
+    checklist: list[dict[str, Any]] | None = None
 
 
 class SaveOpportunityRequest(BaseModel):
@@ -166,9 +167,11 @@ class UpdateAccountRequest(BaseModel):
     organization_name: str | None = Field(default=None, max_length=180)
     entity_type: str | None = Field(default=None, max_length=64)
     country: str | None = Field(default=None, max_length=80)
+    state_location: str | None = Field(default=None, max_length=120)
     sector: str | None = Field(default=None, max_length=80)
     stage: str | None = Field(default=None, max_length=64)
     annual_revenue_band: str | None = Field(default=None, max_length=64)
+    funding_goals: str | None = Field(default=None, max_length=500)
     profile_summary: str | None = None
     onboarding_completed: bool | None = None
 
@@ -380,7 +383,19 @@ def api_update_caravan_application(
         status_value=body.status,
         progress_pct=body.progress_pct,
         notes=body.notes,
+        checklist=body.checklist,
     )
+
+
+@router.post("/applications/deadline-reminders")
+def api_caravan_deadline_reminders(
+    within_days: int = Query(default=14, ge=1, le=90),
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_product_service import send_approaching_deadline_reminders
+
+    return send_approaching_deadline_reminders(db, principal=principal, within_days=within_days)
 
 
 @router.get("/saved")
@@ -430,9 +445,11 @@ def api_update_caravan_account(
         organization_name=body.organization_name,
         entity_type=body.entity_type,
         country=body.country,
+        state_location=body.state_location,
         sector=body.sector,
         stage=body.stage,
         annual_revenue_band=body.annual_revenue_band,
+        funding_goals=body.funding_goals,
         profile_summary=body.profile_summary,
         onboarding_completed=body.onboarding_completed,
     )

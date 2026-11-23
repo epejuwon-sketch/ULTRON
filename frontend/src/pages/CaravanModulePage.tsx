@@ -67,9 +67,15 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
 
   // Account & Support forms
   const [orgName, setOrgName] = useState("");
+  const [entityType, setEntityType] = useState("STARTUP");
   const [country, setCountry] = useState("Nigeria");
+  const [stateLocation, setStateLocation] = useState("");
   const [sector, setSector] = useState("Technology");
   const [stage, setStage] = useState("SEED");
+  const [fundingGoals, setFundingGoals] = useState("");
+  const [selectedApp, setSelectedApp] = useState<any>(null);
+  const [appNotes, setAppNotes] = useState("");
+  const [newDocItem, setNewDocItem] = useState("");
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
   const [sourceName, setSourceName] = useState("");
@@ -101,9 +107,12 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
       setSources(srcRes.sources || []);
       if (ov?.account) {
         setOrgName(ov.account.organization_name || "");
+        setEntityType(ov.account.entity_type || "STARTUP");
         setCountry(ov.account.country || "Nigeria");
+        setStateLocation(ov.account.state_location || "");
         setSector(ov.account.sector || "Technology");
         setStage(ov.account.stage || "SEED");
+        setFundingGoals(ov.account.funding_goals || "");
       }
     } catch (err: any) {
       pushToast(err.message || "Failed to load Caravan workspace.", "error");
@@ -200,7 +209,36 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
             <MetricDisplay label="Verified Opportunities" value={String(overview?.verification_breakdown?.VERIFIED ?? 0)} sub={`Total tracked: ${overview?.opportunities_total ?? 0}`} tone="success" />
             <MetricDisplay label="My Applications" value={String(overview?.my_applications_count ?? 0)} sub="AEGIS approval-gated" tone="info" />
             <MetricDisplay label="Saved Shortlist" value={String(overview?.saved_opportunities_count ?? 0)} sub={`Plan: ${overview?.subscription?.plan_tier ?? "FREE"}`} tone="neutral" />
-            <MetricDisplay label="Unread Alerts" value={String(overview?.unread_notifications_count ?? 0)} sub="Live payments: OFF" tone="warn" />
+            <MetricDisplay label="Profile Completion" value={`${overview?.account?.profile_completion_pct ?? 0}%`} sub={`Unread Alerts: ${overview?.unread_notifications_count ?? 0}`} tone={overview?.account?.onboarding_completed ? "success" : "warn"} />
+          </div>
+
+          <div className="grid-2" style={{ gap: 10 }}>
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <strong style={{ fontSize: 13 }}>Upcoming Deadlines ({(overview?.upcoming_deadlines || []).length})</strong>
+              {(overview?.upcoming_deadlines || []).length === 0 ? (
+                <div className="muted" style={{ fontSize: 12 }}>No upcoming tracked deadlines.</div>
+              ) : (
+                (overview?.upcoming_deadlines || []).map((o: any) => (
+                  <div key={o.opportunity_id} className="list-item row-between" style={{ gap: 6 }}>
+                    <span style={{ fontSize: 12 }}><strong>{o.title}</strong></span>
+                    <span className="pill mono">{String(o.deadline_at).slice(0, 10)}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <strong style={{ fontSize: 13 }}>Recently Verified ({(overview?.recently_verified || []).length})</strong>
+              {(overview?.recently_verified || []).length === 0 ? (
+                <div className="muted" style={{ fontSize: 12 }}>No verified opportunities yet.</div>
+              ) : (
+                (overview?.recently_verified || []).map((o: any) => (
+                  <div key={o.opportunity_id} className="list-item row-between" style={{ gap: 6 }}>
+                    <span style={{ fontSize: 12 }}><strong>{o.title}</strong></span>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedOpp(o)}>Inspect</button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -349,45 +387,162 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
         </div>
       )}
 
-      {/* My Applications */}
+      {/* My Applications & Application Workspace */}
       {subPage === "applications" && (
-        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <strong><ClipboardList size={14} /> My Applications ({applications.length})</strong>
-          <DataTable
-            rows={applications}
-            rowKey={(r) => r.application_id}
-            emptyTitle="No Applications Started"
-            emptyDescription="Open any verified opportunity and click Start Application."
-            columns={[
-              { key: "id", header: "Application", render: (r) => <span className="mono">{r.application_id}</span> },
-              { key: "opp", header: "Opportunity", render: (r) => <span className="mono">{r.opportunity_id}</span> },
-              { key: "status", header: "Status", render: (r) => <StatusIndicator label={r.status} tone={r.status === "SUBMITTED" || r.status === "AWARDED" ? "success" : "info"} /> },
-              { key: "progress", header: "Progress", render: (r) => <span className="mono">{r.progress_pct}%</span> },
-              {
-                key: "submit",
-                header: "Submit (AEGIS)",
-                render: (r) =>
-                  r.status === "DRAFT" || r.status === "PREPARING" ? (
-                    <button
-                      type="button"
-                      className="btn btn-sm"
-                      onClick={async () => {
-                        const updated = await apiFetch<any>(`/api/v1/caravan/applications/${r.application_id}`, {
-                          method: "PATCH",
-                          body: { status: "SUBMITTED", progress_pct: 100 },
-                        });
-                        pushToast(`Application status: ${updated.status}`, "info");
-                        await loadAll();
-                      }}
-                    >
-                      Request Submit
-                    </button>
-                  ) : (
-                    <span className="muted" style={{ fontSize: 11 }}>{r.approval_id || r.status}</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+              <strong><ClipboardList size={14} /> My Applications ({applications.length})</strong>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  try {
+                    const res = await apiFetch<any>("/api/v1/caravan/applications/deadline-reminders?within_days=14", { method: "POST" });
+                    pushToast(`Deadline check: ${res.reminders_created} reminder(s) created.`, "info");
+                    await loadAll();
+                  } catch (err: any) {
+                    pushToast(err.message, "error");
+                  }
+                }}
+              >
+                Check Approaching Deadlines
+              </button>
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Prepare checklists, required documents, and draft notes here. Users review and submit applications directly at the official source URL.
+            </div>
+            <DataTable
+              rows={applications}
+              rowKey={(r) => r.application_id}
+              emptyTitle="No Applications Started"
+              emptyDescription="Open any verified opportunity and click Start Application."
+              columns={[
+                { key: "id", header: "Application", render: (r) => <span className="mono">{r.application_id}</span> },
+                { key: "opp", header: "Opportunity", render: (r) => <span className="mono">{r.opportunity_id}</span> },
+                { key: "status", header: "Status", render: (r) => <StatusIndicator label={r.status} tone={r.status === "SUBMITTED" || r.status === "AWARDED" ? "success" : "info"} /> },
+                { key: "progress", header: "Progress", render: (r) => <span className="mono">{r.progress_pct}%</span> },
+                {
+                  key: "submit",
+                  header: "Workspace & Submit",
+                  render: (r) => (
+                    <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          setSelectedApp(r);
+                          setAppNotes(r.notes || "");
+                        }}
+                      >
+                        Open Workspace
+                      </button>
+                      {(r.status === "DRAFT" || r.status === "PREPARING") ? (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={async () => {
+                            const updated = await apiFetch<any>(`/api/v1/caravan/applications/${r.application_id}`, {
+                              method: "PATCH",
+                              body: { status: "SUBMITTED", progress_pct: 100 },
+                            });
+                            pushToast(`Application status: ${updated.status}`, "info");
+                            await loadAll();
+                          }}
+                        >
+                          Request Submit
+                        </button>
+                      ) : (
+                        <span className="muted" style={{ fontSize: 11 }}>{r.approval_id || r.status}</span>
+                      )}
+                    </div>
                   ),
-              },
-            ]}
-          />
+                },
+              ]}
+            />
+          </div>
+
+          {selectedApp && (
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="row-between">
+                <strong>Application Workspace · <span className="mono">{selectedApp.application_id}</span></strong>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSelectedApp(null)}>Close</button>
+              </div>
+              <div className="muted" style={{ fontSize: 11 }}>
+                Reusable Profile Pre-fill: {orgName || "Org"} · {entityType} · {country}{stateLocation ? `, ${stateLocation}` : ""} · {sector} · {stage}
+                {fundingGoals ? ` · Goals: ${fundingGoals}` : ""}
+              </div>
+              <div className="telemetry-label">PREPARATION &amp; REQUIRED DOCUMENTS CHECKLIST</div>
+              {(selectedApp.checklist || []).map((c: any, idx: number) => (
+                <label key={idx} className="list-item row" style={{ gap: 8, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(c.done)}
+                    onChange={async () => {
+                      const nextList = (selectedApp.checklist || []).map((it: any, i: number) =>
+                        i === idx ? { ...it, done: !it.done } : it
+                      );
+                      const updated = await apiFetch<any>(`/api/v1/caravan/applications/${selectedApp.application_id}`, {
+                        method: "PATCH",
+                        body: { status: "PREPARING", checklist: nextList },
+                      });
+                      setSelectedApp(updated);
+                      await loadAll();
+                    }}
+                  />
+                  <span style={{ textDecoration: c.done ? "line-through" : "none" }}>{c.item}</span>
+                </label>
+              ))}
+              <div className="row" style={{ gap: 6 }}>
+                <input
+                  className="input"
+                  style={{ flex: 1 }}
+                  placeholder="Add required document or checklist item..."
+                  value={newDocItem}
+                  onChange={(e) => setNewDocItem(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={async () => {
+                    if (!newDocItem.trim()) return;
+                    const nextList = [...(selectedApp.checklist || []), { item: newDocItem.trim(), done: false }];
+                    const updated = await apiFetch<any>(`/api/v1/caravan/applications/${selectedApp.application_id}`, {
+                      method: "PATCH",
+                      body: { checklist: nextList },
+                    });
+                    setNewDocItem("");
+                    setSelectedApp(updated);
+                    await loadAll();
+                  }}
+                >
+                  Add Item
+                </button>
+              </div>
+              <textarea
+                className="input"
+                rows={3}
+                placeholder="Draft answers and preparation notes..."
+                value={appNotes}
+                onChange={(e) => setAppNotes(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={async () => {
+                  const updated = await apiFetch<any>(`/api/v1/caravan/applications/${selectedApp.application_id}`, {
+                    method: "PATCH",
+                    body: { notes: appNotes, status: selectedApp.status === "DRAFT" ? "PREPARING" : undefined },
+                  });
+                  setSelectedApp(updated);
+                  pushToast("Workspace notes saved.", "success");
+                  await loadAll();
+                }}
+              >
+                Save Workspace Notes
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -431,20 +586,41 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
       {subPage === "account" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <strong>Customer Profile &amp; Onboarding</strong>
-            <input className="input" placeholder="Organization Name" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
+            <div className="row-between">
+              <strong>Customer Profile &amp; Onboarding</strong>
+              <span className="pill mono">{overview?.account?.profile_completion_pct ?? 0}% Complete</span>
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <input className="input" style={{ flex: 2 }} placeholder="Organization or Applicant Name" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
+              <select className="select" style={{ flex: 1 }} value={entityType} onChange={(e) => setEntityType(e.target.value)} aria-label="Profile type">
+                {["INDIVIDUAL", "STUDENT", "STARTUP", "BUSINESS", "NONPROFIT", "INSTITUTION"].map((et) => (
+                  <option key={et} value={et}>{et}</option>
+                ))}
+              </select>
+            </div>
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               <input className="input" style={{ flex: 1 }} placeholder="Country" value={country} onChange={(e) => setCountry(e.target.value)} />
-              <input className="input" style={{ flex: 1 }} placeholder="Sector" value={sector} onChange={(e) => setSector(e.target.value)} />
+              <input className="input" style={{ flex: 1 }} placeholder="State / City (e.g. Lagos, Abuja)" value={stateLocation} onChange={(e) => setStateLocation(e.target.value)} />
+              <input className="input" style={{ flex: 1 }} placeholder="Sector / Field" value={sector} onChange={(e) => setSector(e.target.value)} />
               <input className="input" style={{ flex: 1 }} placeholder="Stage" value={stage} onChange={(e) => setStage(e.target.value)} />
             </div>
+            <input className="input" placeholder="Funding Goals (e.g. Seed grant for agritech pilot in Lagos)" value={fundingGoals} onChange={(e) => setFundingGoals(e.target.value)} />
             <button
               type="button"
               className="btn btn-sm"
               onClick={async () => {
                 await apiFetch("/api/v1/caravan/account", {
                   method: "PUT",
-                  body: { organization_name: orgName, country, sector, stage, onboarding_completed: true },
+                  body: {
+                    organization_name: orgName,
+                    entity_type: entityType,
+                    country,
+                    state_location: stateLocation,
+                    sector,
+                    stage,
+                    funding_goals: fundingGoals,
+                    onboarding_completed: true,
+                  },
                 });
                 pushToast("Caravan customer profile saved.", "success");
                 await loadAll();
