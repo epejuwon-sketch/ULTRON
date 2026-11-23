@@ -108,28 +108,56 @@ def compute_execution_waves(steps: list[TaskStepRecord]) -> list[list[TaskStepRe
 
 
 def verify_task_results(steps: list[TaskStepRecord]) -> dict[str, Any]:
-    """Independently verify that every DAG step completed with valid non-empty output."""
+    """Independently verify DAG steps and classify COMPLETED, PARTIALLY_COMPLETED, FAILED, or UNVERIFIED work."""
     checks: list[dict[str, Any]] = []
-    all_passed = True
+    passed_count = 0
+    failed_count = 0
+    unverified_count = 0
+    fallback_count = 0
+
     for step in steps:
         output = json.loads(step.output_json or "{}")
         has_output = bool(output.get("output")) and bool(output.get("agent_id"))
+        mode = str(output.get("execution_mode") or "unknown")
+        if "fallback" in mode.lower():
+            fallback_count += 1
         step_ok = step.status == "COMPLETED" and has_output and not step.error_detail
-        if not step_ok:
-            all_passed = False
+        if step_ok:
+            passed_count += 1
+        elif step.status == "FAILED" or step.error_detail:
+            failed_count += 1
+        else:
+            unverified_count += 1
         checks.append(
             {
                 "step_number": step.step_number,
                 "agent_id": step.agent_id,
                 "status": step.status,
                 "has_valid_output": has_output,
-                "execution_mode": output.get("execution_mode", "unknown"),
+                "execution_mode": mode,
                 "passed": step_ok,
             }
         )
+
+    total = len(steps)
+    all_passed = total > 0 and passed_count == total
+    if all_passed:
+        outcome = "COMPLETED"
+    elif passed_count > 0 and (failed_count > 0 or unverified_count > 0):
+        outcome = "PARTIALLY_COMPLETED"
+    elif failed_count > 0:
+        outcome = "FAILED"
+    else:
+        outcome = "UNVERIFIED"
+
     return {
-        "verified": all_passed and len(steps) > 0,
-        "checked_steps": len(steps),
+        "verified": all_passed,
+        "outcome_classification": outcome,
+        "checked_steps": total,
+        "completed_steps": passed_count,
+        "failed_steps": failed_count,
+        "unverified_steps": unverified_count,
+        "fallback_steps": fallback_count,
         "checks": checks,
         "verified_at": datetime.now(timezone.utc).isoformat(),
     }

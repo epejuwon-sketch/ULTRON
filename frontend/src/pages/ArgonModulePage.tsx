@@ -72,7 +72,20 @@ function ArgonTaskDagInspector({
         </div>
         <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
           <StatusIndicator label={state} tone={lifecycleTone(state)} />
+          {task.verification?.outcome_classification && (
+            <StatusIndicator
+              label={task.verification.outcome_classification}
+              tone={
+                task.verification.outcome_classification === "COMPLETED"
+                  ? "success"
+                  : task.verification.outcome_classification === "PARTIALLY_COMPLETED"
+                  ? "warn"
+                  : "danger"
+              }
+            />
+          )}
           <span className="pill mono">Lead: {task.assigned_agent_id || "AGT-02"}</span>
+          {task.reasoning_tier && <span className="pill mono">Tier {task.reasoning_tier}</span>}
           {Number(task.financial_amount_usd || 0) > 0 && (
             <span className="pill pill-warn mono">${task.financial_amount_usd} USD</span>
           )}
@@ -92,12 +105,14 @@ function ArgonTaskDagInspector({
             {steps.map((step, idx) => {
               const st = String(step.status || "PENDING").toUpperCase();
               const tone = lifecycleTone(st);
+              const deps: number[] = Array.isArray(step.depends_on) ? step.depends_on : [];
+              const stepText = step.output?.output || step.output_summary || "";
               return (
                 <React.Fragment key={step.step_id || idx}>
                   <div className={`argon-dag-node node-${tone}`}>
                     <div className="row-between" style={{ gap: 6 }}>
                       <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
-                        STEP {step.step_order ?? idx + 1} · {step.agent_id}
+                        STEP {step.step_number ?? step.step_order ?? idx + 1} · {step.agent_id}
                       </span>
                       <StatusIndicator label={st} tone={tone} />
                     </div>
@@ -105,11 +120,21 @@ function ArgonTaskDagInspector({
                       <span className="agent-icon-badge" style={{ width: 28, height: 28 }}>
                         <AgentIcon agentId={step.agent_id || "AGT-02"} size={14} />
                       </span>
-                      <strong style={{ fontSize: 13 }}>{step.action || "Execute Step"}</strong>
+                      <strong style={{ fontSize: 13 }}>{step.description || step.action || "Execute Step"}</strong>
                     </div>
-                    {step.output_summary && (
+                    <div className="muted mono" style={{ fontSize: 10.5, marginTop: 5 }}>
+                      {deps.length > 0 ? `Depends on: Step ${deps.join(", ")}` : "Root Wave"}
+                      {Number(step.attempt_count || 0) > 0 ? ` · Attempts: ${step.attempt_count}` : ""}
+                      {step.output?.execution_mode ? ` · ${step.output.execution_mode}` : ""}
+                    </div>
+                    {stepText && (
                       <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.45 }}>
-                        {String(step.output_summary).slice(0, 180)}
+                        {String(stepText).slice(0, 180)}
+                      </div>
+                    )}
+                    {step.error_detail && (
+                      <div style={{ fontSize: 11.5, marginTop: 6, color: "var(--danger, #f87171)" }}>
+                        Error: {step.error_detail}
                       </div>
                     )}
                   </div>
@@ -126,16 +151,19 @@ function ArgonTaskDagInspector({
       </div>
 
       {/* Outcome / Verification Summary */}
-      {task.result_summary && (
+      {(task.result?.final_output || task.result_summary || task.error_detail) && (
         <div className="dispatch-output">
           <div className="row-between" style={{ marginBottom: 4 }}>
             <span className="mono-tag">
               <CheckCircle2 size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
               VERIFICATION &amp; OUTCOME SUMMARY
             </span>
-            <span className="muted mono" style={{ fontSize: 11 }}>Risk: {task.risk_level || "LOW"}</span>
+            <span className="muted mono" style={{ fontSize: 11 }}>
+              Risk: {task.risk_level || "LOW"}
+              {task.verification?.checked_steps ? ` · ${task.verification.completed_steps ?? 0}/${task.verification.checked_steps} Verified` : ""}
+            </span>
           </div>
-          <div className="dispatch-text">{task.result_summary}</div>
+          <div className="dispatch-text">{task.result?.final_output || task.result_summary || task.error_detail}</div>
         </div>
       )}
 
