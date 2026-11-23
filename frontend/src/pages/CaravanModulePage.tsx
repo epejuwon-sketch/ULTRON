@@ -13,6 +13,7 @@ import {
   UserCheck,
 } from "lucide-react";
 import { apiFetch } from "../lib/api";
+import { CaravanCommandCentre } from "../components/caravan/CaravanCommandCentre";
 import { DataTable, Drawer, MetricDisplay, StatusIndicator, useToast } from "../components/ui/DesignSystem";
 
 interface ModulePageProps {
@@ -759,6 +760,8 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
           </div>
         </div>
       )}
+
+      {subPage === "command-centre" && <CaravanCommandCentre onNavigateSubPage={onSelectSubPage} />}
 
       {/* Opportunity Details Drawer */}
       <Drawer open={Boolean(selectedOpp)} title={selectedOpp ? selectedOpp.title : ""} onClose={() => setSelectedOpp(null)}>

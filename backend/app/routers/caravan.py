@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.permissions import Principal
 from app.db.session import get_db
 from app.routers.deps import require_perm
@@ -586,4 +587,33 @@ def api_caravan_discovery_review(
         decision=body.decision,
         supporting_evidence=body.supporting_evidence,
     )
+
+
+class ToggleSourceRequest(BaseModel):
+    enabled: bool = True
+
+
+@router.get("/command-centre")
+def api_caravan_command_centre(
+    days: int = Query(default=30, ge=1, le=365),
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.caravan_command_service import get_caravan_command_centre
+
+    return get_caravan_command_centre(db, principal=principal, settings=settings, days=days)
+
+
+@router.post("/sources/{source_id}/toggle")
+def api_toggle_caravan_source(
+    source_id: str,
+    body: ToggleSourceRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_command_service import toggle_funding_source_status
+
+    return toggle_funding_source_status(db, principal=principal, source_id=source_id, enabled=body.enabled)
+
 

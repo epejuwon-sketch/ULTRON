@@ -278,6 +278,7 @@ export const MODULES: ModuleDef[] = [
       { id: "saved", number: 117, module: "caravan", label: "Saved Opportunities", description: "Bookmarked funding opportunities shortlist.", keywords: ["saved", "bookmarks"] },
       { id: "account", number: 118, module: "caravan", label: "Account & Subscription", description: "Customer onboarding profile, plan entitlements, support tickets, and alerts.", keywords: ["account", "subscription", "support"] },
       { id: "admin", number: 119, module: "caravan", label: "Admin & Verification", description: "Register real funding sources/opportunities and verify with supporting evidence.", keywords: ["admin", "verification", "sources"] },
+      { id: "command-centre", number: 120, module: "caravan", label: "Caravan Command Centre", description: "Executive overview, funding intelligence control, NEON/ARGON monitoring, customer ops, and audit timeline.", keywords: ["command centre", "caravan", "operations"] },
     ],
   },
   {
