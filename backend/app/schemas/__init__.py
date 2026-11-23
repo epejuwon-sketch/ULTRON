@@ -268,6 +268,15 @@ class CreateProjectRequest(BaseModel):
     budget_usd: float = Field(default=0.0, ge=0.0)
 
 
+class UpdateProjectRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    repo_full_name: str | None = Field(default=None, max_length=200)
+    default_branch: str | None = Field(default=None, max_length=80)
+    status: Literal["ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"] | None = None
+    budget_usd: float | None = Field(default=None, ge=0.0)
+
+
 class AnalyzeCodeRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     source_code: str = Field(min_length=1, max_length=200000)

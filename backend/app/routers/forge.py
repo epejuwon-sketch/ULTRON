@@ -17,6 +17,7 @@ from app.services.forge_service import (
     generate_forge_project,
     get_forge_project,
     list_forge_projects,
+    update_forge_project,
 )
 
 router = APIRouter(prefix="/api/v1/forge", tags=["FORGE & Live Preview"])
@@ -27,6 +28,10 @@ class GenerateForgeRequest(BaseModel):
     template: str = Field(default="web_app")
     prompt: str = Field(min_length=5, max_length=8000)
     custom_files: dict[str, str] | None = None
+
+
+class UpdateForgeRequest(BaseModel):
+    files: dict[str, str]
 
 
 @router.get("/projects")
@@ -68,6 +73,23 @@ def api_get_forge_project(
     db: Session = Depends(get_db),
 ) -> dict:
     return get_forge_project(db, tenant_id=principal.tenant_id, forge_id=forge_id)
+
+
+@router.patch("/projects/{forge_id}")
+def api_update_forge_project(
+    forge_id: str,
+    body: UpdateForgeRequest,
+    principal: Principal = Depends(require_perm("forge:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return update_forge_project(
+        db,
+        principal=principal,
+        settings=settings,
+        forge_id=forge_id,
+        files=body.files,
+    )
 
 
 @router.get("/projects/{forge_id}/preview", response_class=HTMLResponse)

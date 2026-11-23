@@ -15,10 +15,12 @@ from app.schemas import (
     ProposeCodeChangeRequest,
     RequestDeploymentRequest,
     RollbackDeploymentRequest,
+    UpdateProjectRequest,
 )
 from app.services.dev_service import (
     analyze_project_code,
     create_project,
+    delete_project,
     inspect_repository,
     list_project_activity,
     list_project_deployments,
@@ -26,6 +28,7 @@ from app.services.dev_service import (
     propose_code_change,
     request_deployment,
     rollback_deployment,
+    update_project,
 )
 
 router = APIRouter(prefix="/api/v1/projects", tags=["Developer & Projects"])
@@ -55,6 +58,35 @@ def api_list_projects(
 ) -> dict:
     items = list_projects(db, tenant_id=principal.tenant_id)
     return {"total": len(items), "projects": items}
+
+
+@router.patch("/{project_id}")
+def api_update_project(
+    project_id: str,
+    body: UpdateProjectRequest,
+    principal: Principal = Depends(require_perm("projects:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return update_project(
+        db,
+        principal=principal,
+        project_id=project_id,
+        name=body.name,
+        description=body.description,
+        repo_full_name=body.repo_full_name,
+        default_branch=body.default_branch,
+        status=body.status,
+        budget_usd=body.budget_usd,
+    )
+
+
+@router.delete("/{project_id}")
+def api_delete_project(
+    project_id: str,
+    principal: Principal = Depends(require_perm("projects:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return delete_project(db, principal=principal, project_id=project_id)
 
 
 @router.get("/{project_id}/repository")

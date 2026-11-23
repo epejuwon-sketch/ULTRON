@@ -50,6 +50,8 @@ class GenerateZipRequest(BaseModel):
 class UpdateFileRequest(BaseModel):
     filename: str | None = Field(default=None, min_length=1, max_length=200)
     folder: str | None = Field(default=None, max_length=80)
+    project_id: str | None = Field(default=None, max_length=64)
+    clear_project: bool = False
 
 
 class SignedUrlRequest(BaseModel):
@@ -191,13 +193,15 @@ def api_update_file(
     principal: Principal = Depends(require_perm("files:write")),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Rename a stored file or organize it into another folder."""
+    """Rename a stored file, organize it into another folder, or attach/detach a project."""
     return update_file_metadata(
         db,
         principal=principal,
         file_id=file_id,
         filename=body.filename,
         folder=body.folder,
+        project_id=body.project_id,
+        clear_project=body.clear_project,
     )
 
 

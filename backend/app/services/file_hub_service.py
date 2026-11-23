@@ -455,8 +455,10 @@ def update_file_metadata(
     file_id: str,
     filename: str | None = None,
     folder: str | None = None,
+    project_id: str | None = None,
+    clear_project: bool = False,
 ) -> dict[str, Any]:
-    """Rename a stored file and/or move it to another folder with tenant isolation and audit logging."""
+    """Rename a stored file, move it to another folder, or attach/detach a project with tenant isolation and audit logging."""
     rec = get_file_record(db, tenant_id=principal.tenant_id, file_id=file_id)
     meta = json.loads(rec.metadata_json or "{}")
     if meta.get("deleted"):
@@ -477,6 +479,15 @@ def update_file_metadata(
         if new_folder != prev_folder:
             changes.append(f"folder:{prev_folder}->{new_folder}")
             meta["folder"] = new_folder
+    if clear_project:
+        if rec.project_id is not None:
+            changes.append(f"project:{rec.project_id}->none")
+            rec.project_id = None
+    elif project_id is not None:
+        cleaned_pid = project_id.strip() or None
+        if cleaned_pid != rec.project_id:
+            changes.append(f"project:{rec.project_id or 'none'}->{cleaned_pid or 'none'}")
+            rec.project_id = cleaned_pid
 
     rec.metadata_json = json.dumps(meta, default=str)
     if changes:

@@ -120,6 +120,83 @@ def get_project(db: Session, *, tenant_id: str, project_id: str) -> ProjectRecor
     return project
 
 
+def update_project(
+    db: Session,
+    *,
+    principal: Principal,
+    project_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    repo_full_name: str | None = None,
+    default_branch: str | None = None,
+    status: str | None = None,
+    budget_usd: float | None = None,
+) -> dict[str, Any]:
+    project = get_project(db, tenant_id=principal.tenant_id, project_id=project_id)
+    changes: list[str] = []
+    if name is not None and name.strip():
+        project.name = name.strip()
+        project.slug = _slugify(project.name)
+        changes.append("name")
+    if description is not None:
+        project.description = description.strip()
+        changes.append("description")
+    if repo_full_name is not None:
+        project.repo_full_name = repo_full_name.strip()
+        changes.append("repo_full_name")
+    if default_branch is not None and default_branch.strip():
+        project.default_branch = default_branch.strip()
+        changes.append("default_branch")
+    if status is not None and status.strip():
+        project.status = status.strip().upper()
+        changes.append(f"status:{project.status}")
+    if budget_usd is not None:
+        project.budget_usd = round(float(budget_usd), 2)
+        changes.append(f"budget:{project.budget_usd}")
+    project.updated_at = datetime.now(timezone.utc)
+    if changes:
+        _log_activity(
+            db,
+            tenant_id=principal.tenant_id,
+            project_id=project.project_id,
+            actor=principal.username,
+            activity_type="PROJECT_UPDATED",
+            summary=f"Updated project '{project.name}' ({', '.join(changes)})",
+        )
+        append_audit_log(
+            db,
+            tenant_id=principal.tenant_id,
+            actor=principal.username,
+            action="PROJECT_UPDATED",
+            resource=project.project_id,
+            outcome=",".join(changes),
+        )
+    db.commit()
+    db.refresh(project)
+    return _serialize_project(project)
+
+
+def delete_project(
+    db: Session,
+    *,
+    principal: Principal,
+    project_id: str,
+) -> dict[str, Any]:
+    project = get_project(db, tenant_id=principal.tenant_id, project_id=project_id)
+    name = project.name
+    db.delete(project)
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="PROJECT_DELETED",
+        resource=project_id,
+        outcome=name,
+    )
+    db.commit()
+    return {"deleted": True, "project_id": project_id, "name": name}
+
+
 def inspect_repository(
     db: Session,
     *,

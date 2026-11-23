@@ -244,6 +244,73 @@ def get_forge_project(db: Session, *, tenant_id: str, forge_id: str) -> dict[str
     return _serialize_forge(rec, include_files=True)
 
 
+def update_forge_project(
+    db: Session,
+    *,
+    principal: Principal,
+    settings: Settings,
+    forge_id: str,
+    files: dict[str, str],
+) -> dict[str, Any]:
+    """Save edited FORGE workspace files, re-run AEGIS static verification, and rebuild ZIP archive."""
+    rec = db.execute(
+        select(ForgeProjectRecord).where(
+            ForgeProjectRecord.forge_id == forge_id,
+            ForgeProjectRecord.tenant_id == principal.tenant_id,
+        )
+    ).scalar_one_or_none()
+    if rec is None:
+        raise NotFoundError(f"FORGE project '{forge_id}' not found.")
+    if not files:
+        raise ValidationError("At least one file must be provided when updating a FORGE workspace.")
+
+    files_map = {k.lstrip("/"): v for k, v in files.items() if k.strip()}
+    aegis_verdict = scan_code_bundle(files_map)
+    existing_logs = json.loads(rec.build_logs_json or "[]")
+    ts = datetime.now(timezone.utc).isoformat()
+    existing_logs.append(
+        f"[{ts}] Saved {len(files_map)} file(s) by {principal.username}. AEGIS verdict: "
+        f"{'PASSED' if aegis_verdict['passed'] else 'FAILED'} (findings={aegis_verdict['findings_count']})."
+    )
+    test_results = {
+        "files_generated": len(files_map),
+        "syntax_checks": aegis_verdict["syntax_checks"],
+        "aegis_passed": aegis_verdict["passed"],
+        "preview_ready": aegis_verdict["passed"],
+    }
+    archive_meta = create_zip_bundle_file(
+        db,
+        principal=principal,
+        settings=settings,
+        archive_name=f"forge_{rec.name.lower().replace(' ', '_')}",
+        files_map=files_map,
+    )
+    if "index.html" in files_map and aegis_verdict["passed"]:
+        rec.preview_html = files_map["index.html"]
+    elif not aegis_verdict["passed"]:
+        rec.preview_html = ""
+
+    rec.files_json = json.dumps(files_map)
+    rec.status = "VERIFIED" if aegis_verdict["passed"] else "FAILED"
+    rec.build_logs_json = json.dumps(existing_logs[-50:])
+    rec.test_results_json = json.dumps(test_results)
+    rec.aegis_verdict_json = json.dumps(aegis_verdict)
+    rec.archive_file_id = archive_meta["file_id"]
+    rec.updated_at = datetime.now(timezone.utc)
+
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="FORGE_PROJECT_UPDATED",
+        resource=rec.forge_id,
+        outcome=f"status={rec.status};files={len(files_map)}",
+    )
+    db.commit()
+    db.refresh(rec)
+    return _serialize_forge(rec, include_files=True)
+
+
 def _serialize_forge(f: ForgeProjectRecord, *, include_files: bool = False) -> dict[str, Any]:
     files_map = json.loads(f.files_json or "{}")
     data: dict[str, Any] = {
