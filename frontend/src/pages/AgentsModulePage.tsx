@@ -19,6 +19,7 @@ import {
   useToast,
 } from "../components/ui/DesignSystem";
 import { ReadableSummary } from "../components/ui/HumanPresentation";
+import { getAgentArchetype, SpecialistAgentWorkspace } from "../components/agents/SpecialistAgentWorkspace";
 
 type AgentFilter = "all" | "core" | "specialist" | "active" | "idle" | "attention";
 
@@ -66,7 +67,7 @@ export function AgentCard({
       <div className="row-between" style={{ width: "100%", marginTop: "auto" }}>
         <StatusIndicator label={statusStr} tone={tone} />
         <span className="muted mono" style={{ fontSize: 11 }}>
-          {(agent.tools || []).length} tools
+          {getAgentArchetype(agent).toUpperCase()} · {(agent.tools || []).length}t
         </span>
       </div>
     </button>
@@ -141,7 +142,7 @@ export function AgentProfile({
   );
 }
 
-export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePageProps) {
+export default function AgentsModulePage({ subPage, onSelectSubPage, onNavigate }: ModulePageProps) {
   const mod = getModule("agents");
   const page = getSubPage("agents", subPage);
   const { pushToast } = useToast();
@@ -154,11 +155,6 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
   const [filter, setFilter] = useState<AgentFilter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
-  // Workspace invocation
-  const [prompt, setPrompt] = useState("");
-  const [invoking, setInvoking] = useState(false);
-  const [invokeResult, setInvokeResult] = useState<any>(null);
 
   // Configuration / Extension registration
   const [capState, setCapState] = useState("AVAILABLE");
@@ -304,26 +300,6 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
     if (selectedId) loadManifest(selectedId);
   }, [selectedId, subPage]);
 
-  async function handleInvoke(e: React.FormEvent) {
-    e.preventDefault();
-    if (!prompt.trim()) return;
-    setInvoking(true);
-    setError("");
-    try {
-      const res = await apiFetch<any>(`/api/v1/agents/${selectedId}/invoke`, {
-        method: "POST",
-        body: { prompt: prompt.trim() },
-      });
-      setInvokeResult(res);
-      pushToast(`${selectedId} execution completed.`, "success");
-    } catch (err: any) {
-      setError(err.message);
-      pushToast(err.message, "error");
-    } finally {
-      setInvoking(false);
-    }
-  }
-
   async function updateAgentState() {
     try {
       await apiFetch(`/api/v1/agents/${selectedId}/state`, {
@@ -464,38 +440,16 @@ export default function AgentsModulePage({ subPage, onSelectSubPage }: ModulePag
 
       {/* 28. AGENT WORKSPACE */}
       {page.id === "workspace" && (
-        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="card-title">
-            <div className="row">
-              <AgentIcon agentId={selectedId} size={18} />
-              <span>Direct Workspace · {selectedId} ({manifest?.name || "Loading..."})</span>
-            </div>
-            <StatusIndicator label={manifest?.permission_scope || "TIER_2"} tone="info" />
-          </div>
-          <div className="muted">{manifest?.role_description}</div>
-          <form onSubmit={handleInvoke} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <textarea
-              id="agent-workspace-prompt"
-              className="textarea"
-              rows={4}
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder={`Issue a specialist directive to ${selectedId}...`}
-            />
-            <button id="agent-workspace-submit" type="submit" className="btn" style={{ alignSelf: "flex-start" }} disabled={invoking || !prompt.trim()}>
-              <Play size={14} /> {invoking ? `Invoking ${selectedId}...` : `Invoke ${selectedId}`}
-            </button>
-          </form>
-          {invokeResult && (
-            <div className="dispatch-output">
-              <div className="row-between">
-                <span className="mono-tag">{invokeResult.agent_id} · {invokeResult.execution_mode}</span>
-                <span className="muted mono">{invokeResult.model}</span>
-              </div>
-              <div className="dispatch-text">{invokeResult.output}</div>
-            </div>
-          )}
-        </div>
+        <SpecialistAgentWorkspace
+          agent={agents.find((a) => a.agent_id === selectedId) || null}
+          manifest={manifest}
+          allAgents={agents}
+          onNavigate={onNavigate}
+          onExecutionComplete={() => {
+            loadAgents();
+            loadManifest(selectedId);
+          }}
+        />
       )}
 
       {/* 29. AGENT PERFORMANCE */}
