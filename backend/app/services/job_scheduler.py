@@ -295,6 +295,23 @@ def process_due_jobs(db: Session, *, settings: Settings, max_jobs: int = 10) -> 
                 from app.services.caravan_discovery_service import run_caravan_discovery_sweep
 
                 result = run_caravan_discovery_sweep(db, principal=worker_principal)
+            elif job.job_type == "CARAVAN_DEADLINE_SWEEP":
+                from app.services.caravan_product_service import (
+                    send_approaching_deadline_reminders,
+                    sweep_expired_opportunities,
+                )
+
+                exp = sweep_expired_opportunities(db, principal=worker_principal)
+                rem = send_approaching_deadline_reminders(db, principal=worker_principal)
+                result = {"expired_sweep": exp, "deadline_reminders": rem}
+            elif job.job_type == "CARAVAN_NOTIFICATION_DISPATCH":
+                from app.services.caravan_phase7_service import dispatch_pending_notifications
+
+                result = dispatch_pending_notifications(db, tenant_id=job.tenant_id)
+            elif job.job_type == "CARAVAN_SUBSCRIPTION_LIFECYCLE":
+                from app.services.caravan_phase7_service import run_subscription_lifecycle_sweep
+
+                result = run_subscription_lifecycle_sweep(db, tenant_id=job.tenant_id)
             elif job.job_type == "FAIL_TEST_JOB":
                 raise RuntimeError(str(payload.get("reason", "Simulated worker failure for DLQ testing")))
             else:
@@ -341,6 +358,30 @@ def process_due_jobs(db: Session, *, settings: Settings, max_jobs: int = 10) -> 
             job.updated_at = datetime.now(timezone.utc)
             failed += 1
         db.commit()
+
+    try:
+        from app.db.models import WorkerHeartbeatRecord
+
+        hb = db.get(WorkerHeartbeatRecord, "ultron-primary-worker")
+        if hb is None:
+            hb = WorkerHeartbeatRecord(
+                worker_id="ultron-primary-worker",
+                status="ALIVE",
+                last_poll_at=datetime.now(timezone.utc),
+                jobs_processed=processed,
+                jobs_failed=failed,
+                detail=f"succeeded={succeeded},dead_lettered={dead_lettered}",
+            )
+            db.add(hb)
+        else:
+            hb.status = "ALIVE"
+            hb.last_poll_at = datetime.now(timezone.utc)
+            hb.jobs_processed += processed
+            hb.jobs_failed += failed
+            hb.detail = f"last_poll_succeeded={succeeded},dead_lettered={dead_lettered}"
+        db.commit()
+    except Exception:
+        db.rollback()
 
     return {
         "enqueued_from_schedules": enqueued_from_schedules,

@@ -242,6 +242,8 @@ def get_caravan_business_intelligence(
     period: str = "monthly",
 ) -> dict[str, Any]:
     """Compute real business, revenue, funnel, retention, financial, and NEON BI metrics."""
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may view Caravan Business Intelligence.")
     tid = principal.tenant_id
     p_key = period.strip().lower()
     days = PERIOD_DAYS.get(p_key, 30)
@@ -498,6 +500,8 @@ def create_growth_draft(
     content: str,
     target_segment: str = "ALL",
 ) -> dict[str, Any]:
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may create growth drafts.")
     rec = CaravanGrowthDraftRecord(
         draft_id=f"cdrf_{uuid.uuid4().hex[:14]}",
         tenant_id=principal.tenant_id,
@@ -524,6 +528,8 @@ def create_growth_draft(
 
 def request_growth_draft_approval(db: Session, *, principal: Principal, draft_id: str) -> dict[str, Any]:
     """Route external campaign/communication draft through AEGIS approval gate."""
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may request growth draft approval.")
     rec = db.execute(
         select(CaravanGrowthDraftRecord).where(
             CaravanGrowthDraftRecord.tenant_id == principal.tenant_id,

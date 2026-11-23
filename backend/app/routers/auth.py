@@ -142,3 +142,86 @@ def api_list_users(
             for u in rows
         ],
     }
+
+
+from pydantic import BaseModel, Field  # noqa: E402
+
+
+class RegisterCustomerRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=80)
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+    tenant_id: str | None = Field(default=None, max_length=64)
+
+
+class ConfirmTokenRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=512)
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    tenant_id: str | None = Field(default=None, max_length=64)
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=512)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+def api_register_customer(
+    body: RegisterCustomerRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Public customer self-registration (always assigns VIEWER role)."""
+    from app.services.auth_service import register_customer_user
+
+    return register_customer_user(
+        db,
+        username=body.username,
+        email=body.email,
+        password=body.password,
+        tenant_id=body.tenant_id or settings.default_tenant_id,
+        settings=settings,
+    )
+
+
+@router.post("/verify-email/confirm")
+def api_confirm_email_verification(
+    body: ConfirmTokenRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Confirm single-use email verification token."""
+    from app.services.auth_service import confirm_email_verification
+
+    return confirm_email_verification(db, token=body.token)
+
+
+@router.post("/password-reset/request")
+def api_request_password_reset(
+    body: PasswordResetRequest,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Non-enumerating password recovery request."""
+    from app.services.auth_service import request_password_reset
+
+    return request_password_reset(
+        db,
+        email=body.email,
+        tenant_id=body.tenant_id or settings.default_tenant_id,
+        settings=settings,
+    )
+
+
+@router.post("/password-reset/confirm")
+def api_confirm_password_reset(
+    body: PasswordResetConfirmRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Confirm password reset token, update password, and revoke active sessions."""
+    from app.services.auth_service import confirm_password_reset
+
+    return confirm_password_reset(db, token=body.token, new_password=body.new_password)
+

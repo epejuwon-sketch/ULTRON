@@ -277,6 +277,33 @@ def api_create_caravan_opportunity(
     )
 
 
+@router.get("/opportunities/reports")
+def api_list_caravan_listing_reports(
+    status_filter: str = Query(default="", max_length=24),
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_phase7_service import list_listing_reports
+
+    items = list_listing_reports(db, principal=principal, status_filter=status_filter)
+    return {"total": len(items), "reports": items}
+
+
+@router.get("/opportunities/conflicts")
+def api_detect_caravan_opportunity_conflicts(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.core.exceptions import AuthorizationError
+    from app.core.permissions import Role
+    from app.services.caravan_phase7_service import detect_conflicting_opportunities
+
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may inspect opportunity conflicts.")
+    conflicts = detect_conflicting_opportunities(db, tenant_id=principal.tenant_id)
+    return {"total": len(conflicts), "conflicts": conflicts}
+
+
 @router.get("/opportunities/{opportunity_id}")
 def api_get_caravan_opportunity(
     opportunity_id: str,
@@ -359,7 +386,7 @@ def api_list_caravan_applications(
 @router.post("/applications", status_code=status.HTTP_201_CREATED)
 def api_create_caravan_application(
     body: CreateApplicationRequest,
-    principal: Principal = Depends(require_perm("caravan:write")),
+    principal: Principal = Depends(require_perm("caravan:customer")),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.caravan_product_service import create_application
@@ -371,7 +398,7 @@ def api_create_caravan_application(
 def api_update_caravan_application(
     application_id: str,
     body: UpdateApplicationRequest,
-    principal: Principal = Depends(require_perm("caravan:write")),
+    principal: Principal = Depends(require_perm("caravan:customer")),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.caravan_product_service import update_application
@@ -412,7 +439,7 @@ def api_list_caravan_saved(
 @router.post("/saved", status_code=status.HTTP_201_CREATED)
 def api_save_caravan_opportunity(
     body: SaveOpportunityRequest,
-    principal: Principal = Depends(require_perm("caravan:write")),
+    principal: Principal = Depends(require_perm("caravan:customer")),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.caravan_product_service import save_opportunity
@@ -434,7 +461,7 @@ def api_remove_caravan_saved(
 @router.put("/account")
 def api_update_caravan_account(
     body: UpdateAccountRequest,
-    principal: Principal = Depends(require_perm("caravan:write")),
+    principal: Principal = Depends(require_perm("caravan:customer")),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.caravan_product_service import update_customer_account
@@ -485,7 +512,7 @@ def api_list_caravan_tickets(
 @router.post("/support/tickets", status_code=status.HTTP_201_CREATED)
 def api_create_caravan_ticket(
     body: CreateSupportTicketRequest,
-    principal: Principal = Depends(require_perm("caravan:write")),
+    principal: Principal = Depends(require_perm("caravan:customer")),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.caravan_product_service import create_support_ticket
@@ -826,9 +853,13 @@ def api_list_caravan_growth_drafts(
     db: Session = Depends(get_db),
 ) -> dict:
     from sqlalchemy import select
+    from app.core.exceptions import AuthorizationError
+    from app.core.permissions import Role
     from app.db.models import CaravanGrowthDraftRecord
     from app.services.caravan_growth_service import _serialize_draft
 
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may list growth drafts.")
     rows = db.execute(
         select(CaravanGrowthDraftRecord)
         .where(CaravanGrowthDraftRecord.tenant_id == principal.tenant_id)
@@ -886,7 +917,7 @@ class UpdatePrivacyRequest(BaseModel):
 @router.put("/privacy")
 def api_update_caravan_privacy(
     body: UpdatePrivacyRequest,
-    principal: Principal = Depends(require_perm("caravan:write")),
+    principal: Principal = Depends(require_perm("caravan:customer")),
     db: Session = Depends(get_db),
 ) -> dict:
     from app.services.caravan_growth_service import update_privacy_consent
@@ -899,5 +930,103 @@ def api_update_caravan_privacy(
         deletion_requested=body.deletion_requested,
         deletion_reason=body.deletion_reason,
     )
+
+
+class ReportListingRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=48)
+    details: str = Field(default="", max_length=2000)
+
+
+class ReviewListingReportRequest(BaseModel):
+    status: str = Field(min_length=4, max_length=24)
+    resolution_note: str = Field(default="", max_length=2000)
+
+
+class UpdateNotificationPrefsRequest(BaseModel):
+    in_app_enabled: bool | None = None
+    email_enabled: bool | None = None
+    deadline_alerts: bool | None = None
+    saved_updates: bool | None = None
+    subscription_alerts: bool | None = None
+    support_updates: bool | None = None
+    whatsapp_enabled: bool | None = None
+
+
+@router.post("/opportunities/{opportunity_id}/report", status_code=status.HTTP_201_CREATED)
+def api_report_caravan_listing(
+    opportunity_id: str,
+    body: ReportListingRequest,
+    principal: Principal = Depends(require_perm("caravan:customer")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_phase7_service import report_funding_listing
+
+    return report_funding_listing(
+        db,
+        principal=principal,
+        opportunity_id=opportunity_id,
+        reason=body.reason,
+        details=body.details,
+    )
+
+
+@router.patch("/opportunities/reports/{report_id}")
+def api_review_caravan_listing_report(
+    report_id: str,
+    body: ReviewListingReportRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_phase7_service import review_listing_report
+
+    return review_listing_report(
+        db,
+        principal=principal,
+        report_id=report_id,
+        status_value=body.status,
+        resolution_note=body.resolution_note,
+    )
+
+
+@router.get("/notifications/preferences")
+def api_get_caravan_notification_prefs(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_phase7_service import get_notification_preferences
+
+    return get_notification_preferences(db, principal=principal)
+
+
+@router.put("/notifications/preferences")
+def api_update_caravan_notification_prefs(
+    body: UpdateNotificationPrefsRequest,
+    principal: Principal = Depends(require_perm("caravan:customer")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_phase7_service import update_notification_preferences
+
+    return update_notification_preferences(
+        db,
+        principal=principal,
+        in_app_enabled=body.in_app_enabled,
+        email_enabled=body.email_enabled,
+        deadline_alerts=body.deadline_alerts,
+        saved_updates=body.saved_updates,
+        subscription_alerts=body.subscription_alerts,
+        support_updates=body.support_updates,
+        whatsapp_enabled=body.whatsapp_enabled,
+    )
+
+
+@router.get("/notifications/deliveries")
+def api_list_caravan_notification_deliveries(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_phase7_service import list_notification_deliveries
+
+    items = list_notification_deliveries(db, principal=principal)
+    return {"total": len(items), "deliveries": items}
 
 

@@ -68,7 +68,7 @@ def test_monitoring_notifications_and_14_capability_registry(client: TestClient,
     overview = client.get("/api/v1/monitoring/overview", headers=auth_headers["owner"]).json()
     assert overview["database"]["healthy"] is True
     assert overview["agents"]["total_registered"] == 60
-    assert len(overview["applied_migrations"]) == 11
+    assert len(overview["applied_migrations"]) == 13
 
     prom = client.get("/api/v1/monitoring/metrics", headers=auth_headers["owner"])
     assert prom.status_code == 200

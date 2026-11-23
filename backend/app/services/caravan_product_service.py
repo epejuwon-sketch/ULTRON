@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import ConflictError, NotFoundError, SecurityViolationError, ValidationError
-from app.core.permissions import Principal
+from app.core.permissions import Principal, Role
 from app.db.models import (
     CaravanApplicationRecord,
     CaravanCustomerAccountRecord,
@@ -617,12 +617,14 @@ def update_application(
     notes: str | None = None,
     checklist: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    rec = db.execute(
-        select(CaravanApplicationRecord).where(
-            CaravanApplicationRecord.tenant_id == principal.tenant_id,
-            CaravanApplicationRecord.application_id == application_id,
-        )
-    ).scalar_one_or_none()
+    stmt = select(CaravanApplicationRecord).where(
+        CaravanApplicationRecord.tenant_id == principal.tenant_id,
+        CaravanApplicationRecord.application_id == application_id,
+    )
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        acc = _get_or_create_customer_account(db, principal=principal)
+        stmt = stmt.where(CaravanApplicationRecord.account_id == acc.account_id)
+    rec = db.execute(stmt).scalar_one_or_none()
     if rec is None:
         raise NotFoundError(f"Application '{application_id}' not found.")
 
@@ -922,11 +924,11 @@ def create_support_ticket(
 
 
 def list_support_tickets(db: Session, *, principal: Principal) -> list[dict[str, Any]]:
-    rows = db.execute(
-        select(CaravanSupportTicketRecord)
-        .where(CaravanSupportTicketRecord.tenant_id == principal.tenant_id)
-        .order_by(CaravanSupportTicketRecord.updated_at.desc())
-    ).scalars().all()
+    stmt = select(CaravanSupportTicketRecord).where(CaravanSupportTicketRecord.tenant_id == principal.tenant_id)
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        acc = _get_or_create_customer_account(db, principal=principal)
+        stmt = stmt.where(CaravanSupportTicketRecord.account_id == acc.account_id)
+    rows = db.execute(stmt.order_by(CaravanSupportTicketRecord.updated_at.desc())).scalars().all()
     return [_serialize_ticket(r) for r in rows]
 
 

@@ -1344,5 +1344,77 @@ class CaravanPrivacyConsentRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class AuthVerificationTokenRecord(Base):
+    __tablename__ = "auth_verification_tokens"
+
+    token_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.user_id"), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)  # EMAIL_VERIFY | PASSWORD_RESET
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class CaravanNotificationPreferenceRecord(Base):
+    __tablename__ = "caravan_notification_preferences"
+    __table_args__ = (UniqueConstraint("tenant_id", "account_id", name="uq_caravan_notif_pref_account"),)
+
+    pref_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    in_app_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    email_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    deadline_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    saved_updates: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    subscription_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    support_updates: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    whatsapp_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    whatsapp_authorized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanNotificationDeliveryRecord(Base):
+    __tablename__ = "caravan_notification_deliveries"
+
+    delivery_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)  # IN_APP | EMAIL | WHATSAPP
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="QUEUED")  # QUEUED | SENT | BLOCKED | FAILED
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CaravanListingReportRecord(Base):
+    __tablename__ = "caravan_listing_reports"
+
+    report_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    opportunity_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reported_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    reason: Mapped[str] = mapped_column(String(48), nullable=False)
+    details: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="OPEN")  # OPEN | RESOLVED | DISMISSED
+    resolution_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class WorkerHeartbeatRecord(Base):
+    __tablename__ = "worker_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ALIVE")
+    last_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    jobs_processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    jobs_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")

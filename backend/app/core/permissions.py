@@ -71,6 +71,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "pulse:write",
             "caravan:read",
             "caravan:write",
+            "caravan:customer",
             "turbo:read",
             "turbo:manage",
         }
@@ -127,6 +128,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "pulse:write",
             "caravan:read",
             "caravan:write",
+            "caravan:customer",
             "turbo:read",
             "turbo:manage",
         }
@@ -171,6 +173,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "pulse:write",
             "caravan:read",
             "caravan:write",
+            "caravan:customer",
             "turbo:read",
         }
     ),
@@ -196,6 +199,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
             "creative:read",
             "pulse:read",
             "caravan:read",
+            "caravan:customer",
             "turbo:read",
         }
     ),

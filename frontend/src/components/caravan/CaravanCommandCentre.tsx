@@ -41,6 +41,7 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
   const [bi, setBi] = useState<any>(null);
   const [biPeriod, setBiPeriod] = useState<"daily" | "weekly" | "monthly" | "quarterly" | "annual">("monthly");
   const [drafts, setDrafts] = useState<any[]>([]);
+  const [reports, setReports] = useState<any[]>([]);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftContent, setDraftContent] = useState("");
 
@@ -48,14 +49,16 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
     setLoading(true);
     setError("");
     try {
-      const [res, biRes, drRes] = await Promise.all([
+      const [res, biRes, drRes, repRes] = await Promise.all([
         apiFetch<any>(`/api/v1/caravan/command-centre?days=${days}`),
         apiFetch<any>(`/api/v1/caravan/business-intelligence?period=${biPeriod}`).catch(() => null),
         apiFetch<any>("/api/v1/caravan/growth/drafts").catch(() => ({ drafts: [] })),
+        apiFetch<any>("/api/v1/caravan/opportunities/reports").catch(() => ({ reports: [] })),
       ]);
       setData(res);
       setBi(biRes);
       setDrafts(drRes?.drafts || []);
+      setReports(repRes?.reports || []);
     } catch (err: any) {
       const msg = err?.message || "Failed to load Caravan Command Centre.";
       setError(msg);
@@ -680,6 +683,46 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
             )}
           </div>
         ))}
+      </div>
+
+      {/* Customer Listing Reports Triage */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <strong>Customer Listing Reports ({reports.length})</strong>
+        {reports.length === 0 ? (
+          <div className="muted" style={{ fontSize: 12 }}>No customer listing reports submitted.</div>
+        ) : (
+          reports.slice(0, 6).map((rp: any) => (
+            <div key={rp.report_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+              <div>
+                <strong>{rp.reason}</strong> <span className="mono muted" style={{ fontSize: 11 }}>({rp.opportunity_id})</span>
+                <div className="muted" style={{ fontSize: 11 }}>{rp.details || "No additional details."} · {rp.status}</div>
+              </div>
+              {rp.status === "OPEN" && (
+                <div className="row" style={{ gap: 6 }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await apiFetch(`/api/v1/caravan/opportunities/reports/${rp.report_id}`, {
+                          method: "PATCH",
+                          body: { status: "RESOLVED", resolution_note: "Reviewed and corrected by admin." },
+                        });
+                        await loadCommandCentre();
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    Resolve
+                  </button>
+                </div>
+              )}
+            </div>
+          ))
+        )}
       </div>
 
       {/* Activity Timeline */}

@@ -84,10 +84,11 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
   const [adminStageFilter, setAdminStageFilter] = useState("ALL");
   const [pricing, setPricing] = useState<any>(null);
   const [privacy, setPrivacy] = useState<any>(null);
+  const [notifPrefs, setNotifPrefs] = useState<any>(null);
 
   async function loadAll() {
     try {
-      const [ov, oppRes, recRes, assRes, appRes, savRes, tktRes, notRes, srcRes, prcRes, prvRes] = await Promise.all([
+      const [ov, oppRes, recRes, assRes, appRes, savRes, tktRes, notRes, srcRes, prcRes, prvRes, npfRes] = await Promise.all([
         apiFetch<any>("/api/v1/caravan/overview"),
         apiFetch<any>(`/api/v1/caravan/opportunities?query=${encodeURIComponent(query)}&funding_type=${encodeURIComponent(typeFilter)}&verification_status=${encodeURIComponent(statusFilter)}`),
         apiFetch<any>("/api/v1/caravan/recommendations"),
@@ -99,6 +100,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
         apiFetch<any>("/api/v1/caravan/sources"),
         apiFetch<any>("/api/v1/caravan/pricing").catch(() => null),
         apiFetch<any>("/api/v1/caravan/privacy").catch(() => null),
+        apiFetch<any>("/api/v1/caravan/notifications/preferences").catch(() => null),
       ]);
       setOverview(ov);
       setOpportunities(oppRes.opportunities || []);
@@ -111,6 +113,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
       setSources(srcRes.sources || []);
       setPricing(prcRes);
       setPrivacy(prvRes);
+      setNotifPrefs(npfRes);
       if (ov?.account) {
         setOrgName(ov.account.organization_name || "");
         setEntityType(ov.account.entity_type || "STARTUP");
@@ -734,6 +737,40 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
                 <span className="muted" style={{ fontSize: 11 }}>
                   {pricing?.legal_notice || "NDPR/GDPR consent & cancellation transparency."}
                 </span>
+              </div>
+            </div>
+          )}
+
+          {notifPrefs && (
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <strong>Notification Preferences</strong>
+              <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
+                {[
+                  ["in_app_enabled", "In-app alerts"],
+                  ["email_enabled", "Email alerts"],
+                  ["deadline_alerts", "Deadline reminders"],
+                  ["saved_updates", "Saved opportunity updates"],
+                  ["subscription_alerts", "Subscription status"],
+                  ["support_updates", "Support responses"],
+                ].map(([field, label]) => (
+                  <label key={field} className="row" style={{ gap: 6, fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(notifPrefs[field])}
+                      onChange={async () => {
+                        await apiFetch("/api/v1/caravan/notifications/preferences", {
+                          method: "PUT",
+                          body: { [field]: !notifPrefs[field] },
+                        });
+                        await loadAll();
+                      }}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <div className="muted" style={{ fontSize: 11 }}>
+                WhatsApp alerts remain disabled unless explicitly authorized and backed by a live-verified WhatsApp Business connection.
               </div>
             </div>
           )}

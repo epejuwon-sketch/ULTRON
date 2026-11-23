@@ -342,3 +342,243 @@ def authenticate_bearer_token(db: Session, *, token: str, settings: Settings) ->
         tenant_id=user.tenant_id,
         jti=jti,
     )
+
+
+def _issue_verification_token(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    purpose: str,
+    ttl_hours: int,
+) -> str:
+    import secrets
+    from app.db.models import AuthVerificationTokenRecord
+
+    raw_token = f"ultron_{purpose.lower()}_{secrets.token_urlsafe(32)}"
+    token_digest = hash_token(raw_token)
+    now = datetime.now(timezone.utc)
+    rec = AuthVerificationTokenRecord(
+        token_id=f"avt_{uuid.uuid4().hex[:14]}",
+        tenant_id=tenant_id,
+        user_id=user_id,
+        purpose=purpose,
+        token_hash=token_digest,
+        expires_at=now + timedelta(hours=ttl_hours),
+    )
+    db.add(rec)
+    return raw_token
+
+
+def register_customer_user(
+    db: Session,
+    *,
+    username: str,
+    email: str,
+    password: str,
+    tenant_id: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Public self-registration for Caravan customers (always Role.VIEWER)."""
+    clean_username = username.strip()
+    clean_email = email.strip().lower()
+    clean_tenant = tenant_id.strip()
+
+    if len(clean_username) < 3 or "@" not in clean_email or "." not in clean_email.split("@")[-1]:
+        raise ConflictError("Valid username (>=3 chars) and email address are required.")
+
+    tenant = db.get(Tenant, clean_tenant)
+    if tenant is None:
+        tenant = Tenant(tenant_id=clean_tenant, name=f"Tenant {clean_tenant}")
+        db.add(tenant)
+        db.flush()
+
+    existing_u = db.execute(select(User).where(User.username == clean_username)).scalar_one_or_none()
+    existing_e = db.execute(select(User).where(User.email == clean_email, User.tenant_id == clean_tenant)).scalar_one_or_none()
+    if existing_u is not None or existing_e is not None:
+        # Generic conflict message to avoid revealing which field collided
+        raise ConflictError("An account with those registration details already exists.")
+
+    user = User(
+        user_id=f"usr_{uuid.uuid4().hex[:16]}",
+        tenant_id=clean_tenant,
+        username=clean_username,
+        email=clean_email,
+        password_hash=hash_password(password),
+        role=Role.VIEWER.value,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+
+    raw_token = _issue_verification_token(
+        db,
+        tenant_id=clean_tenant,
+        user_id=user.user_id,
+        purpose="EMAIL_VERIFY",
+        ttl_hours=24,
+    )
+
+    from app.db.models import CaravanNotificationDeliveryRecord
+
+    db.add(
+        CaravanNotificationDeliveryRecord(
+            delivery_id=f"cdlv_{uuid.uuid4().hex[:14]}",
+            tenant_id=clean_tenant,
+            account_id=user.user_id,
+            channel="EMAIL",
+            event_type="EMAIL_VERIFICATION",
+            recipient=clean_email,
+            subject="Verify your Caravan account email",
+            body="Use the verification link sent to your email to verify your Caravan account.",
+            status="QUEUED",
+        )
+    )
+    append_audit_log(
+        db,
+        tenant_id=clean_tenant,
+        actor=clean_username,
+        action="AUTH_CUSTOMER_REGISTERED",
+        resource=user.user_id,
+        outcome="VIEWER_EMAIL_VERIFICATION_QUEUED",
+    )
+    db.commit()
+    db.refresh(user)
+    out: dict[str, Any] = {
+        "user_id": user.user_id,
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "tenant_id": user.tenant_id,
+        "email_verified": False,
+        "verification_queued": True,
+    }
+    if settings.ultron_env == "test":
+        out["test_verification_token"] = raw_token
+    return out
+
+
+def confirm_email_verification(db: Session, *, token: str) -> dict[str, Any]:
+    """Confirm a single-use email verification token."""
+    from app.db.models import AuthVerificationTokenRecord
+
+    digest = hash_token(token.strip())
+    rec = db.execute(
+        select(AuthVerificationTokenRecord).where(
+            AuthVerificationTokenRecord.token_hash == digest,
+            AuthVerificationTokenRecord.purpose == "EMAIL_VERIFY",
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if rec is None or rec.used_at is not None or _ensure_utc(rec.expires_at) < now:
+        raise AuthenticationError("Invalid or expired verification token.")
+    rec.used_at = now
+    append_audit_log(
+        db,
+        tenant_id=rec.tenant_id,
+        actor=rec.user_id,
+        action="AUTH_EMAIL_VERIFIED",
+        resource=rec.token_id,
+        outcome="VERIFIED",
+    )
+    db.commit()
+    return {"status": "verified", "user_id": rec.user_id, "verified_at": now.isoformat()}
+
+
+def request_password_reset(
+    db: Session,
+    *,
+    email: str,
+    tenant_id: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Non-enumerating password reset request. Always returns generic accepted message."""
+    clean_email = email.strip().lower()
+    user = db.execute(
+        select(User).where(User.email == clean_email, User.tenant_id == tenant_id.strip(), User.is_active == True)  # noqa: E712
+    ).scalar_one_or_none()
+    raw_token: str | None = None
+    if user is not None:
+        raw_token = _issue_verification_token(
+            db,
+            tenant_id=user.tenant_id,
+            user_id=user.user_id,
+            purpose="PASSWORD_RESET",
+            ttl_hours=1,
+        )
+        from app.db.models import CaravanNotificationDeliveryRecord
+
+        db.add(
+            CaravanNotificationDeliveryRecord(
+                delivery_id=f"cdlv_{uuid.uuid4().hex[:14]}",
+                tenant_id=user.tenant_id,
+                account_id=user.user_id,
+                channel="EMAIL",
+                event_type="PASSWORD_RESET",
+                recipient=user.email,
+                subject="Caravan password recovery",
+                body="A password recovery request was initiated for your account.",
+                status="QUEUED",
+            )
+        )
+        append_audit_log(
+            db,
+            tenant_id=user.tenant_id,
+            actor=user.username,
+            action="AUTH_PASSWORD_RESET_REQUESTED",
+            resource=user.user_id,
+            outcome="QUEUED",
+        )
+        db.commit()
+    out: dict[str, Any] = {
+        "status": "accepted",
+        "message": "If an account matches that email, password recovery instructions have been queued.",
+    }
+    if settings.ultron_env == "test" and raw_token is not None:
+        out["test_reset_token"] = raw_token
+    return out
+
+
+def confirm_password_reset(db: Session, *, token: str, new_password: str) -> dict[str, Any]:
+    """Verify single-use reset token, update Argon2id password, and revoke all active sessions."""
+    from app.db.models import AuthVerificationTokenRecord
+
+    digest = hash_token(token.strip())
+    rec = db.execute(
+        select(AuthVerificationTokenRecord).where(
+            AuthVerificationTokenRecord.token_hash == digest,
+            AuthVerificationTokenRecord.purpose == "PASSWORD_RESET",
+        )
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if rec is None or rec.used_at is not None or _ensure_utc(rec.expires_at) < now:
+        raise AuthenticationError("Invalid or expired password reset token.")
+
+    user = db.get(User, rec.user_id)
+    if user is None or not user.is_active:
+        raise AuthenticationError("Account is inactive or unavailable.")
+
+    user.password_hash = hash_password(new_password)
+    user.failed_attempts = 0
+    user.locked_until = None
+    rec.used_at = now
+
+    # Revoke all active sessions for this user upon password reset
+    active_sessions = db.execute(
+        select(SessionRecord).where(SessionRecord.user_id == user.user_id, SessionRecord.revoked == False)  # noqa: E712
+    ).scalars().all()
+    for sess in active_sessions:
+        sess.revoked = True
+        sess.revoked_at = now
+
+    append_audit_log(
+        db,
+        tenant_id=user.tenant_id,
+        actor=user.username,
+        action="AUTH_PASSWORD_RESET_COMPLETED",
+        resource=user.user_id,
+        outcome=f"REVOKED_SESSIONS={len(active_sessions)}",
+    )
+    db.commit()
+    return {"status": "password_updated", "revoked_sessions": len(active_sessions)}
+

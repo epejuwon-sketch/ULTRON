@@ -60,12 +60,27 @@ def api_monitoring_overview(
         )
     ).one()
 
+    from app.db.models import WorkerHeartbeatRecord
+
+    heartbeats = db.execute(select(WorkerHeartbeatRecord)).scalars().all()
+
     return {
         "database": {"healthy": db_ok, "backend": settings.database_backend, "detail": db_detail},
         "http_metrics": metrics_tracker.snapshot(),
         "websocket_connections": realtime_hub.connection_count(),
         "governance": {"pending_approvals": pending_approvals},
         "orchestration": {"active_tasks": active_tasks, "queued_jobs": queued_jobs},
+        "worker_heartbeats": [
+            {
+                "worker_id": h.worker_id,
+                "status": h.status,
+                "last_poll_at": h.last_poll_at.isoformat(),
+                "jobs_processed": h.jobs_processed,
+                "jobs_failed": h.jobs_failed,
+                "detail": h.detail,
+            }
+            for h in heartbeats
+        ],
         "agents": {
             "total_registered": int(agent_totals[0]),
             "tasks_completed": int(agent_totals[1]),
