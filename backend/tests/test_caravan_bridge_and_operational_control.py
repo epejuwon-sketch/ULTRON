@@ -48,9 +48,9 @@ def test_caravan_bridge_and_operational_control_gates(client: TestClient, auth_h
 
     # 4. OWNER emergency kill switch halts even autonomous RESEARCH
     halt = client.put(
-        "/api/v1/settings/autonomous_execution_enabled",
+        "/api/v1/settings",
         headers=auth_headers["owner"],
-        json={"value": False},
+        json={"key": "autonomous_execution_enabled", "value": False},
     )
     assert halt.status_code == 200
 
