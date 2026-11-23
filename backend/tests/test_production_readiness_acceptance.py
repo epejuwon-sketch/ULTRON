@@ -744,4 +744,167 @@ def test_empty_thought_only_gemini_response_triggers_fallback_and_persists_non_e
     assert inspected.json()["matched_message"]["content_empty"] is False
 
 
+def test_multi_provider_research_failover_when_duckduckgo_returns_202_and_diagnostics_endpoint(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test for Vercel Preview HTTP 202 anti-bot challenge on DuckDuckGo:
+    When DuckDuckGo returns HTTP 202 (empty challenge page) on a serverless datacenter IP,
+    WebResearchClient must classify the attempt as BOT_PROTECTION_CHALLENGE (never silently swallowing it),
+    automatically fail over to independent providers (Yahoo US/UK, Gemini Google Search Grounding, Google News RSS, Wikipedia),
+    enforce relevance and completed-sale classification, and expose full telemetry at GET /api/v1/research/diagnostics.
+    """
+    from app.integrations.web_research import (
+        WebResearchClient,
+        classify_market_source_category,
+        is_result_relevant_to_query,
+        parse_google_news_rss,
+        parse_yahoo_search_html,
+    )
+
+    # 1. Verify Yahoo HTML parser extracts real organic results and strips Yahoo internal links
+    sample_yahoo_html = """
+    <html><body>
+      <div class="compTitle options-toggle">
+        <a href="https://rd.search.yahoo.com/_ylt=1/RV=2/RU=https%3a%2f%2fexoticcartrends.com%2flamborghini%2faventador-svj-price%2f/RK=0">
+          <h3>Lamborghini Aventador SVJ Price: $1,297,942 Median (Nov 2026)</h3>
+        </a>
+      </div>
+      <div class="compText">As of Nov 22, 2026, the median asking price for a Lamborghini Aventador SVJ is $1,297,942 across 15 cars for sale.</div>
+      <div class="compTitle options-toggle">
+        <a href="https://rd.search.yahoo.com/_ylt=2/RV=2/RU=https%3a%2f%2fdriveindex.com%2fcars%2flamborghini%2faventador-lp770-4-svj-roadster%2fauction-results/RK=0">
+          <h3>Lamborghini Aventador LP770-4 SVJ Roadster Auction Results</h3>
+        </a>
+      </div>
+      <div class="compText">DriveIndex has tracked 5 verified Lamborghini Aventador LP770-4 SVJ Roadster auction sales, with sold prices from $805,000 to $1,550,000 and a median of $1,263,000.</div>
+    </body></html>
+    """
+    yahoo_parsed = parse_yahoo_search_html(sample_yahoo_html)
+    assert len(yahoo_parsed) == 2
+    assert yahoo_parsed[0]["url"] == "https://exoticcartrends.com/lamborghini/aventador-svj-price/"
+    assert "$1,297,942" in yahoo_parsed[0]["snippet"]
+    assert yahoo_parsed[1]["url"] == "https://driveindex.com/cars/lamborghini/aventador-lp770-4-svj-roadster/auction-results"
+
+    # 2. Verify relevance filter rejects generic homepage/dictionary mismatches
+    assert is_result_relevant_to_query(
+        "Exotic Definition & Meaning - Merriam-Webster",
+        "The meaning of EXOTIC is introduced from another country.",
+        "https://www.merriam-webster.com/dictionary/exotic",
+        "Lamborghini Aventador SVJ price",
+    ) is False
+    assert is_result_relevant_to_query(
+        "Lamborghini Aventador SVJ Price: $1,297,942 Median",
+        "Median asking price for a Lamborghini Aventador SVJ in the US.",
+        "https://exoticcartrends.com/lamborghini/aventador-svj-price/",
+        "Lamborghini Aventador SVJ price",
+    ) is True
+
+    # 3. Verify strict asking-price vs. completed-sale classification
+    assert (
+        classify_market_source_category(
+            "exoticcartrends.com",
+            "Exotic Car Prices & Market Values (2026)",
+            "Daily asking prices, auction results and market trends for Ferrari and Lamborghini.",
+        )
+        == "market_valuation_aggregate"
+    )
+    assert (
+        classify_market_source_category(
+            "driveindex.com",
+            "Lamborghini Aventador LP770-4 SVJ Roadster Auction Results",
+            "5 verified sales, sold prices from $805,000 to $1,550,000.",
+        )
+        == "completed_auction_results"
+    )
+    assert (
+        classify_market_source_category(
+            "autotrader.com",
+            "Used Lamborghini Aventador SVJ for Sale",
+            "33 Used Lamborghini Aventador cars for sale at dealers.",
+        )
+        == "current_dealer_listings"
+    )
+
+    # 4. Verify Google News RSS parser
+    sample_rss = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"><channel>
+      <item>
+        <title>Lamborghini Aventador SVJ Market Update - duPont REGISTRY</title>
+        <link>https://news.dupontregistry.com/lamborghini-svj-market</link>
+        <pubDate>Mon, 05 Oct 2026 07:00:00 GMT</pubDate>
+        <source url="https://news.dupontregistry.com">duPont REGISTRY News</source>
+        <description>Current Lamborghini Aventador SVJ market analysis.</description>
+      </item>
+    </channel></rss>"""
+    rss_items = parse_google_news_rss(sample_rss)
+    assert len(rss_items) == 1
+    assert "duPont REGISTRY" in rss_items[0]["snippet"]
+
+    # 5. Simulate DuckDuckGo returning HTTP 202 anti-bot challenge (as on Vercel AWS Lambda IP) while Yahoo succeeds
+    settings = get_settings()
+    rc = WebResearchClient(settings)
+    monkeypatch.setattr(
+        rc,
+        "_post_form",
+        lambda url, data, timeout=7.5, headers=None: httpx.Response(
+            202,
+            text="<html><body><div class='anomaly-modal'>Challenge</div></body></html>",
+            request=httpx.Request("POST", url),
+        ),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_get",
+        lambda url, params=None, timeout=8.0, headers=None, follow_redirects=True: (
+            httpx.Response(200, text=sample_yahoo_html, request=httpx.Request("GET", url))
+            if "search.yahoo.com" in url
+            else (
+                httpx.Response(
+                    200,
+                    json={"query": {"search": [{"title": "Lamborghini Aventador", "snippet": "V12 flagship sports car with SVJ variant."}]}},
+                    request=httpx.Request("GET", url),
+                )
+                if "wikipedia.org" in url
+                else httpx.Response(200, text=sample_rss, request=httpx.Request("GET", url))
+            )
+        ),
+    )
+
+    bundle = rc.search(
+        "How much does a Lamborghini Aventador SVJ cost?",
+        max_results=6,
+        is_pricing_query=True,
+        fetch_source_pages=False,
+        bypass_cache=True,
+    )
+    # Prove that even when DuckDuckGo returns HTTP 202 on every attempt, Yahoo + Wikipedia recover the search!
+    assert bundle["provenance"]["verification_status"] == "LIVE_VERIFIED"
+    assert len(bundle["verified_sources"]) >= 2
+    ddg_attempts = [a for a in bundle["attempt_diagnostics"] if a["provider"] == "duckduckgo_web"]
+    assert len(ddg_attempts) >= 1
+    assert ddg_attempts[0]["http_status"] == 202
+    assert ddg_attempts[0]["error_category"] == "BOT_PROTECTION_CHALLENGE"
+    yahoo_attempts = [a for a in bundle["attempt_diagnostics"] if a["provider"] == "yahoo_web"]
+    assert len(yahoo_attempts) >= 1
+    assert yahoo_attempts[0]["error_category"] == "OK"
+
+    # 6. Verify GET /api/v1/research/diagnostics endpoint returns complete provider diagnostics structure
+    diag_resp = client.get("/api/v1/research/diagnostics?live=false", headers=auth_headers["owner"])
+    assert diag_resp.status_code == 200, diag_resp.text
+    diag_data = diag_resp.json()
+    assert "providers" in diag_data
+    prov_names = {p["provider_name"] for p in diag_data["providers"]}
+    for expected_prov in (
+        "google_custom_search",
+        "gemini_google_search",
+        "duckduckgo_web",
+        "yahoo_web",
+        "yahoo_uk_web",
+        "google_news_rss",
+        "wikipedia_api",
+    ):
+        assert expected_prov in prov_names
+
+
 

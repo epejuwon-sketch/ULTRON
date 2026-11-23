@@ -16,13 +16,14 @@ from app.integrations.web_research import WebResearchClient
 
 _PRICING_PATTERNS = re.compile(
     r"\b(how much|cost|costs|price|prices|pricing|worth|msrp|asking price|market value|retail price|"
-    r"used price|auction|exchange rate|rate today|salary|fee|fees|fare|ticket price|buy a|sell for)\b",
+    r"used price|auction|exchange rate|rate today|salary|fee|fees|fare|ticket price|buy a|sell for|for sale|listings)\b",
     re.IGNORECASE,
 )
 
 _CURRENT_WORLD_PATTERNS = re.compile(
     r"\b(current|currently|today|latest|recent|news|2025|2026|now|right now|availability|in stock|"
-    r"release date|specs|specifications|market|compare|vs\.?|weather|forecast|ceo|president|stock|crypto|btc|eth)\b",
+    r"release date|specs|specifications|market|compare|vs\.?|weather|forecast|ceo|president|stock|crypto|btc|eth|"
+    r"what is|what are|who is|where is|how fast|how many|how far|speed of|capital of|population of)\b",
     re.IGNORECASE,
 )
 

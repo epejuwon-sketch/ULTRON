@@ -28,10 +28,25 @@ export default function SettingsModulePage({ subPage, onSelectSubPage, user, dev
   const [ready, setReady] = useState<any>(null);
   const [metricsText, setMetricsText] = useState("");
   const [storageStatus, setStorageStatus] = useState<any>(null);
+  const [researchDiag, setResearchDiag] = useState<any>(null);
+  const [probingResearch, setProbingResearch] = useState(false);
   const [settingKey, setSettingKey] = useState("workspace_timezone");
   const [settingVal, setSettingVal] = useState("UTC");
   const [error, setError] = useState("");
   const [confirmFlush, setConfirmFlush] = useState(false);
+
+  async function runLiveResearchProbe() {
+    setProbingResearch(true);
+    try {
+      const res = await apiFetch<any>("/api/v1/research/diagnostics?live=true&query=Lamborghini%20Aventador%20SVJ%20price");
+      setResearchDiag(res);
+      pushToast(`Live research probe completed (${res.available_providers_count || 0} provider(s) available).`, "success");
+    } catch (e: any) {
+      pushToast(e.message, "error");
+    } finally {
+      setProbingResearch(false);
+    }
+  }
 
   async function load() {
     setError("");
@@ -49,6 +64,9 @@ export default function SettingsModulePage({ subPage, onSelectSubPage, user, dev
       if (subPage === "diagnostics") {
         apiFetch<string>("/api/v1/monitoring/metrics")
           .then((txt) => setMetricsText(typeof txt === "string" ? txt.slice(0, 3500) : JSON.stringify(txt)))
+          .catch(() => {});
+        apiFetch<any>("/api/v1/research/diagnostics?live=false")
+          .then((d) => setResearchDiag(d))
           .catch(() => {});
       }
     } catch (e: any) {
@@ -372,6 +390,58 @@ export default function SettingsModulePage({ subPage, onSelectSubPage, user, dev
               <div className="card-title"><span>System &amp; Provider Health</span></div>
               <ReadableSummary data={health || { status: "Loading..." }} diagnosticsTitle="Technical Diagnostics — /health" />
             </div>
+          </div>
+          <div className="card">
+            <div className="card-title">
+              <span>Live Web Research Provider Connectivity</span>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={probingResearch}
+                onClick={runLiveResearchProbe}
+              >
+                <RefreshCw size={13} /> {probingResearch ? "Probing Live Providers..." : "Run Live Research Probe"}
+              </button>
+            </div>
+            {researchDiag ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Provider</th>
+                        <th>Configured</th>
+                        <th>Live Connectivity</th>
+                        <th>HTTP Status</th>
+                        <th>Error Category</th>
+                        <th>Results Returned</th>
+                        <th>Pages Extracted</th>
+                        <th>Duration</th>
+                        <th>Mode</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(researchDiag.providers || []).map((p: any) => (
+                        <tr key={p.provider_name}>
+                          <td className="mono">{p.provider_name}</td>
+                          <td>{p.configured ? "YES" : "NO"}</td>
+                          <td className="mono">{p.live_connectivity_status}</td>
+                          <td className="mono">{p.last_http_status ?? "—"}</td>
+                          <td className="mono">{p.last_error_category ?? "—"}</td>
+                          <td>{p.search_results_returned ?? 0}</td>
+                          <td>{p.pages_extracted ?? 0}</td>
+                          <td className="mono">{p.retrieval_duration_ms ? `${p.retrieval_duration_ms}ms` : "—"}</td>
+                          <td>{p.cache_or_live_status || "live"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <TechnicalDiagnostics title="Technical Diagnostics — /api/v1/research/diagnostics" data={researchDiag} />
+              </div>
+            ) : (
+              <div className="muted">Loading research connectivity diagnostics...</div>
+            )}
           </div>
           {metricsText && (
             <div className="card">

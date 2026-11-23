@@ -47,7 +47,10 @@ class CreateIssueRequest(BaseModel):
 
 class ResearchSearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=500)
-    max_results: int = Field(default=5, ge=1, le=10)
+    max_results: int = Field(default=6, ge=1, le=12)
+    is_pricing_query: bool = False
+    fetch_source_pages: bool = True
+    bypass_cache: bool = False
 
 
 class ResearchFetchRequest(BaseModel):
@@ -82,14 +85,36 @@ def api_orchestrate_natural_language(
     )
 
 
-# --- Real Web Research ---
+# --- Real Web Research & Connectivity Diagnostics ---
 @router.post("/api/v1/research/search")
 def api_research_search(
     body: ResearchSearchRequest,
     _principal: Principal = Depends(require_perm("tools:execute")),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    return WebResearchClient(settings).search(body.query, max_results=body.max_results)
+    return WebResearchClient(settings).search(
+        body.query,
+        max_results=body.max_results,
+        is_pricing_query=body.is_pricing_query,
+        fetch_source_pages=body.fetch_source_pages,
+        bypass_cache=body.bypass_cache,
+    )
+
+
+@router.get("/api/v1/research/diagnostics")
+def api_research_diagnostics(
+    live: bool = Query(default=False, description="When true, executes a live multi-provider connectivity probe."),
+    query: str = Query(
+        default="Lamborghini Aventador SVJ price",
+        min_length=2,
+        max_length=240,
+        description="Query to use when live=true.",
+    ),
+    _principal: Principal = Depends(require_perm("tools:execute")),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Return per-provider research connectivity diagnostics, HTTP statuses, error categories, and live probe telemetry."""
+    return WebResearchClient(settings).diagnostics(run_live_probe=live, probe_query=query)
 
 
 @router.post("/api/v1/research/fetch")
