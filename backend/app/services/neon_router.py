@@ -368,9 +368,31 @@ def invoke_agent_reasoning(
     if llm_response is not None:
         provider_name = llm_response["provider"]
         exec_mode = f"{provider_name}_live"
-        raw_text = llm_response["text"]
-        user_text = sanitize_user_facing_text(raw_text, allow_structured_json=(response_format == "json"))
+        raw_text = llm_response.get("text") or ""
+        user_text = sanitize_user_facing_text(raw_text, allow_structured_json=(response_format == "json")).strip()
         structured_output: Any = _parse_structured_json(raw_text) if response_format == "json" else None
+
+        # Never accept an empty natural-language body as a successful live response
+        if not user_text and not llm_response.get("function_calls") and response_format != "json":
+            failover_errors.append(
+                {
+                    "provider": provider_name,
+                    "model": str(llm_response.get("model") or primary_model),
+                    "attempt": str(len(failover_errors) + 1),
+                    "error": "Model returned an empty visible text body after sanitization.",
+                }
+            )
+            llm_response = None
+
+    if llm_response is not None:
+        provider_name = llm_response["provider"]
+        exec_mode = f"{provider_name}_live"
+        raw_text = llm_response.get("text") or ""
+        user_text = sanitize_user_facing_text(raw_text, allow_structured_json=(response_format == "json")).strip()
+        structured_output = _parse_structured_json(raw_text) if response_format == "json" else None
+        if not user_text and llm_response.get("function_calls"):
+            call_names = ", ".join(str(fc.get("name") or "tool") for fc in llm_response["function_calls"])
+            user_text = f"Executed tool call(s): {call_names}."
 
         cost = 0.0
         if tenant_id:
@@ -528,11 +550,17 @@ def invoke_agent_reasoning(
 def stream_neon_events(result: dict[str, Any]) -> Generator[str, None, None]:
     """Yield SSE (`text/event-stream`) frames cleanly representing streamed NEON tokens & completion."""
     meta = {
+        "execution_id": result.get("execution_id"),
         "agent_id": result["agent_id"],
         "provider": result["provider"],
         "model": result["model"],
+        "primary_model": result.get("primary_model"),
+        "fallback_used": result.get("fallback_used", False),
         "execution_mode": result["execution_mode"],
         "reasoning_tier": result["reasoning_tier"],
+        "provenance": result.get("provenance"),
+        "research_sources": result.get("research_sources", []),
+        "attached_files": result.get("attached_files", []),
     }
     yield f"event: metadata\ndata: {json.dumps(meta)}\n\n"
     words = (result.get("output") or "").split(" ")
@@ -661,22 +689,77 @@ def send_conversation_message(
         research_http_client=research_http_client,
     )
 
+    reply_text = (reply.get("output") or "").strip()
+    if not reply_text:
+        reply_text = (
+            f"NEON did not receive a visible text answer from {reply.get('model') or 'the intelligence provider'}. "
+            f"Please retry or expand Technical Diagnostics."
+        )
+        reply["output"] = reply_text
+
     asst_msg = ConversationMessageRecord(
         message_id=f"cmsg_{uuid.uuid4().hex[:16]}",
         conversation_id=conversation_id,
         role="assistant",
-        content=reply["output"],
+        content=reply_text,
         model=reply["model"],
         token_count=int(reply["usage"].get("completion_tokens", 0)),
     )
     db.add(asst_msg)
+
+    # Persist execution metadata keyed by assistant message_id inside conv.metadata_json so page reloads preserve provenance & sources
+    try:
+        conv_meta = json.loads(conv.metadata_json or "{}")
+    except Exception:
+        conv_meta = {}
+    msg_extras = conv_meta.get("message_extras")
+    if not isinstance(msg_extras, dict):
+        msg_extras = {}
+    msg_extras[asst_msg.message_id] = {
+        "execution_id": reply.get("execution_id"),
+        "provider": reply.get("provider"),
+        "model": reply.get("model"),
+        "primary_model": reply.get("primary_model"),
+        "execution_mode": reply.get("execution_mode"),
+        "fallback_used": reply.get("fallback_used"),
+        "provenance": reply.get("provenance"),
+        "research_sources": reply.get("research_sources", []),
+        "attached_files": reply.get("attached_files", []),
+        "failover_errors": reply.get("failover_errors", []),
+    }
+    # Keep last 40 message extras per conversation
+    if len(msg_extras) > 40:
+        for old_k in list(msg_extras.keys())[:-40]:
+            msg_extras.pop(old_k, None)
+    conv_meta["message_extras"] = msg_extras
+    conv.metadata_json = json.dumps(conv_meta, default=str)
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
+    db.refresh(user_msg)
+    db.refresh(asst_msg)
+
+    serialized_asst = {
+        "message_id": asst_msg.message_id,
+        "role": asst_msg.role,
+        "content": asst_msg.content,
+        "model": asst_msg.model,
+        "token_count": asst_msg.token_count,
+        "created_at": asst_msg.created_at.isoformat(),
+        **msg_extras[asst_msg.message_id],
+    }
     return {
         "conversation_id": conversation_id,
         "user_message_id": user_msg.message_id,
         "assistant_message_id": asst_msg.message_id,
+        "user_message": {
+            "message_id": user_msg.message_id,
+            "role": user_msg.role,
+            "content": user_msg.content,
+            "created_at": user_msg.created_at.isoformat(),
+        },
+        "assistant_message": serialized_asst,
         "sanitized_user_message": clean_content,
+        "output": reply_text,
         "attached_files": reply.get("attached_files", []),
         "research_sources": reply.get("research_sources", []),
         "provenance": reply.get("provenance"),
@@ -1280,29 +1363,117 @@ def _serialize_conversation(
     conv: ConversationRecord,
     messages: list[ConversationMessageRecord] | None,
 ) -> dict[str, Any]:
+    try:
+        conv_meta = json.loads(conv.metadata_json or "{}")
+    except Exception:
+        conv_meta = {}
+    msg_extras = conv_meta.get("message_extras") if isinstance(conv_meta.get("message_extras"), dict) else {}
     out: dict[str, Any] = {
         "conversation_id": conv.conversation_id,
         "tenant_id": conv.tenant_id,
         "user_id": conv.user_id,
         "agent_id": conv.agent_id,
         "title": conv.title,
-        "metadata": json.loads(conv.metadata_json or "{}"),
+        "metadata": conv_meta,
         "created_at": conv.created_at.isoformat(),
         "updated_at": conv.updated_at.isoformat(),
     }
     if messages is not None:
-        out["messages"] = [
-            {
-                "message_id": m.message_id,
-                "role": m.role,
-                "content": m.content,
-                "model": m.model,
-                "token_count": m.token_count,
-                "created_at": m.created_at.isoformat(),
-            }
-            for m in messages
-        ]
+        serialized_msgs: list[dict[str, Any]] = []
+        for m in messages:
+            extra = msg_extras.get(m.message_id) if isinstance(msg_extras.get(m.message_id), dict) else {}
+            serialized_msgs.append(
+                {
+                    "message_id": m.message_id,
+                    "role": m.role,
+                    "content": m.content,
+                    "model": m.model,
+                    "token_count": m.token_count,
+                    "created_at": m.created_at.isoformat(),
+                    **extra,
+                }
+            )
+        out["messages"] = serialized_msgs
     return out
+
+
+def inspect_neon_execution(
+    db: Session,
+    *,
+    principal: Principal,
+    execution_id: str,
+) -> dict[str, Any]:
+    """Retrieve stored conversation message and recent usage logs matching an execution_id or recent assistant messages."""
+    clean_id = (execution_id or "").strip()
+    convs = (
+        db.execute(
+            select(ConversationRecord)
+            .where(ConversationRecord.tenant_id == principal.tenant_id)
+            .order_by(ConversationRecord.updated_at.desc())
+            .limit(50)
+        )
+        .scalars()
+        .all()
+    )
+    matched_message: dict[str, Any] | None = None
+    recent_assistant_messages: list[dict[str, Any]] = []
+    for c in convs:
+        serialized = get_conversation(db, principal=principal, conversation_id=c.conversation_id)
+        for m in serialized.get("messages", []):
+            if m.get("role") == "assistant":
+                entry = {
+                    "conversation_id": c.conversation_id,
+                    "conversation_title": c.title,
+                    "agent_id": c.agent_id,
+                    "message_id": m.get("message_id"),
+                    "execution_id": m.get("execution_id") or (m.get("provenance") or {}).get("execution_id"),
+                    "model": m.get("model"),
+                    "token_count": m.get("token_count"),
+                    "content_length": len(m.get("content") or ""),
+                    "content_empty": not bool((m.get("content") or "").strip()),
+                    "content": m.get("content"),
+                    "provenance": m.get("provenance"),
+                    "created_at": m.get("created_at"),
+                }
+                recent_assistant_messages.append(entry)
+                if clean_id and (
+                    entry["execution_id"] == clean_id
+                    or (entry["execution_id"] and clean_id.replace("exec_", "exe_") == entry["execution_id"])
+                    or m.get("message_id") == clean_id
+                ):
+                    matched_message = entry
+
+    recent_usage = (
+        db.execute(
+            select(LLMUsageLog)
+            .where(LLMUsageLog.tenant_id == principal.tenant_id)
+            .order_by(LLMUsageLog.created_at.desc())
+            .limit(20)
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "queried_execution_id": clean_id,
+        "matched_message": matched_message,
+        "recent_assistant_messages": recent_assistant_messages[:15],
+        "recent_usage_logs": [
+            {
+                "usage_id": u.usage_id,
+                "agent_id": u.agent_id,
+                "provider": u.provider,
+                "model": u.model,
+                "reasoning_tier": u.reasoning_tier,
+                "execution_mode": u.execution_mode,
+                "prompt_tokens": u.prompt_tokens,
+                "completion_tokens": u.completion_tokens,
+                "total_tokens": u.total_tokens,
+                "latency_ms": u.latency_ms,
+                "created_at": u.created_at.isoformat(),
+            }
+            for u in recent_usage
+        ],
+    }
 
 
 __all__ = [
@@ -1312,6 +1483,7 @@ __all__ = [
     "get_model_capability_registry",
     "get_reasoning_tiers",
     "get_usage_summary",
+    "inspect_neon_execution",
     "invoke_agent_reasoning",
     "list_conversations",
     "route_objective",

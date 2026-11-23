@@ -19,9 +19,9 @@ export interface ProvenanceInfo {
 
 function statusTone(status?: string): StatusTone {
   const s = String(status || "").toUpperCase();
+  if (s.includes("EMPTY") || s.includes("FAIL") || s.includes("UNAVAILABLE") || s.includes("ERROR")) return "warn";
   if (s.includes("LIVE_VERIFIED") && !s.includes("FALLBACK")) return "success";
   if (s.includes("FALLBACK") || s.includes("CACHED")) return "info";
-  if (s.includes("FAIL") || s.includes("UNAVAILABLE")) return "warn";
   return "neutral";
 }
 

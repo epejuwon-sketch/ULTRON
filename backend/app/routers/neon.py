@@ -23,6 +23,7 @@ from app.services.neon_router import (
     get_model_capability_registry,
     get_reasoning_tiers,
     get_usage_summary,
+    inspect_neon_execution,
     invoke_agent_reasoning,
     list_conversations,
     route_objective,
@@ -229,3 +230,14 @@ def api_neon_usage(
     db: Session = Depends(get_db),
 ) -> dict:
     return get_usage_summary(db, tenant_id=principal.tenant_id)
+
+
+@router.get("/executions/{execution_id}")
+def api_inspect_neon_execution(
+    execution_id: str,
+    principal: Principal = Depends(require_perm("agents:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Inspect a specific NEON execution ID, stored assistant message body, and recent LLMUsageLog telemetry."""
+    return inspect_neon_execution(db, principal=principal, execution_id=execution_id)
+

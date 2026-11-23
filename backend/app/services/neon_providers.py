@@ -550,6 +550,16 @@ def execute_with_failover(
                         multimodal_parts=multimodal_parts,
                         timeout_seconds=effective_timeout,
                     )
+                    if not (result.get("text") or "").strip() and not result.get("function_calls"):
+                        raise IntegrationError(
+                            f"Provider {provider.provider_name}/{target_model} returned empty visible text.",
+                            details={
+                                "status_code": 200,
+                                "category": "EMPTY_MODEL_OUTPUT",
+                                "google_status": str(result.get("finish_reason") or "EMPTY_OUTPUT"),
+                                "model": target_model,
+                            },
+                        )
                     return result, errors
                 except Exception as exc:
                     details = getattr(exc, "details", {}) if isinstance(exc, IntegrationError) else {}
@@ -590,6 +600,10 @@ def execute_with_failover(
                 if provider.provider_name == "gemini" and multimodal_parts:
                     gen_kwargs["multimodal_parts"] = multimodal_parts
                 result = provider.generate(**gen_kwargs)
+                if not (result.get("text") or "").strip() and not result.get("function_calls"):
+                    raise IntegrationError(
+                        f"Provider {provider.provider_name}/{target_model} returned empty visible text."
+                    )
                 return result, errors
             except Exception as exc:
                 errors.append(

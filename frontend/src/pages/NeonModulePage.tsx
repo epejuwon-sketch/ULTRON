@@ -169,7 +169,33 @@ export default function NeonModulePage({
     if (!cid) return;
     try {
       const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}`);
-      setMessages(res.messages || []);
+      const loadedMsgs: any[] = res.messages || [];
+      setMessages(loadedMsgs);
+      setMessageExtras((prev) => {
+        const next = { ...prev };
+        for (const m of loadedMsgs) {
+          if (m.role === "assistant" && (m.provenance || m.research_sources || m.execution_id)) {
+            next[m.message_id] = {
+              provenance: m.provenance || next[m.message_id]?.provenance,
+              research_sources: m.research_sources || next[m.message_id]?.research_sources || [],
+              attached_files: m.attached_files || next[m.message_id]?.attached_files || [],
+              diagnostics: {
+                execution_id: m.execution_id,
+                provider: m.provider,
+                model: m.model,
+                primary_model: m.primary_model,
+                execution_mode: m.execution_mode,
+                fallback_used: m.fallback_used,
+                provenance: m.provenance,
+                attached_files: m.attached_files,
+                research_sources: m.research_sources,
+                failover_errors: m.failover_errors,
+              },
+            };
+          }
+        }
+        return next;
+      });
     } catch (e: any) {
       setError(e.message);
     }
@@ -395,10 +421,12 @@ export default function NeonModulePage({
           { message_id: uId, role: "user", content: promptText },
           { message_id: aId, role: "assistant", content: "", model: "streaming..." },
         ]);
+        let streamedText = "";
         await streamNeon(
           promptText,
           selectedAgent,
           (delta) => {
+            streamedText += delta;
             setMessages((prev) =>
               prev.map((m) => (m.message_id === aId ? { ...m, content: (m.content || "") + delta } : m))
             );
@@ -421,6 +449,19 @@ export default function NeonModulePage({
           },
           fileIds
         );
+        if (!streamedText.trim()) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.message_id === aId
+                ? {
+                    ...m,
+                    content:
+                      "No visible response text was returned by the streaming model. Expand Technical Diagnostics or retry with Persisted mode.",
+                  }
+                : m
+            )
+          );
+        }
       } else {
         let cid = activeId;
         if (!cid) {
@@ -445,6 +486,12 @@ export default function NeonModulePage({
         }
         const assistantId = res.assistant_message_id || res.assistant_message?.message_id;
         const replyData = res.reply || res;
+        const verifiedText = String(
+          res.output ||
+            replyData?.output ||
+            res.assistant_message?.content ||
+            ""
+        ).trim();
         if (assistantId) {
           setMessageExtras((prev) => ({
             ...prev,
@@ -456,16 +503,28 @@ export default function NeonModulePage({
                 execution_id: replyData.execution_id,
                 provider: replyData.provider,
                 model: replyData.model,
+                primary_model: replyData.primary_model,
                 execution_mode: replyData.execution_mode,
                 fallback_used: replyData.fallback_used,
+                output_preview: verifiedText.slice(0, 240),
                 provenance: res.provenance || replyData.provenance,
                 attached_files: res.attached_files || replyData.attached_files,
                 research_sources: res.research_sources || replyData.research_sources,
+                failover_errors: replyData.failover_errors,
               },
             },
           }));
         }
         await loadMessages(cid);
+        if (assistantId && verifiedText) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.message_id === assistantId && !String(m.content || "").trim()
+                ? { ...m, content: verifiedText }
+                : m
+            )
+          );
+        }
       }
       setInput("");
       setAttachedFiles([]);
@@ -626,6 +685,22 @@ export default function NeonModulePage({
             ) : (
               messages.map((m) => {
                 const extra = messageExtras[m.message_id];
+                const rawBody = String(
+                  m.content ||
+                    extra?.diagnostics?.output_preview ||
+                    ""
+                ).trim();
+                const hasVisibleBody = Boolean(rawBody);
+                const rawProv = extra?.provenance || m.provenance;
+                const safeProvenance =
+                  rawProv && !hasVisibleBody && m.role === "assistant"
+                    ? {
+                        ...rawProv,
+                        verification_status: "EMPTY_RESPONSE_ERROR",
+                      }
+                    : rawProv;
+                const displaySources = extra?.research_sources || m.research_sources || [];
+                const displayAttachments = extra?.attached_files || m.attached_files || [];
                 return (
                   <div key={m.message_id} className={`neon-bubble ${m.role === "user" ? "neon-user" : "neon-assistant"}`}>
                     <div className="row-between" style={{ marginBottom: 6 }}>
@@ -634,12 +709,12 @@ export default function NeonModulePage({
                       </span>
                       <div className="row">
                         {m.model && <span className="muted mono" style={{ fontSize: 11 }}>{m.model}</span>}
-                        {m.role === "assistant" && (
+                        {m.role === "assistant" && hasVisibleBody && (
                           <>
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              onClick={() => handleSpeak(m.message_id, String(m.content || ""))}
+                              onClick={() => handleSpeak(m.message_id, rawBody)}
                               aria-label={speakingMsgId === m.message_id ? "Stop voice readout" : "Read response aloud"}
                               title={speakingMsgId === m.message_id ? "Stop voice readout" : "Read aloud"}
                             >
@@ -648,7 +723,7 @@ export default function NeonModulePage({
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              onClick={() => handleShareMessage(String(m.content || ""))}
+                              onClick={() => handleShareMessage(rawBody)}
                               aria-label="Share response"
                               title="Share"
                             >
@@ -657,7 +732,7 @@ export default function NeonModulePage({
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              onClick={() => handleCopyCode(m.content || "")}
+                              onClick={() => handleCopyCode(rawBody)}
                               aria-label="Copy response"
                               title="Copy"
                             >
@@ -667,20 +742,26 @@ export default function NeonModulePage({
                         )}
                       </div>
                     </div>
-                    {renderFormattedMessage(String(m.content || ""), handleCopyCode)}
-                    {extra?.attached_files && extra.attached_files.length > 0 && (
+                    {hasVisibleBody ? (
+                      renderFormattedMessage(rawBody, handleCopyCode)
+                    ) : (
+                      <div className="alert-box alert-warn" style={{ marginTop: 4 }}>
+                        <strong>Response Body Unavailable:</strong> Model <code className="mono">{m.model || "Gemini"}</code> completed execution without returning visible answer text (possible thinking-token budget exhaustion on earlier execution). Send a new message to retry with the expanded 4096-token output budget and automatic fallback guard.
+                      </div>
+                    )}
+                    {displayAttachments.length > 0 && (
                       <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                        {extra.attached_files.map((af: any) => (
+                        {displayAttachments.map((af: any) => (
                           <span key={af.file_id || af.filename} className="pill mono">
                             {af.is_image ? "Image" : "Doc"}: {af.filename}
                           </span>
                         ))}
                       </div>
                     )}
-                    {extra?.research_sources && extra.research_sources.length > 0 && (
-                      <SourcesList sources={extra.research_sources} />
+                    {displaySources.length > 0 && (
+                      <SourcesList sources={displaySources} />
                     )}
-                    {extra?.provenance && <ProvenanceBar provenance={extra.provenance} />}
+                    {safeProvenance && <ProvenanceBar provenance={safeProvenance} />}
                     {extra?.diagnostics && (
                       <TechnicalDiagnostics title="Technical Diagnostics (Authorized Debugging)" data={extra.diagnostics} />
                     )}

@@ -365,7 +365,9 @@ class GeminiClient:
         target_model = model or self._settings.resolve_gemini_tier_model(2)
         endpoint = f"{self.base_url}/interactions"
         effective_max_tokens = (
-            max(max_output_tokens, 2048) if target_model.startswith("gemini-4") else max_output_tokens
+            max(max_output_tokens, 4096)
+            if target_model.startswith(("gemini-4", "gemini-3", "gemini-2.5"))
+            else max_output_tokens
         )
         effective_store = self._settings.gemini_interactions_store if store is None else bool(store)
 
@@ -439,6 +441,20 @@ class GeminiClient:
                     }
                 )
 
+        final_text = "\n".join(text_parts).strip()
+        if not final_text and not function_calls:
+            raise IntegrationError(
+                f"Gemini interactions returned empty visible text (model={target_model})",
+                details={
+                    "status_code": 200,
+                    "category": "EMPTY_MODEL_OUTPUT",
+                    "google_status": str(data.get("status") or "EMPTY_OUTPUT"),
+                    "model": target_model,
+                    "api_interface": "interactions",
+                    "safe_detail": "Model returned HTTP 200 without visible text parts.",
+                },
+            )
+
         usage = data.get("usage", {})
         pt = int(usage.get("total_input_tokens", usage.get("input_tokens", 0)) or 0)
         ct = int(usage.get("total_output_tokens", usage.get("output_tokens", 0)) or 0)
@@ -448,7 +464,7 @@ class GeminiClient:
             "api_interface": "interactions",
             "interaction_id": data.get("id"),
             "model": target_model,
-            "text": "\n".join(text_parts).strip(),
+            "text": final_text,
             "function_calls": function_calls,
             "latency_ms": latency_ms,
             "usage": {
@@ -483,9 +499,11 @@ class GeminiClient:
         if multimodal_parts:
             parts.extend(multimodal_parts)
 
-        # Gemini 4 models include thinking tokens inside maxOutputTokens; ensure enough headroom for visible text.
+        # Gemini 2.5/3.x/4 thinking models include thinking tokens inside maxOutputTokens; ensure 4096 headroom for visible text.
         effective_max_tokens = (
-            max(max_output_tokens, 2048) if target_model.startswith("gemini-4") else max_output_tokens
+            max(max_output_tokens, 4096)
+            if target_model.startswith(("gemini-4", "gemini-3", "gemini-2.5"))
+            else max_output_tokens
         )
         gen_cfg: dict[str, Any] = {
             "maxOutputTokens": effective_max_tokens,
@@ -544,26 +562,58 @@ class GeminiClient:
         candidates = data.get("candidates", [])
         text_parts: list[str] = []
         function_calls: list[dict[str, Any]] = []
+        finish_reason = ""
+        thought_parts_count = 0
         if candidates:
+            finish_reason = str(candidates[0].get("finishReason") or "")
             for part in candidates[0].get("content", {}).get("parts", []):
                 if part.get("thought") is True:
+                    thought_parts_count += 1
                     continue
-                if "text" in part:
-                    text_parts.append(part["text"])
+                if "text" in part and part["text"] is not None:
+                    text_parts.append(str(part["text"]))
                 if "functionCall" in part:
                     function_calls.append(part["functionCall"])
 
+        final_text = "\n".join(text_parts).strip()
         usage = data.get("usageMetadata", {})
+        thoughts_tokens = int(usage.get("thoughtsTokenCount", 0) or 0)
+
+        if not final_text and not function_calls:
+            block_reason = str(data.get("promptFeedback", {}).get("blockReason") or "")
+            reason_label = finish_reason or block_reason or "EMPTY_CANDIDATE_TEXT"
+            logger.warning(
+                "Gemini generateContent returned empty visible text: model=%s finishReason=%s thoughtsTokenCount=%d thoughtParts=%d latency_ms=%d",
+                target_model,
+                reason_label,
+                thoughts_tokens,
+                thought_parts_count,
+                latency_ms,
+            )
+            raise IntegrationError(
+                f"Gemini generateContent returned empty visible text (model={target_model}; finishReason={reason_label}; thoughtsTokens={thoughts_tokens})",
+                details={
+                    "status_code": 200,
+                    "category": "EMPTY_MODEL_OUTPUT",
+                    "google_status": reason_label,
+                    "model": target_model,
+                    "api_interface": "generate_content",
+                    "safe_detail": f"Model returned HTTP 200 with 0 visible text chars (finishReason={reason_label}, thoughtsTokens={thoughts_tokens}).",
+                },
+            )
+
         return {
             "provider": "gemini",
             "api_interface": "generate_content",
             "model": target_model,
-            "text": "\n".join(text_parts).strip(),
+            "text": final_text,
+            "finish_reason": finish_reason or "STOP",
             "function_calls": function_calls,
             "latency_ms": latency_ms,
             "usage": {
                 "prompt_tokens": usage.get("promptTokenCount", 0),
                 "completion_tokens": usage.get("candidatesTokenCount", 0),
+                "thoughts_tokens": thoughts_tokens,
                 "total_tokens": usage.get("totalTokenCount", 0),
             },
         }

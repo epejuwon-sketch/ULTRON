@@ -619,3 +619,129 @@ def test_live_research_pipeline_multi_source_and_page_extraction_not_unavailable
     assert "$1,263,000" in guidance
 
 
+def test_empty_thought_only_gemini_response_triggers_fallback_and_persists_non_empty_body(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test for exec_9760ad2aa1ec49:
+    If a Gemini thinking model (e.g. gemini-4-carbon or gemini-4-hydrogen) returns HTTP 200
+    containing only `{"thought": True}` parts (or empty visible text due to finishReason=MAX_TOKENS),
+    GeminiClient must reject the empty body so execute_with_failover advances to the next model in
+    the tier chain and persists a non-empty answer along with persisted provenance metadata.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-thinking-fallback-key-0001")
+    get_settings.cache_clear()
+
+    models_called: list[str] = []
+
+    def fake_gemini_request(self, method: str, url: str, *, params=None, json_body=None, timeout_seconds=None, max_retries=None):
+        url_s = str(url)
+        # Extract model name from /models/<model>:generateContent
+        model_id = url_s.split("/models/")[1].split(":")[0] if "/models/" in url_s else "unknown"
+        models_called.append(model_id)
+
+        # Simulate gemini-4-carbon (404) and gemini-4-hydrogen (HTTP 200 with ONLY thought parts & 0 visible text!)
+        if model_id in ("gemini-4-carbon", "gemini-4-argon"):
+            return httpx.Response(
+                404,
+                request=httpx.Request(method, url_s),
+                json={"error": {"code": 404, "message": "Model not found", "status": "NOT_FOUND"}},
+            )
+        if model_id == "gemini-4-hydrogen":
+            return httpx.Response(
+                200,
+                request=httpx.Request(method, url_s),
+                json={
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "thought": True,
+                                        "text": "Internal reasoning consuming token budget before visible answer...",
+                                    }
+                                ]
+                            },
+                            "finishReason": "MAX_TOKENS",
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 950,
+                        "candidatesTokenCount": 0,
+                        "thoughtsTokenCount": 2048,
+                        "totalTokenCount": 2998,
+                    },
+                },
+            )
+        # Next fallback model (gemini-3.8-flash) returns a complete, visible natural-language answer
+        return httpx.Response(
+            200,
+            request=httpx.Request(method, url_s),
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": "Verified market answer: The Lamborghini Aventador SVJ had an original US MSRP of $517,770 USD, while current dealer asking prices range from $869,995 to $1.9M USD and completed auction sales show a median of $1,263,000 USD."
+                                }
+                            ]
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 950, "candidatesTokenCount": 68, "totalTokenCount": 1018},
+            },
+        )
+
+    monkeypatch.setattr("app.integrations.gemini.GeminiClient._request_with_retry", fake_gemini_request)
+
+    conv = client.post(
+        "/api/v1/neon/conversations",
+        headers=auth_headers["owner"],
+        json={"title": "Empty Thought Regression", "agent_id": "AGT-01"},
+    )
+    assert conv.status_code == 201
+    cid = conv.json()["conversation_id"]
+
+    msg = client.post(
+        f"/api/v1/neon/conversations/{cid}/messages",
+        headers=auth_headers["owner"],
+        json={"content": "Summarize the Lamborghini Aventador SVJ valuation.", "enable_web_research": False},
+    )
+    assert msg.status_code == 200, msg.text
+    payload = msg.json()
+
+    # Confirm gemini-4-hydrogen was tried, rejected for empty visible text, and fell back to gemini-3.8-flash
+    assert "gemini-4-hydrogen" in models_called
+    assert "gemini-3.8-flash" in models_called
+    assert payload["reply"]["model"] == "gemini-3.8-flash"
+    assert payload["reply"]["fallback_used"] is True
+    assert payload["provenance"]["verification_status"] == "LIVE_VERIFIED_WITH_FALLBACK"
+    assert "Verified market answer:" in payload["output"]
+    assert "Verified market answer:" in payload["assistant_message"]["content"]
+
+    # Confirm failover_errors recorded the EMPTY_MODEL_OUTPUT from gemini-4-hydrogen
+    hydrogen_errs = [e for e in payload["reply"]["failover_errors"] if e["model"] == "gemini-4-hydrogen"]
+    assert len(hydrogen_errs) == 1
+    assert "empty visible text" in hydrogen_errs[0]["error"].lower()
+
+    # Confirm GET /api/v1/neon/conversations/{cid} persists both the answer content AND provenance metadata across page reloads
+    fetched_conv = client.get(f"/api/v1/neon/conversations/{cid}", headers=auth_headers["owner"])
+    assert fetched_conv.status_code == 200
+    asst_msgs = [m for m in fetched_conv.json()["messages"] if m["role"] == "assistant"]
+    assert len(asst_msgs) == 1
+    assert "Verified market answer:" in asst_msgs[0]["content"]
+    assert asst_msgs[0]["provenance"]["verification_status"] == "LIVE_VERIFIED_WITH_FALLBACK"
+    exec_id = asst_msgs[0]["execution_id"]
+    assert exec_id
+
+    # Confirm GET /api/v1/neon/executions/{execution_id} retrieves the exact stored execution & message
+    inspected = client.get(f"/api/v1/neon/executions/{exec_id}", headers=auth_headers["owner"])
+    assert inspected.status_code == 200
+    assert inspected.json()["matched_message"]["execution_id"] == exec_id
+    assert inspected.json()["matched_message"]["content_empty"] is False
+
+
+
