@@ -15,12 +15,11 @@ def test_universal_connections_api_key_lifecycle_and_neon_argon_gates(
 ) -> None:
     from types import SimpleNamespace
 
-    from sqlalchemy import text
-    from sqlalchemy.orm import sessionmaker
-
     from app.core.config import get_settings
     from app.db.session import get_engine
     from app.services import universal_connections_service
+    from sqlalchemy import text
+    from sqlalchemy.orm import sessionmaker
 
     # 1. Catalogue lists 14 categories and 11 lifecycle states
     cat = client.get("/api/v1/integrations/universal/catalogue", headers=auth_headers["owner"])
@@ -135,12 +134,11 @@ def test_universal_connections_api_key_lifecycle_and_neon_argon_gates(
 def test_universal_connections_ssrf_website_and_webhooks(client: TestClient, auth_headers: dict) -> None:
     from types import SimpleNamespace
 
-    from sqlalchemy import text
-    from sqlalchemy.orm import sessionmaker
-
     from app.core.config import get_settings
     from app.db.session import get_engine
     from app.services import universal_connections_service
+    from sqlalchemy import text
+    from sqlalchemy.orm import sessionmaker
 
     # 1. SSRF protection blocks loopback, metadata IPs, private CIDRs, and file://
     for ssrf_url in [

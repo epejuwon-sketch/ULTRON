@@ -18,7 +18,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import AuthenticationError, ConflictError, NotFoundError, SecurityViolationError, ValidationError
+from app.core.exceptions import (
+    AuthenticationError,
+    ConflictError,
+    NotFoundError,
+    SecurityViolationError,
+    ValidationError,
+)
 from app.core.permissions import Principal
 from app.core.security import decrypt_vault_secret, encrypt_vault_secret
 from app.db.models import IntegrationConnectionRecord, UniversalConnectorRecord, WebhookDeliveryRecord

@@ -535,7 +535,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
             </div>
           </div>
 
-          <UniversalConnectPanel onChanged={loadAll} />
+          <UniversalConnectPanel onChanged={load} />
 
           {antigravity?.connected_plugin_adapters && (
             <div className="card">
