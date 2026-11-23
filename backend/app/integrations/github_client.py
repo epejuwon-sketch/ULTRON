@@ -85,6 +85,8 @@ class GitHubEngineeringClient:
         started = time.perf_counter()
         try:
             user = self._req("GET", "/user", timeout=timeout_seconds)
+            repos = self._req("GET", "/user/repos", params={"per_page": 5, "sort": "updated"}, timeout=timeout_seconds)
+            repo_count = len(repos) if isinstance(repos, list) else 0
             latency_ms = int((time.perf_counter() - started) * 1000)
             return IntegrationStatus(
                 provider="github",
@@ -94,7 +96,7 @@ class GitHubEngineeringClient:
                 requires_approval_for_mutations=True,
                 endpoint=f"{self.BASE_URL}/user",
                 latency_ms=latency_ms,
-                detail=f"GitHub API authenticated as '{user.get('login', 'user')}'.",
+                detail=f"GitHub API authenticated as '{user.get('login', 'user')}' with repository access ({repo_count} repo(s) sampled).",
             )
         except IntegrationError as exc:
             return IntegrationStatus(

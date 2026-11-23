@@ -97,6 +97,19 @@ class SupabaseClient:
                     resp = client.get(endpoint, headers=self._headers())
             latency_ms = int((time.perf_counter() - started) * 1000)
             if 200 <= resp.status_code < 300:
+                from app.db.session import check_database_health
+
+                db_health = check_database_health(self._settings)
+                if not db_health.get("ok"):
+                    return IntegrationStatus(
+                        provider="supabase",
+                        configured=True,
+                        capability_state=HonestCapabilityState.DEGRADED,
+                        live_verified=False,
+                        endpoint=endpoint,
+                        latency_ms=latency_ms,
+                        detail=f"Supabase PostgREST responded, but database connectivity check failed: {db_health.get('error', 'unknown')}",
+                    )
                 return IntegrationStatus(
                     provider="supabase",
                     configured=True,
@@ -104,7 +117,7 @@ class SupabaseClient:
                     live_verified=True,
                     endpoint=endpoint,
                     latency_ms=latency_ms,
-                    detail="Supabase PostgREST endpoint responded successfully.",
+                    detail=f"Supabase PostgREST and database ({db_health.get('dialect', 'db')}) connectivity verified.",
                 )
             return IntegrationStatus(
                 provider="supabase",

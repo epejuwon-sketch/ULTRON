@@ -100,8 +100,12 @@ class VercelClient:
         endpoint = f"{self.BASE_URL}{path}"
         started = time.perf_counter()
         try:
-            self._req("GET", path, timeout=timeout_seconds)
+            user_data = self._req("GET", path, timeout=timeout_seconds)
+            projects_data = self._req("GET", "/v9/projects", params={"limit": 5}, timeout=timeout_seconds)
+            proj_count = len(projects_data.get("projects", [])) if isinstance(projects_data, dict) else 0
             latency_ms = int((time.perf_counter() - started) * 1000)
+            acct = user_data.get("user", {}).get("username") if isinstance(user_data, dict) else None
+            acct_label = f" as '{acct}'" if acct else ""
             return IntegrationStatus(
                 provider="vercel",
                 configured=True,
@@ -109,7 +113,7 @@ class VercelClient:
                 live_verified=True,
                 endpoint=endpoint,
                 latency_ms=latency_ms,
-                detail="Vercel API authentication verified.",
+                detail=f"Vercel account{acct_label} and project discovery verified ({proj_count} project(s) visible).",
             )
         except IntegrationError as exc:
             return IntegrationStatus(
