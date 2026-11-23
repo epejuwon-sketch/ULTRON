@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import re
@@ -9,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,7 @@ from app.core.config import Settings
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.permissions import Principal
 from app.core.secret_interceptor import contains_raw_payment_card_or_cvv
-from app.db.models import FinanceCardRecord, IntegrationConnectionRecord
+from app.db.models import FinanceCardRecord
 from app.db.repositories import append_audit_log
 from app.services.file_hub_service import generate_and_store_file
 
@@ -45,12 +46,23 @@ def _reject_sensitive_input(*values: str | None) -> None:
             )
 
 
+def _validate_provider_token_ref(provider_key: str | None, provider_token_ref: str | None) -> None:
+    if not provider_token_ref:
+        return
+    tok = provider_token_ref.strip()
+    if len(tok) < 8 or any(ch.isspace() for ch in tok):
+        raise ValidationError("provider_token_ref must be a valid provider-issued token (min 8 chars, no spaces).")
+    if (provider_key or "").strip().lower() == "stripe" and not tok.startswith(("pm_", "card_", "tok_")):
+        raise ValidationError("Stripe provider_token_ref must begin with 'pm_', 'card_', or 'tok_'.")
+
+
 def _resolve_connection_status(
-    db: Session,
+    _db: Session,
     *,
     tenant_id: str,
     provider_key: str | None,
     provider_token_ref: str | None,
+    last_synced_at: datetime | None = None,
 ) -> tuple[str, str]:
     clean_prov = (provider_key or "").strip().lower()
     clean_tok = (provider_token_ref or "").strip()
@@ -64,20 +76,13 @@ def _resolve_connection_status(
     if not clean_tok:
         return (
             "AWAITING_PROVIDER_AUTH",
-            f"{SUPPORTED_CARD_LINK_PROVIDERS[clean_prov]} required to complete account linking.",
+            f"{SUPPORTED_CARD_LINK_PROVIDERS[clean_prov]} required to initiate card linking.",
         )
-    conn = db.execute(
-        select(IntegrationConnectionRecord).where(
-            IntegrationConnectionRecord.tenant_id == tenant_id,
-            IntegrationConnectionRecord.provider == clean_prov,
-            IntegrationConnectionRecord.disconnected_at.is_(None),
-        )
-    ).scalar_one_or_none()
-    if conn is not None and conn.status == "AVAILABLE":
-        return "PROVIDER_LINKED", f"Tokenized reference linked via {clean_prov}."
+    if last_synced_at is not None:
+        return "PROVIDER_LINKED", f"Card-level authorization verified via {clean_prov}."
     return (
         "AWAITING_PROVIDER_AUTH",
-        f"Tokenized reference recorded; {clean_prov} live provider authorization is awaiting verification in Connections Centre.",
+        f"Tokenized reference recorded; card-level authorization with {clean_prov} has not been live-verified yet.",
     )
 
 
@@ -98,6 +103,7 @@ def create_card(
     is_preferred: bool = False,
 ) -> dict[str, Any]:
     _reject_sensitive_input(nickname, issuer, provider_token_ref)
+    _validate_provider_token_ref(provider_key, provider_token_ref)
     clean_net = network.strip().upper()
     if clean_net not in VALID_NETWORKS:
         raise ValidationError(f"Unsupported network '{clean_net}'.")
@@ -281,22 +287,18 @@ def delete_card(db: Session, *, principal: Principal, card_id: str) -> dict[str,
     return {"card_id": rec.card_id, "status": "REMOVED"}
 
 
-def process_and_attach_card_image(
-    db: Session,
-    *,
-    principal: Principal,
-    settings: Settings,
-    card_id: str,
+def sanitize_card_image_bytes(
     raw_bytes: bytes,
-) -> dict[str, Any]:
-    """Sanitize uploaded card photo: strip EXIF, resize to 960x600, extract brand color, and blur credential zone."""
-    rec = _get_card(db, tenant_id=principal.tenant_id, card_id=card_id)
+    *,
+    redaction_mode: str = "standard",
+) -> tuple[bytes, str]:
+    """Sanitize card photo in memory: EXIF transpose, strip metadata, normalize 960x600, extract accent, and redact credential zone."""
     try:
-        img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        opened = Image.open(io.BytesIO(raw_bytes))
+        img = ImageOps.exif_transpose(opened).convert("RGB")
     except Exception as exc:
         raise ValidationError(f"Unsupported or corrupt image file: {exc}") from exc
 
-    # Normalize to standard 1.6:1 card presentation (960x600) and strip all EXIF metadata
     target_w, target_h = 960, 600
     src_w, src_h = img.size
     target_ratio = target_w / target_h
@@ -311,28 +313,70 @@ def process_and_attach_card_image(
         img = img.crop((0, top, src_w, top + new_h))
     img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-    # Sample top-border dominant color for safe accent extraction
     sample = img.crop((0, 0, target_w, 80)).resize((1, 1)).getpixel((0, 0))
     accent_hex = f"#{sample[0]:02x}{sample[1]:02x}{sample[2]:02x}"
 
-    # Blur & obscure central/lower credential regions (PAN, expiry, CVV) while preserving perimeter branding
-    cred_box = (int(target_w * 0.05), int(target_h * 0.34), int(target_w * 0.95), int(target_h * 0.90))
-    blurred_zone = img.crop(cred_box).filter(ImageFilter.GaussianBlur(radius=28))
+    mode = (redaction_mode or "standard").strip().lower()
+    if mode == "full":
+        cred_box = (int(target_w * 0.04), int(target_h * 0.14), int(target_w * 0.96), int(target_h * 0.92))
+        blur_radius = 34
+    else:
+        cred_box = (int(target_w * 0.05), int(target_h * 0.30), int(target_w * 0.95), int(target_h * 0.92))
+        blur_radius = 28
+
+    blurred_zone = img.crop(cred_box).filter(ImageFilter.GaussianBlur(radius=blur_radius))
     img.paste(blurred_zone, cred_box)
 
     overlay = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    draw.rounded_rectangle(cred_box, radius=24, fill=(10, 14, 22, 130))
+    draw.rounded_rectangle(cred_box, radius=24, fill=(10, 14, 22, 138))
     sanitized = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 
     out_buf = io.BytesIO()
     sanitized.save(out_buf, format="PNG", optimize=True)
+    return out_buf.getvalue(), accent_hex
+
+
+def preview_sanitized_card_image(
+    db: Session,
+    *,
+    principal: Principal,
+    card_id: str,
+    raw_bytes: bytes,
+    redaction_mode: str = "standard",
+) -> dict[str, Any]:
+    """Return an unsaved sanitized image preview so the user can verify all credentials are obscured before saving."""
+    _get_card(db, tenant_id=principal.tenant_id, card_id=card_id)
+    png_bytes, accent_hex = sanitize_card_image_bytes(raw_bytes, redaction_mode=redaction_mode)
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    return {
+        "card_id": card_id,
+        "redaction_mode": "full" if (redaction_mode or "").strip().lower() == "full" else "standard",
+        "accent_color": accent_hex,
+        "preview_data_url": f"data:image/png;base64,{b64}",
+        "saved": False,
+    }
+
+
+def process_and_attach_card_image(
+    db: Session,
+    *,
+    principal: Principal,
+    settings: Settings,
+    card_id: str,
+    raw_bytes: bytes,
+    redaction_mode: str = "standard",
+) -> dict[str, Any]:
+    """Sanitize uploaded card photo in memory and store ONLY the redacted PNG in tenant-isolated File Hub."""
+    rec = _get_card(db, tenant_id=principal.tenant_id, card_id=card_id)
+    png_bytes, accent_hex = sanitize_card_image_bytes(raw_bytes, redaction_mode=redaction_mode)
+
     stored = generate_and_store_file(
         db,
         principal=principal,
         settings=settings,
         filename=f"card_{rec.card_id}.png",
-        content_bytes=out_buf.getvalue(),
+        content_bytes=png_bytes,
         mime_type="image/png",
         folder="cards",
     )
@@ -347,7 +391,7 @@ def process_and_attach_card_image(
         actor=principal.username,
         action="FINANCE_CARD_IMAGE_PROCESSED",
         resource=rec.card_id,
-        outcome=f"file={stored['file_id']}|redacted_credential_zone=true",
+        outcome=f"file={stored['file_id']}|redaction_mode={redaction_mode}",
     )
     db.commit()
     db.refresh(rec)

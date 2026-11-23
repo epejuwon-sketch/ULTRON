@@ -14,14 +14,13 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
-
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError
 from app.core.rate_limit import SharedRedisRestRateLimiter
 from app.db.models import Base
 from app.services.job_scheduler import compute_backoff_seconds
 from app.services.storage_adapter import SupabaseStorageAdapter
+from fastapi.testclient import TestClient
 
 
 def test_supabase_migrations_001_to_004_match_all_53_orm_models_and_rls() -> None:
@@ -33,6 +32,7 @@ def test_supabase_migrations_001_to_004_match_all_53_orm_models_and_rls() -> Non
         "002_full_backend_schema.sql",
         "003_ecosystem_and_devices.sql",
         "004_full_platform_features.sql",
+        "005_finance_cards.sql",
     ]
     sql = "\n".join(p.read_text(encoding="utf-8") for p in files)
 
@@ -50,7 +50,7 @@ def test_supabase_migrations_001_to_004_match_all_53_orm_models_and_rls() -> Non
     for m in re.finditer(r"ALTER TABLE\s+(\w+)\s+ADD COLUMN IF NOT EXISTS\s+(\w+)", sql, re.I):
         tables_sql.setdefault(m.group(1), set()).add(m.group(2))
 
-    assert len(Base.metadata.tables) == 53
+    assert len(Base.metadata.tables) == 54
     for tname, table in Base.metadata.tables.items():
         assert tname in tables_sql, f"ORM table '{tname}' missing from Supabase SQL migrations"
         orm_cols = {c.name for c in table.columns}

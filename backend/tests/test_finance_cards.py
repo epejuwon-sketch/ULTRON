@@ -105,3 +105,56 @@ def test_finance_cards_rejects_raw_pan_and_enforces_rbac(client: TestClient, aut
         json={"nickname": "Viewer Card", "issuer": "Test"},
     )
     assert viewer_res.status_code == 403
+
+    # Reject invalid Stripe token ref
+    bad_tok = client.post(
+        "/api/v1/finance/cards",
+        headers=auth_headers["owner"],
+        json={
+            "nickname": "Invalid Stripe Token",
+            "issuer": "Stripe",
+            "provider_key": "stripe",
+            "provider_token_ref": "bad",
+        },
+    )
+    assert bad_tok.status_code in (400, 422)
+
+
+def test_finance_cards_sanitized_preview_portrait_and_invalid_image(
+    client: TestClient, auth_headers: dict
+) -> None:
+    created = client.post(
+        "/api/v1/finance/cards",
+        headers=auth_headers["owner"],
+        json={"nickname": "Portrait Card", "issuer": "Custom"},
+    )
+    assert created.status_code == 201
+    cid = created.json()["card_id"]
+
+    # Portrait card image preview (unsaved) with full redaction mode
+    portrait = Image.new("RGB", (400, 640), color=(20, 60, 80))
+    buf = io.BytesIO()
+    portrait.save(buf, format="PNG")
+    prev = client.post(
+        f"/api/v1/finance/cards/{cid}/image/preview",
+        headers=auth_headers["owner"],
+        files={"file": ("portrait.png", buf.getvalue(), "image/png")},
+        data={"redaction_mode": "full"},
+    )
+    assert prev.status_code == 200
+    assert prev.json()["saved"] is False
+    assert prev.json()["redaction_mode"] == "full"
+    assert prev.json()["preview_data_url"].startswith("data:image/png;base64,")
+
+    # Confirm image_file_id is still None before explicit confirmation
+    cards = client.get("/api/v1/finance/cards", headers=auth_headers["owner"]).json()["cards"]
+    target = next(c for c in cards if c["card_id"] == cid)
+    assert target["image_file_id"] is None
+
+    # Corrupt/invalid image bytes are rejected and never stored
+    bad_img = client.post(
+        f"/api/v1/finance/cards/{cid}/image",
+        headers=auth_headers["owner"],
+        files={"file": ("bad.png", b"not-an-image", "image/png")},
+    )
+    assert bad_img.status_code in (400, 422)

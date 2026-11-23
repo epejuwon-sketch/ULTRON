@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.services.finance_cards_service import (
     create_card,
     delete_card,
     list_cards,
+    preview_sanitized_card_image,
     process_and_attach_card_image,
     update_card,
 )
@@ -328,10 +329,29 @@ def api_update_card(
     )
 
 
+@router.post("/cards/{card_id}/image/preview")
+async def api_preview_card_image(
+    card_id: str,
+    file: UploadFile = File(...),
+    redaction_mode: str = Form(default="standard"),
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    raw = await file.read()
+    return preview_sanitized_card_image(
+        db,
+        principal=principal,
+        card_id=card_id,
+        raw_bytes=raw,
+        redaction_mode=redaction_mode,
+    )
+
+
 @router.post("/cards/{card_id}/image")
 async def api_upload_card_image(
     card_id: str,
     file: UploadFile = File(...),
+    redaction_mode: str = Form(default="standard"),
     principal: Principal = Depends(require_perm("finance:write")),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -343,6 +363,7 @@ async def api_upload_card_image(
         settings=settings,
         card_id=card_id,
         raw_bytes=raw,
+        redaction_mode=redaction_mode,
     )
 
 

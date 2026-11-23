@@ -63,6 +63,14 @@ export function FinanceCardsExperience({ scope }: { scope?: string }) {
 
   // Delete confirmation
   const [confirmUnlink, setConfirmUnlink] = useState<any | null>(null);
+  // Sanitized image preview & confirmation before saving
+  const [sanitizedPreview, setSanitizedPreview] = useState<{
+    cardId: string;
+    file: File;
+    previewDataUrl: string;
+    redactionMode: "standard" | "full";
+    loading: boolean;
+  } | null>(null);
   const touchStartX = useRef<number | null>(null);
 
   async function loadCards() {
@@ -203,10 +211,37 @@ export function FinanceCardsExperience({ scope }: { scope?: string }) {
     }
   }
 
-  async function handleQuickImageUpload(cardId: string, file: File) {
+  async function requestSanitizedPreview(cardId: string, file: File, redactionMode: "standard" | "full" = "standard") {
+    try {
+      setSanitizedPreview({ cardId, file, previewDataUrl: "", redactionMode, loading: true });
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("redaction_mode", redactionMode);
+      const res = await apiFetch<any>(`/api/v1/finance/cards/${cardId}/image/preview`, {
+        method: "POST",
+        body: fd,
+        isFormData: true,
+      });
+      setSanitizedPreview({
+        cardId,
+        file,
+        previewDataUrl: res.preview_data_url || "",
+        redactionMode,
+        loading: false,
+      });
+    } catch (err: any) {
+      setSanitizedPreview(null);
+      pushToast(err.message, "error");
+    }
+  }
+
+  async function confirmAndSaveSanitizedImage() {
+    if (!sanitizedPreview) return;
+    const { cardId, file, redactionMode } = sanitizedPreview;
     try {
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("redaction_mode", redactionMode);
       await apiFetch(`/api/v1/finance/cards/${cardId}/image`, {
         method: "POST",
         body: fd,
@@ -217,7 +252,8 @@ export function FinanceCardsExperience({ scope }: { scope?: string }) {
         delete next[cardId];
         return next;
       });
-      pushToast("Card photograph sanitized (credential zone redacted) & applied.", "success");
+      setSanitizedPreview(null);
+      pushToast("Sanitized card image verified & saved.", "success");
       await loadCards();
     } catch (err: any) {
       pushToast(err.message, "error");
@@ -410,7 +446,7 @@ export function FinanceCardsExperience({ scope }: { scope?: string }) {
                     onChange={(e) => {
                       const f = e.target.files?.[0];
                       e.target.value = "";
-                      if (f) handleQuickImageUpload(activeCard.card_id, f);
+                      if (f) requestSanitizedPreview(activeCard.card_id, f, "standard");
                     }}
                   />
                 </label>
@@ -545,6 +581,60 @@ export function FinanceCardsExperience({ scope }: { scope?: string }) {
             {saving ? "Saving..." : editingCard ? "Save Card Changes" : "Add Card"}
           </button>
         </form>
+      </Drawer>
+
+      {/* Sanitized Card Image Preview & Confirmation Drawer */}
+      <Drawer
+        open={Boolean(sanitizedPreview)}
+        title="Verify Sanitized Card Image"
+        onClose={() => setSanitizedPreview(null)}
+      >
+        {sanitizedPreview && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="alert-box" style={{ fontSize: 12 }}>
+              <strong>Confirm Credential Redaction:</strong> Verify that no card numbers, CVV, or expiry dates remain visible before saving. If your card is vertical or has numbers near the top, switch to <strong>Full Card Redaction</strong>.
+            </div>
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                type="button"
+                className={`seg-btn ${sanitizedPreview.redactionMode === "standard" ? "active" : ""}`}
+                onClick={() => requestSanitizedPreview(sanitizedPreview.cardId, sanitizedPreview.file, "standard")}
+              >
+                Standard Zone
+              </button>
+              <button
+                type="button"
+                className={`seg-btn ${sanitizedPreview.redactionMode === "full" ? "active" : ""}`}
+                onClick={() => requestSanitizedPreview(sanitizedPreview.cardId, sanitizedPreview.file, "full")}
+              >
+                Full Card Redaction
+              </button>
+            </div>
+            {sanitizedPreview.loading ? (
+              <div className="muted">Sanitizing image in memory (stripping EXIF &amp; blurring credential zone)...</div>
+            ) : sanitizedPreview.previewDataUrl ? (
+              <img
+                src={sanitizedPreview.previewDataUrl}
+                alt="Sanitized card preview"
+                style={{ width: "100%", borderRadius: 16, border: "1px solid rgba(255,255,255,0.16)" }}
+              />
+            ) : null}
+            <div className="row" style={{ gap: 8 }}>
+              <button
+                type="button"
+                className="btn"
+                disabled={sanitizedPreview.loading || !sanitizedPreview.previewDataUrl}
+                style={{ background: "#10b981", color: "#03150e", flex: 1 }}
+                onClick={confirmAndSaveSanitizedImage}
+              >
+                Confirm &amp; Save Sanitized Image
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={() => setSanitizedPreview(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </Drawer>
 
       <ConfirmationDialog
