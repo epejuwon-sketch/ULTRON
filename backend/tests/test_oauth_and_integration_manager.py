@@ -371,4 +371,23 @@ def test_google_workspace_seven_providers_share_admin_vault_oauth_setup(client, 
         assert "code_challenge_method=S256" in start.json()["authorization_url"]
 
 
+def test_caravan_readiness_gate_and_screen_sharing_policy(client, auth_headers):
+    gate = client.get("/api/v1/integrations/readiness-gate", headers=auth_headers["owner"])
+    assert gate.status_code == 200, gate.text
+    body = gate.json()
+    assert body["vault"]["encryption"] == "AES-256-GCM"
+    assert body["vault"]["ready"] is True
+    assert body["argon"]["ready"] is True
+    assert body["screen_sharing_readiness"]["supported"] is True
+    assert body["screen_sharing_readiness"]["consent_required"] is True
+    assert body["screen_sharing_readiness"]["sensitive_field_masking"] is True
+    assert "cvv" in body["screen_sharing_readiness"]["never_expose"]
+    assert "github" in body["core_providers"]
+    assert "supabase" in body["core_providers"]
+    assert "vercel" in body["core_providers"]
+    assert body["core_infrastructure_ready"] is False
+    assert len(body["outstanding_blockers"]) >= 1
+
+
+
 

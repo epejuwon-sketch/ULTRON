@@ -63,6 +63,18 @@ def api_antigravity_adapter(
     return inspect_antigravity_environment(run_live_auth_checks=live)
 
 
+@router.get("/readiness-gate")
+def api_caravan_readiness_gate(
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Honest Caravan Readiness Gate + Screen-Sharing Readiness evaluation."""
+    from app.services.integration_manager import get_caravan_readiness_gate
+
+    return get_caravan_readiness_gate(db, tenant_id=principal.tenant_id, settings=settings)
+
+
 @router.post("/{provider}/connect")
 def api_connect_provider(
     provider: str,

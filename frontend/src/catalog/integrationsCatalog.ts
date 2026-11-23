@@ -221,6 +221,9 @@ export const INTEGRATIONS_CATALOG: IntegrationCatalogEntry[] = [
     requiredEnvVars: ["GITHUB_TOKEN or GITHUB_OAUTH_CLIENT_ID/SECRET"],
     permissions: ["read:user", "repo", "workflow"],
     capabilities: ["repos", "branches", "commits", "pull_requests", "issues", "workflows"],
+    connectFields: [
+      { key: "api_key", label: "GitHub Personal Access Token (PAT)", placeholder: "ghp_... or github_pat_... (encrypted in VAULT)", sensitive: true },
+    ],
   },
   {
     id: "vercel",

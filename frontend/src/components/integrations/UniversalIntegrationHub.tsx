@@ -33,12 +33,13 @@ type HubLifecycle =
   | "Configured"
   | "Awaiting Authorization"
   | "Configuration Required"
+  | "Admin Action Required"
   | "Supported"
   | "Degraded"
   | "Expired"
   | "Revoked"
   | "Failed"
-  | "Unavailable";
+  | "Provider Limitation";
 
 function hubTone(status: HubLifecycle): "success" | "info" | "warn" | "danger" | "neutral" {
   switch (status) {
@@ -51,6 +52,7 @@ function hubTone(status: HubLifecycle): "success" | "info" | "warn" | "danger" |
       return "info";
     case "Awaiting Authorization":
     case "Configuration Required":
+    case "Admin Action Required":
     case "Degraded":
       return "warn";
     case "Expired":
@@ -68,7 +70,7 @@ function resolveHubStatus(
   statusCaps: Record<string, any>
 ): { status: HubLifecycle; record?: any; cap?: any; oauthReady: boolean; stageIndex: number } {
   if (!entry.supportedByBackend || entry.authFlow === "ROADMAP") {
-    return { status: "Unavailable", oauthReady: false, stageIndex: 0 };
+    return { status: "Provider Limitation", oauthReady: false, stageIndex: 0 };
   }
   const rec = entry.backendProviderKey ? managedByKey.get(entry.backendProviderKey) : undefined;
   const cap = entry.statusCapabilityKey ? statusCaps[entry.statusCapabilityKey] : undefined;
@@ -96,7 +98,7 @@ function resolveHubStatus(
   if (entry.authFlow === "OAUTH2") {
     return oauthReady
       ? { status: "Configured", record: rec, cap, oauthReady, stageIndex: 2 }
-      : { status: "Supported", record: rec, cap, oauthReady, stageIndex: 1 };
+      : { status: "Admin Action Required", record: rec, cap, oauthReady, stageIndex: 1 };
   }
   if (entry.authFlow === "API_KEY" || entry.authFlow === "SERVER_ENV") {
     return { status: "Configuration Required", record: rec, cap, oauthReady, stageIndex: 1 };
@@ -108,6 +110,7 @@ export function UniversalIntegrationHub() {
   const { pushToast } = useToast();
   const [connections, setConnections] = useState<any[]>([]);
   const [statusData, setStatusData] = useState<any>(null);
+  const [readinessGate, setReadinessGate] = useState<any>(null);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<"All" | IntegrationCategory>("All");
   const [viewFilter, setViewFilter] = useState<"ALL" | "CONNECTED" | "AVAILABLE" | "ATTENTION" | "RECENT">("ALL");
@@ -118,12 +121,14 @@ export function UniversalIntegrationHub() {
 
   async function loadAll() {
     try {
-      const [cRes, sRes] = await Promise.all([
+      const [cRes, sRes, gRes] = await Promise.all([
         apiFetch<any>("/api/v1/integrations/connections").catch(() => ({ connections: [] })),
         apiFetch<any>("/api/v1/integrations/status").catch(() => null),
+        apiFetch<any>("/api/v1/integrations/readiness-gate").catch(() => null),
       ]);
       setConnections(cRes.connections || []);
       setStatusData(sRes);
+      setReadinessGate(gRes);
     } catch (err: any) {
       pushToast(err.message || "Failed to load integration status.", "error");
     }
@@ -159,23 +164,58 @@ export function UniversalIntegrationHub() {
   }, [managedByKey, statusCaps]);
 
   const stats = useMemo(() => {
+    const total = enriched.length;
+    let configured = 0;
+    let authenticated = 0;
     let connected = 0;
     let verified = 0;
+    let expired = 0;
+    let failed = 0;
+    let adminRequired = 0;
+    let limitations = 0;
     let attention = 0;
     let available = 0;
     for (const item of enriched) {
       if (item.status === "Live Verified") {
         verified += 1;
         connected += 1;
+        authenticated += 1;
+        configured += 1;
       } else if (item.status === "Connected" || item.status === "Authenticated") {
         connected += 1;
-      } else if (["Expired", "Revoked", "Failed", "Degraded"].includes(item.status)) {
+        authenticated += 1;
+        configured += 1;
+      } else if (item.status === "Configured") {
+        configured += 1;
+        available += 1;
+      } else if (item.status === "Expired") {
+        expired += 1;
         attention += 1;
+      } else if (item.status === "Failed" || item.status === "Degraded" || item.status === "Revoked") {
+        failed += 1;
+        attention += 1;
+      } else if (item.status === "Admin Action Required") {
+        adminRequired += 1;
+        available += 1;
+      } else if (item.status === "Provider Limitation") {
+        limitations += 1;
       } else if (item.entry.supportedByBackend) {
         available += 1;
       }
     }
-    return { connected, verified, attention, available };
+    return {
+      total,
+      configured,
+      authenticated,
+      connected,
+      verified,
+      expired,
+      failed,
+      adminRequired,
+      limitations,
+      attention,
+      available,
+    };
   }, [enriched]);
 
   const filtered = useMemo(() => {
@@ -289,11 +329,66 @@ export function UniversalIntegrationHub() {
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Summary Strip */}
       <div className="grid-4" style={{ gap: 10 }}>
-        <MetricDisplay label="Connected" value={String(stats.connected)} sub={`${stats.verified} Live Verified`} tone="success" />
-        <MetricDisplay label="Available" value={String(stats.available)} sub="Ready to Configure" tone="info" />
-        <MetricDisplay label="Needs Attention" value={String(stats.attention)} sub="Expired / Degraded / Revoked" tone="warn" />
-        <MetricDisplay label="Vault Security" value="AES-256-GCM" sub="PKCE + SENTINEL + AEGIS" tone="neutral" />
+        <MetricDisplay
+          label="Total / Configured"
+          value={`${stats.total} / ${stats.configured}`}
+          sub={`${stats.authenticated} Authenticated · ${stats.limitations} Limitation`}
+          tone="info"
+        />
+        <MetricDisplay
+          label="Connected / Live"
+          value={`${stats.connected} / ${stats.verified}`}
+          sub="Verified via real provider API"
+          tone="success"
+        />
+        <MetricDisplay
+          label="Expired / Failed"
+          value={`${stats.expired} / ${stats.failed}`}
+          sub={`${stats.adminRequired} Admin Action Required`}
+          tone={stats.attention > 0 || stats.adminRequired > 0 ? "warn" : "neutral"}
+        />
+        <MetricDisplay
+          label="Vault & Caravan Gate"
+          value={readinessGate?.core_infrastructure_ready ? "READY" : "GATED"}
+          sub={`AES-256-GCM · Screen-Share ${readinessGate?.screen_sharing_readiness?.supported ? "Ready" : "Pending"}`}
+          tone={readinessGate?.core_infrastructure_ready ? "success" : "warn"}
+        />
       </div>
+
+      {readinessGate && (
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 14px" }}>
+          <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+            <strong style={{ fontSize: 13 }}>
+              <ShieldCheck size={13} style={{ verticalAlign: "middle", marginRight: 4 }} />
+              Caravan Infrastructure Readiness Gate &amp; Screen-Sharing Policy
+            </strong>
+            <StatusIndicator
+              label={readinessGate.core_infrastructure_ready ? "CORE INFRASTRUCTURE READY" : "BLOCKERS PRESENT"}
+              tone={readinessGate.core_infrastructure_ready ? "success" : "warn"}
+            />
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", fontSize: 12 }}>
+            {["github", "supabase", "vercel", "cloudflare"].map((p) => {
+              const gp = readinessGate.core_providers?.[p];
+              return (
+                <span key={p} className="pill mono">
+                  {p}: {gp?.lifecycle_stage || "SUPPORTED"}
+                </span>
+              );
+            })}
+            <span className="pill mono">vault: {readinessGate.vault?.ready ? "AES-256-GCM" : "UNCONFIGURED"}</span>
+            <span className="pill mono">argon: {readinessGate.argon?.ready ? "GATED" : "BLOCKED"}</span>
+            <span className="pill mono">
+              screen_share: {readinessGate.screen_sharing_readiness?.consent_required ? "CONSENT+MASKED" : "OFF"}
+            </span>
+          </div>
+          {Array.isArray(readinessGate.outstanding_blockers) && readinessGate.outstanding_blockers.length > 0 && (
+            <div className="muted" style={{ fontSize: 11 }}>
+              Outstanding blockers: {readinessGate.outstanding_blockers.join(" · ")}
+            </div>
+          )}
+        </div>
+      )}
 
       {awaitingAuth && (
         <div className="alert-box" style={{ fontSize: 12 }}>
@@ -500,8 +595,9 @@ export function UniversalIntegrationHub() {
               </div>
             )}
 
-            {/* API Key / Credential Form */}
-            {activeConfigItem.entry.authFlow === "API_KEY" &&
+            {/* API Key / PAT Credential Form */}
+            {(activeConfigItem.entry.authFlow === "API_KEY" ||
+              (activeConfigItem.entry.authFlow === "OAUTH2" && Boolean(activeConfigItem.entry.connectFields?.length))) &&
               activeConfigItem.entry.backendProviderKey && (
                 <form onSubmit={handleSaveApiKey} className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <strong><KeyRound size={12} /> Encrypted VAULT Credentials</strong>

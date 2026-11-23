@@ -841,7 +841,8 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                 </div>
               </div>
 
-              {selected.authFlow === "API_KEY" && selected.connectFields && (
+              {(selected.authFlow === "API_KEY" || (selected.authFlow === "OAUTH2" && Boolean(selected.connectFields?.length))) &&
+                selected.connectFields && (
                 <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div className="telemetry-label">
                     <KeyRound size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
