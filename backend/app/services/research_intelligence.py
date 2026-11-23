@@ -138,8 +138,11 @@ def build_natural_language_guidance(
                 "  (2) Current Dealer & Used-Market Asking Prices (active listings — explicitly note these are asking prices, not confirmed sale prices),",
                 "  (3) Documented Completed Auction & Transactional Sales (verified sold/hammer prices and median transactional benchmarks), and",
                 "  (4) Estimated Market Value Ranges across trims (e.g., Coupe vs. Roadster / special editions).",
-                "- Always specify the currency (e.g., USD, EUR, GBP), geographic market/location, and the retrieval date/timeframe of the figures.",
-                "- Explain key factors driving variance (mileage, Coupe vs. Roadster/63 Edition, provenance, condition, region/import duties).",
+                "- Never mix different variants, specifications, or conditions when comparing prices.",
+                "- Identify any unusually high or low outlier prices and explain the drivers (mileage, year, condition, rarity, Coupe vs. Roadster/63 Edition, provenance, or regional import duties).",
+                "- Always specify the currency (e.g., USD, EUR, GBP, AED, NGN), geographic market/location, and the retrieval date/timeframe of the figures.",
+                "- Explain clearly what the retrieved evidence establishes and what it does not establish.",
+                "- Include clickable markdown citations `[Source Name](https://...)` directly beside key factual and pricing claims.",
                 "- NIGERIAN MARKET HONESTY RULE: If verified active Nigerian dealer listings or confirmed local sales are unavailable in the retrieved sources, explicitly report that verified Nigerian market evidence is unavailable rather than inventing local NGN prices or treating automated currency-conversion directory pages as confirmed local inventory.",
             ]
         )
@@ -147,6 +150,14 @@ def build_natural_language_guidance(
         sources = research_bundle.get("verified_sources") or []
         retrieved_at = research_bundle.get("retrieved_at") or datetime.now(timezone.utc).isoformat()
         ng_evidence = research_bundle.get("nigeria_market_evidence") or {}
+        prod_intel = research_bundle.get("product_intelligence") or {}
+        if prod_intel.get("detected"):
+            p_info = prod_intel.get("product") or {}
+            lines.append(
+                f"IDENTIFIED PRODUCT PROFILE: Name={p_info.get('product_name')} | Manufacturer={p_info.get('manufacturer')} | "
+                f"Model={p_info.get('model')} | Variant={p_info.get('variant')} | Year={p_info.get('year')} | "
+                f"Category={p_info.get('product_category')} | Images Retrieved={len(prod_intel.get('images') or [])}"
+            )
         if sources:
             lines.append(
                 f"VERIFIED LIVE WEB SOURCES & EXTRACTED PAGE EVIDENCE (retrieved {retrieved_at} across "
@@ -168,7 +179,7 @@ def build_natural_language_guidance(
                 lines.append(f"  [NIGERIA LOCAL MARKET CHECK]: {ng_evidence.get('note')}")
             lines.append(
                 "- CRITICAL: Available live market results WERE successfully retrieved above. Do NOT claim that live market data could not be retrieved. "
-                "Synthesize the specific figures from these sources in natural language, distinguish asking prices from completed sales, include the source links and retrieval timestamps, and state clearly when Nigerian market evidence is unavailable."
+                "Synthesize the specific figures from these sources in natural language, explain what the product is, compare relevant variants without conflating them, distinguish asking prices from completed sales, include clickable markdown links `[Source](url)` and retrieval timestamps, and state clearly when Nigerian or regional market evidence is unavailable."
             )
         else:
             lines.append(

@@ -18,6 +18,7 @@ import {
   SourcesList,
   TechnicalDiagnostics,
 } from "../components/ui/HumanPresentation";
+import { ProductDiscoveryShowcase } from "../components/ui/ProductDiscoveryShowcase";
 
 export default function ResearchModulePage({ subPage, onSelectSubPage }: ModulePageProps) {
   const mod = getModule("research");
@@ -242,18 +243,18 @@ export default function ResearchModulePage({ subPage, onSelectSubPage }: ModuleP
         <div>
           <div className="grid-2">
             <div className="card">
-              <div className="card-title"><span>Live Multi-Provider Web Search</span></div>
+              <div className="card-title"><span>Live Multi-Provider Web &amp; Product Search</span></div>
               <form onSubmit={runWebSearch} className="row">
                 <input
                   className="input"
                   style={{ flex: 1 }}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search live public web sources (e.g. Lamborghini Aventador SVJ price)..."
+                  placeholder="Search product or topic (e.g. Lamborghini Aventador SVJ price)..."
                 />
                 <button type="submit" className="btn btn-sm"><Search size={13} /> Search</button>
               </form>
-              {searchRes && (
+              {searchRes && !searchRes.product_intelligence?.detected && (
                 <div style={{ marginTop: 10 }}>
                   <SourcesList sources={resolvedSources} />
                   <ProvenanceBar provenance={searchRes.provenance} />
@@ -284,6 +285,14 @@ export default function ResearchModulePage({ subPage, onSelectSubPage }: ModuleP
               )}
             </div>
           </div>
+          {searchRes?.product_intelligence?.detected && (
+            <div style={{ marginTop: 14 }}>
+              <ProductDiscoveryShowcase data={searchRes.product_intelligence} />
+              <SourcesList sources={resolvedSources} />
+              <ProvenanceBar provenance={searchRes.provenance} />
+              <TechnicalDiagnostics title="Technical Diagnostics — Web Search Payload" data={searchRes} />
+            </div>
+          )}
           {renderDiagnosticsCard()}
         </div>
       )}
@@ -292,19 +301,22 @@ export default function ResearchModulePage({ subPage, onSelectSubPage }: ModuleP
       {page.id === "web" && (
         <div>
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div className="card-title"><span>Public Web Research &amp; Source Verification</span></div>
+            <div className="card-title"><span>Public Web Research &amp; Visual Product Discovery</span></div>
             <form onSubmit={runWebSearch} className="row">
               <input
                 className="input"
                 style={{ flex: 1 }}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Research topic with citations..."
+                placeholder="Research product, vehicle, watch, device, or topic with citations..."
               />
               <button type="submit" className="btn">Run Search</button>
             </form>
             {searchRes && (
               <div>
+                {searchRes.product_intelligence?.detected && (
+                  <ProductDiscoveryShowcase data={searchRes.product_intelligence} />
+                )}
                 {resolvedSources.length ? (
                   <SourcesList sources={resolvedSources} />
                 ) : (

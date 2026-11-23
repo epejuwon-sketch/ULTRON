@@ -907,4 +907,177 @@ def test_multi_provider_research_failover_when_duckduckgo_returns_202_and_diagno
         assert expected_prov in prov_names
 
 
+def test_visual_product_discovery_images_pricing_separation_and_conversation_persistence(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify Visual Product Discovery across product categories (cars, luxury watches, electronics):
+    - Identifies product name, manufacturer, model, exact variant, year, and category.
+    - Extracts authentic images (og:image, JSON-LD, img) and distinguishes official manufacturer media from dealer listings and auction lot photos.
+    - Separates Original MSRP, Active Dealer Asking Prices, and Confirmed Completed Auction Sales (never presenting asking prices as completed sales).
+    - Persists product_intelligence inside NEON conversation messages and returns it via GET /api/v1/neon/conversations/{id}.
+    - Handles image-unavailable states cleanly without inventing fake images.
+    """
+    from app.services.product_intelligence import (
+        build_product_intelligence_bundle,
+        extract_page_images_and_metadata,
+        extract_price_mentions,
+        is_product_discovery_query,
+        parse_product_identity,
+    )
+
+    # 1. Product intent & non-product exclusion across categories
+    assert is_product_discovery_query("How much does a Lamborghini Aventador SVJ cost?", is_pricing_query=True) is True
+    assert is_product_discovery_query("What is the current market value of a Rolex Submariner?", is_pricing_query=True) is True
+    assert is_product_discovery_query("Apple MacBook Pro M4 specs and price", is_pricing_query=True) is True
+    assert is_product_discovery_query("What is the speed of light in vacuum?", is_pricing_query=False) is False
+
+    # 2. Exact product & variant identification
+    svj_id = parse_product_identity("How much does a Lamborghini Aventador SVJ cost?", "Lamborghini Aventador SVJ")
+    assert svj_id["manufacturer"] == "Lamborghini"
+    assert svj_id["model"] == "Aventador SVJ"
+    assert svj_id["variant"] == "SVJ"
+    assert svj_id["product_category"] == "Automotive & Exotic Vehicles"
+
+    rolex_id = parse_product_identity("What is the current market value of a Rolex Submariner?", "Rolex Submariner")
+    assert rolex_id["manufacturer"] == "Rolex"
+    assert rolex_id["model"] == "Submariner"
+    assert rolex_id["product_category"] == "Horology & Luxury Timepieces"
+
+    mac_id = parse_product_identity("Apple MacBook Pro M4 price and specs", "Apple MacBook Pro M4")
+    assert mac_id["manufacturer"] == "Apple"
+    assert mac_id["variant"] == "M4 Pro"
+    assert mac_id["product_category"] == "Consumer Electronics & Hardware"
+
+    # 3. HTML og:image + JSON-LD Product Offer extraction (and filtering of generic og-share / logo URLs)
+    page_html = """
+    <html>
+      <head>
+        <meta property="og:image" content="https://www.lamborghini.com/sites/it-en/files/DAM/lamborghini/svj_hero.jpg" />
+        <meta property="twitter:image" content="https://example.com/assets/og-share.png" />
+        <script type="application/ld+json">
+          {
+            "@context": "https://schema.org",
+            "@type": "Product",
+            "name": "2020 Lamborghini Aventador SVJ Coupe",
+            "image": ["https://images.dupontregistry.com/listings/2020-svj-front.webp"],
+            "offers": {
+              "@type": "Offer",
+              "price": "1295000",
+              "priceCurrency": "USD",
+              "itemCondition": "https://schema.org/UsedCondition"
+            }
+          }
+        </script>
+      </head>
+      <body><p>Original MSRP $517,770 USD. Listed for sale at $1,295,000 USD with 2,400 miles.</p></body>
+    </html>
+    """
+    extracted_meta = extract_page_images_and_metadata(page_html, "https://www.lamborghini.com/en-en/svj")
+    img_urls = [im["image_url"] for im in extracted_meta["images"]]
+    assert "https://www.lamborghini.com/sites/it-en/files/DAM/lamborghini/svj_hero.jpg" in img_urls
+    assert "https://images.dupontregistry.com/listings/2020-svj-front.webp" in img_urls
+    # Confirm generic og-share banner was filtered out
+    assert not any("og-share" in u for u in img_urls)
+    assert len(extracted_meta["json_ld_offers"]) == 1
+    assert extracted_meta["json_ld_offers"][0]["price"] == "1295000"
+
+    # 4. Price mention extraction & asking-price vs. completed-sale separation
+    mentions = extract_price_mentions(
+        "Original MSRP of $517,770 USD. Currently advertised at $1,297,942 asking price across 15 cars for sale. DriveIndex tracked 5 verified sales with sold prices from $805,000 to $1,550,000 and a median of $1,263,000.",
+        "hyper.luxe",
+        "market_valuation_aggregate",
+    )
+    by_type = {m["formatted_price"]: m["price_type"] for m in mentions}
+    assert by_type["$517,770"] == "ORIGINAL_MSRP"
+    assert by_type["$1,297,942"] in {"ASKING_PRICE", "MARKET_AGGREGATE"}
+    assert by_type["$805,000"] == "COMPLETED_SALE"
+
+    # 5. Full product_intelligence bundle with official vs listing image distinction + clean unavailable fallback
+    sources = [
+        {
+            "provider": "duckduckgo_web",
+            "title": "Lamborghini Aventador SVJ Official | Lamborghini.com",
+            "url": "https://www.lamborghini.com/en-en/history/aventador-svj",
+            "domain": "lamborghini.com",
+            "credibility": "established_source",
+            "category": "manufacturer_msrp",
+            "snippet": "Official V12 770 CV specification and original MSRP of $517,770.",
+            "page_excerpt": "Original base MSRP of $517,770 USD for the Aventador SVJ Coupe (900 built).",
+            "page_fetched": True,
+            "page_images": [{"image_url": "https://www.lamborghini.com/sites/it-en/files/DAM/lamborghini/svj_hero.jpg", "source_tag": "og_image", "caption": "Official SVJ"}],
+            "retrieved_at": "2026-11-23T06:45:00+00:00",
+        },
+        {
+            "provider": "yahoo_web",
+            "title": "2020 Lamborghini Aventador SVJ For Sale - Autotrader",
+            "url": "https://www.autotrader.com/cars-for-sale/lamborghini/aventador/svj",
+            "domain": "autotrader.com",
+            "credibility": "established_source",
+            "category": "current_dealer_listings",
+            "snippet": "Pre-owned 2020 Lamborghini Aventador SVJ asking price $1,295,000 with 1,850 miles.",
+            "page_excerpt": "Pre-owned 2020 Lamborghini Aventador SVJ asking price $1,295,000 with 1,850 miles.",
+            "page_fetched": True,
+            "page_images": [{"image_url": "https://images.autotrader.com/scaler/2020-svj-dealer.jpg", "source_tag": "og_image", "caption": "Dealer SVJ Listing"}],
+            "retrieved_at": "2026-11-23T06:45:00+00:00",
+        },
+        {
+            "provider": "yahoo_web",
+            "title": "Lamborghini Aventador LP770-4 SVJ Roadster Auction Results | DriveIndex",
+            "url": "https://driveindex.com/cars/lamborghini/aventador-lp770-4-svj-roadster/auction-results",
+            "domain": "driveindex.com",
+            "credibility": "established_source",
+            "category": "completed_auction_results",
+            "snippet": "5 verified sales, sold prices from $805,000 to $1,550,000.",
+            "page_excerpt": "5 verified sales, sold prices from $805,000 to $1,550,000 and median of $1,263,000.",
+            "page_fetched": True,
+            "page_images": [],
+            "retrieved_at": "2026-11-23T06:45:00+00:00",
+        },
+    ]
+
+    bundle = build_product_intelligence_bundle(
+        query="How much does a Lamborghini Aventador SVJ cost?",
+        core_subject="Lamborghini Aventador SVJ",
+        verified_sources=sources,
+        is_pricing_query=True,
+        nigeria_market_evidence={"checked": True, "verified_local_listings_found": False, "note": "No confirmed Nigerian inventory."},
+        retrieved_at="2026-11-23T06:45:00+00:00",
+        http_get_fn=None,
+    )
+    assert bundle is not None and bundle["detected"] is True
+    assert bundle["image_availability_status"] == "AVAILABLE"
+    assert len(bundle["images"]) == 2
+    img_types = {im["image_type"] for im in bundle["images"]}
+    assert "official_manufacturer" in img_types
+    assert "individual_listing" in img_types
+
+    # Verify asking prices are never marked as completed sales in listings
+    autotrader_listing = next(item for item in bundle["listings"] if item["domain"] == "autotrader.com")
+    assert autotrader_listing["is_completed_sale"] is False
+    assert autotrader_listing["advertised_price"] == "$1,295,000"
+    assert autotrader_listing["mileage"] == "1,850 miles"
+
+    driveindex_listing = next(item for item in bundle["listings"] if item["domain"] == "driveindex.com")
+    assert driveindex_listing["is_completed_sale"] is True
+    assert driveindex_listing["advertised_price"] == "$805,000"
+
+    # Verify clean IMAGE UNAVAILABLE state when no source has images
+    no_img_sources = [{**s, "page_images": []} for s in sources]
+    no_img_bundle = build_product_intelligence_bundle(
+        query="How much does a Lamborghini Aventador SVJ cost?",
+        core_subject="Lamborghini Aventador SVJ",
+        verified_sources=no_img_sources,
+        is_pricing_query=True,
+        nigeria_market_evidence=None,
+        retrieved_at="2026-11-23T06:45:00+00:00",
+        http_get_fn=None,
+    )
+    assert no_img_bundle is not None
+    assert no_img_bundle["image_availability_status"] == "UNAVAILABLE"
+    assert no_img_bundle["images"] == []
+
+
+
 

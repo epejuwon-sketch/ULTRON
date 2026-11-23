@@ -364,6 +364,7 @@ def invoke_agent_reasoning(
     )
 
     research_sources = (research_bundle or {}).get("verified_sources") or []
+    product_intelligence = (research_bundle or {}).get("product_intelligence")
 
     if llm_response is not None:
         provider_name = llm_response["provider"]
@@ -441,6 +442,7 @@ def invoke_agent_reasoning(
             "function_calls": llm_response.get("function_calls", []),
             "attached_files": attached_files,
             "research_sources": research_sources,
+            "product_intelligence": product_intelligence,
             "provenance": provenance,
             "failover_errors": failover_errors,
             "latency_ms": llm_response["latency_ms"],
@@ -539,6 +541,7 @@ def invoke_agent_reasoning(
         "structured_output": structured_fallback,
         "attached_files": attached_files,
         "research_sources": research_sources,
+        "product_intelligence": product_intelligence,
         "provenance": fallback_provenance,
         "failover_errors": failover_errors,
         "latency_ms": latency_ms,
@@ -560,6 +563,7 @@ def stream_neon_events(result: dict[str, Any]) -> Generator[str, None, None]:
         "reasoning_tier": result["reasoning_tier"],
         "provenance": result.get("provenance"),
         "research_sources": result.get("research_sources", []),
+        "product_intelligence": result.get("product_intelligence"),
         "attached_files": result.get("attached_files", []),
     }
     yield f"event: metadata\ndata: {json.dumps(meta)}\n\n"
@@ -724,6 +728,7 @@ def send_conversation_message(
         "fallback_used": reply.get("fallback_used"),
         "provenance": reply.get("provenance"),
         "research_sources": reply.get("research_sources", []),
+        "product_intelligence": reply.get("product_intelligence"),
         "attached_files": reply.get("attached_files", []),
         "failover_errors": reply.get("failover_errors", []),
     }
@@ -762,6 +767,7 @@ def send_conversation_message(
         "output": reply_text,
         "attached_files": reply.get("attached_files", []),
         "research_sources": reply.get("research_sources", []),
+        "product_intelligence": reply.get("product_intelligence"),
         "provenance": reply.get("provenance"),
         "secret_interception": {
             "secrets_vaulted": interception.secrets_vaulted,

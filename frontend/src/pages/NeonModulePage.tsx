@@ -37,6 +37,45 @@ import {
   SourcesList,
   TechnicalDiagnostics,
 } from "../components/ui/HumanPresentation";
+import {
+  ProductDiscoveryShowcase,
+  type ProductIntelligenceData,
+} from "../components/ui/ProductDiscoveryShowcase";
+
+function renderInlineLinksAndText(text: string) {
+  const tokens = text.split(/(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)]+)/g);
+  return tokens.map((tok, i) => {
+    const mdMatch = tok.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+    if (mdMatch) {
+      return (
+        <a
+          key={i}
+          href={mdMatch[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "var(--accent, #38bdf8)", textDecoration: "underline", fontWeight: 500 }}
+        >
+          {mdMatch[1]}
+        </a>
+      );
+    }
+    if (/^https?:\/\/[^\s)]+$/.test(tok)) {
+      const cleaned = tok.replace(/[.,;!?]+$/, "");
+      return (
+        <a
+          key={i}
+          href={cleaned}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: "var(--accent, #38bdf8)", textDecoration: "underline", wordBreak: "break-all" }}
+        >
+          {cleaned}
+        </a>
+      );
+    }
+    return <React.Fragment key={i}>{tok}</React.Fragment>;
+  });
+}
 
 function renderFormattedMessage(content: string, onCopy: (code: string) => void) {
   const parts = content.split(/(```[\s\S]*?```)/g);
@@ -60,7 +99,7 @@ function renderFormattedMessage(content: string, onCopy: (code: string) => void)
     }
     return (
       <div key={idx} style={{ whiteSpace: "pre-wrap", lineHeight: 1.55 }}>
-        {part}
+        {renderInlineLinksAndText(part)}
       </div>
     );
   });
@@ -89,6 +128,7 @@ export default function NeonModulePage({
       {
         provenance?: any;
         research_sources?: any[];
+        product_intelligence?: ProductIntelligenceData | null;
         attached_files?: any[];
         diagnostics?: any;
       }
@@ -174,10 +214,11 @@ export default function NeonModulePage({
       setMessageExtras((prev) => {
         const next = { ...prev };
         for (const m of loadedMsgs) {
-          if (m.role === "assistant" && (m.provenance || m.research_sources || m.execution_id)) {
+          if (m.role === "assistant" && (m.provenance || m.research_sources || m.product_intelligence || m.execution_id)) {
             next[m.message_id] = {
               provenance: m.provenance || next[m.message_id]?.provenance,
               research_sources: m.research_sources || next[m.message_id]?.research_sources || [],
+              product_intelligence: m.product_intelligence || next[m.message_id]?.product_intelligence || null,
               attached_files: m.attached_files || next[m.message_id]?.attached_files || [],
               diagnostics: {
                 execution_id: m.execution_id,
@@ -189,6 +230,7 @@ export default function NeonModulePage({
                 provenance: m.provenance,
                 attached_files: m.attached_files,
                 research_sources: m.research_sources,
+                product_intelligence: m.product_intelligence,
                 failover_errors: m.failover_errors,
               },
             };
@@ -442,6 +484,7 @@ export default function NeonModulePage({
               [aId]: {
                 provenance: meta.provenance,
                 research_sources: meta.research_sources,
+                product_intelligence: meta.product_intelligence,
                 attached_files: meta.attached_files,
                 diagnostics: meta,
               },
@@ -498,6 +541,7 @@ export default function NeonModulePage({
             [assistantId]: {
               provenance: res.provenance || replyData.provenance,
               research_sources: res.research_sources || replyData.research_sources || [],
+              product_intelligence: res.product_intelligence || replyData.product_intelligence || null,
               attached_files: res.attached_files || replyData.attached_files || [],
               diagnostics: {
                 execution_id: replyData.execution_id,
@@ -510,6 +554,7 @@ export default function NeonModulePage({
                 provenance: res.provenance || replyData.provenance,
                 attached_files: res.attached_files || replyData.attached_files,
                 research_sources: res.research_sources || replyData.research_sources,
+                product_intelligence: res.product_intelligence || replyData.product_intelligence,
                 failover_errors: replyData.failover_errors,
               },
             },
@@ -700,6 +745,7 @@ export default function NeonModulePage({
                       }
                     : rawProv;
                 const displaySources = extra?.research_sources || m.research_sources || [];
+                const displayProductIntel = extra?.product_intelligence || m.product_intelligence || null;
                 const displayAttachments = extra?.attached_files || m.attached_files || [];
                 return (
                   <div key={m.message_id} className={`neon-bubble ${m.role === "user" ? "neon-user" : "neon-assistant"}`}>
@@ -742,8 +788,18 @@ export default function NeonModulePage({
                         )}
                       </div>
                     </div>
+                    {m.role === "assistant" && displayProductIntel?.detected && (
+                      <ProductDiscoveryShowcase data={displayProductIntel} />
+                    )}
                     {hasVisibleBody ? (
-                      renderFormattedMessage(rawBody, handleCopyCode)
+                      <div>
+                        {m.role === "assistant" && displayProductIntel?.detected && (
+                          <div className="eyebrow-mono" style={{ marginBottom: 6, color: "var(--accent, #38bdf8)" }}>
+                            NEON INTELLIGENCE SYNTHESIS &amp; VALUATION ANALYSIS
+                          </div>
+                        )}
+                        {renderFormattedMessage(rawBody, handleCopyCode)}
+                      </div>
                     ) : (
                       <div className="alert-box alert-warn" style={{ marginTop: 4 }}>
                         <strong>Response Body Unavailable:</strong> Model <code className="mono">{m.model || "Gemini"}</code> completed execution without returning visible answer text (possible thinking-token budget exhaustion on earlier execution). Send a new message to retry with the expanded 4096-token output budget and automatic fallback guard.

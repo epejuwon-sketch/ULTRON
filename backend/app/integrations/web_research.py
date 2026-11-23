@@ -1518,6 +1518,8 @@ class WebResearchClient:
                     src["page_excerpt"] = evidence
                     src["page_fetched"] = True
                     src["retrieved_at"] = page_data.get("retrieved_at") or src["retrieved_at"]
+                    src["page_images"] = page_data.get("page_images") or []
+                    src["json_ld_offers"] = page_data.get("json_ld_offers") or []
                     src["category"] = classify_market_source_category(
                         dom, src.get("title", ""), f"{src.get('snippet', '')} {evidence}"
                     )
@@ -1526,6 +1528,9 @@ class WebResearchClient:
                     prov_key = src.get("provider") or ""
                     if prov_key in _PROVIDER_DIAGNOSTICS:
                         _PROVIDER_DIAGNOSTICS[prov_key]["pages_extracted"] = pages_fetched_count
+                elif page_data.get("page_images"):
+                    src["page_images"] = page_data.get("page_images") or []
+                    src["json_ld_offers"] = page_data.get("json_ld_offers") or []
 
         # Build structured market evidence summary for pricing queries
         nigeria_sources = [
@@ -1555,6 +1560,29 @@ class WebResearchClient:
             )
         ]
 
+        nigeria_market_evidence = {
+            "checked": bool(is_pricing_query or "nigeria" in lowered_q),
+            "verified_local_listings_found": bool(verified_nigeria_matches),
+            "candidate_sources_inspected": len(nigeria_sources),
+            "note": (
+                f"Verified local Nigerian dealer/marketplace listings found ({len(verified_nigeria_matches)} matching source(s))."
+                if verified_nigeria_matches
+                else "No confirmed active Nigerian dealer listings or verified completed sales were found for this specific model in the live retrieval; third-party directory figures in NGN are unverified currency-conversion estimates rather than confirmed local inventory."
+            ),
+        }
+
+        from app.services.product_intelligence import build_product_intelligence_bundle
+
+        product_intelligence = build_product_intelligence_bundle(
+            query=query,
+            core_subject=core_subject,
+            verified_sources=top_sources,
+            is_pricing_query=is_pricing_query,
+            nigeria_market_evidence=nigeria_market_evidence,
+            retrieved_at=retrieved_at,
+            http_get_fn=self._get if self._client is None else None,
+        )
+
         distinct_domains = sorted({s.get("domain", "") for s in top_sources if s.get("domain")})
         total_duration_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
 
@@ -1567,18 +1595,10 @@ class WebResearchClient:
             "cache_status": "live",
             "providers_queried": providers_queried,
             "verified_sources": top_sources,
+            "product_intelligence": product_intelligence,
             "independent_domains_count": len(distinct_domains),
             "pages_fetched_count": pages_fetched_count,
-            "nigeria_market_evidence": {
-                "checked": bool(is_pricing_query or "nigeria" in lowered_q),
-                "verified_local_listings_found": bool(verified_nigeria_matches),
-                "candidate_sources_inspected": len(nigeria_sources),
-                "note": (
-                    f"Verified local Nigerian dealer/marketplace listings found ({len(verified_nigeria_matches)} matching source(s))."
-                    if verified_nigeria_matches
-                    else "No confirmed active Nigerian dealer listings or verified completed sales were found for this specific model in the live retrieval; third-party directory figures in NGN are unverified currency-conversion estimates rather than confirmed local inventory."
-                ),
-            },
+            "nigeria_market_evidence": nigeria_market_evidence,
             "provider_errors": provider_errors,
             "attempt_diagnostics": attempt_log,
             "page_fetch_diagnostics": page_fetch_log,
@@ -1619,7 +1639,9 @@ class WebResearchClient:
         return result_bundle
 
     def fetch_and_extract(self, url: str, *, max_chars: int = 4000) -> dict[str, Any]:
-        """SSRF-protected public webpage retrieval and visible text extraction."""
+        """SSRF-protected public webpage retrieval, visible text extraction, and real product image / JSON-LD extraction."""
+        from app.services.product_intelligence import extract_page_images_and_metadata
+
         try:
             safe_url = validate_outbound_url(url)
         except Exception as exc:
@@ -1639,11 +1661,16 @@ class WebResearchClient:
                 "retrieved_at": datetime.now(timezone.utc).isoformat(),
             }
         content_type = resp.headers.get("content-type", "")
+        page_images: list[dict[str, str]] = []
+        json_ld_offers: list[dict[str, Any]] = []
         if "html" in content_type.lower() or "<html" in resp.text[:500].lower():
             parser = _VisibleTextExtractor()
             parser.feed(resp.text)
             title = parser.title
             text = parser.extracted_text(max_chars=max_chars)
+            media_meta = extract_page_images_and_metadata(resp.text, safe_url)
+            page_images = media_meta.get("images") or []
+            json_ld_offers = media_meta.get("json_ld_offers") or []
         else:
             title = ""
             text = resp.text[:max_chars]
@@ -1656,6 +1683,8 @@ class WebResearchClient:
             "content_type": content_type,
             "title": title,
             "extracted_text": text,
+            "page_images": page_images,
+            "json_ld_offers": json_ld_offers,
             "retrieved_at": datetime.now(timezone.utc).isoformat(),
         }
 
