@@ -255,6 +255,7 @@ def complete_oauth_callback(
     provider: str,
     code: str,
     state: str,
+    redirect_uri: str | None = None,
     settings: Settings,
     http_client: httpx.Client | None = None,
 ) -> dict[str, Any]:
@@ -270,6 +271,9 @@ def complete_oauth_callback(
     ).scalar_one_or_none()
     if st is None or st.consumed:
         raise ConflictError("Invalid or already consumed OAuth state token.")
+
+    if redirect_uri is not None and redirect_uri.strip() != st.redirect_uri:
+        raise ConflictError("OAuth redirect_uri does not match the authorization session.")
 
     now = datetime.now(timezone.utc)
     exp = st.expires_at if st.expires_at.tzinfo else st.expires_at.replace(tzinfo=timezone.utc)

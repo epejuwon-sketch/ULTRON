@@ -257,29 +257,6 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
     }
   }
 
-  // Handle OAuth 2.0 callback query params (?code=...&state=...)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-    const state = params.get("state");
-    const provider = params.get("provider") || sessionStorage.getItem(PENDING_OAUTH_KEY);
-    if (code && state && provider) {
-      apiFetch(`/api/v1/integrations/oauth/${provider}/callback`, {
-        method: "POST",
-        body: { code, state },
-      })
-        .then(() => {
-          sessionStorage.removeItem(PENDING_OAUTH_KEY);
-          window.history.replaceState({}, document.title, window.location.pathname);
-          pushToast(`OAuth 2.0 authorization completed for ${provider}.`, "success");
-          load();
-        })
-        .catch((e) => {
-          pushToast(`OAuth callback failed: ${e.message}`, "error");
-        });
-    }
-  }, []);
-
   useEffect(() => {
     load();
   }, [subPage]);
@@ -324,10 +301,10 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
   async function handleStartOAuth(entry: IntegrationCatalogEntry) {
     if (!entry.backendProviderKey) return;
     try {
-      sessionStorage.setItem(PENDING_OAUTH_KEY, entry.backendProviderKey);
+      sessionStorage.setItem("ultron_pending_oauth_provider", entry.backendProviderKey);
       const res = await apiFetch<any>(`/api/v1/integrations/oauth/${entry.backendProviderKey}/start`, {
         method: "POST",
-        body: { redirect_uri: `${window.location.origin}/connections/oauth?provider=${entry.backendProviderKey}` },
+        body: { redirect_uri: `${window.location.origin}/oauth/callback` },
       });
       setProbeResult(res);
       setOauthAuthUrl(res.authorization_url || "");

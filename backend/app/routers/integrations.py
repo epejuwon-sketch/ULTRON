@@ -42,6 +42,7 @@ class OAuthStartRequest(BaseModel):
 class OAuthCallbackRequest(BaseModel):
     code: str = Field(min_length=2)
     state: str = Field(min_length=8)
+    redirect_uri: str | None = None
 
 
 @router.get("/connections")
@@ -115,6 +116,7 @@ def api_oauth_callback(
         provider=provider,
         code=body.code,
         state=body.state,
+        redirect_uri=body.redirect_uri,
         settings=settings,
     )
 

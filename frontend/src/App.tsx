@@ -110,6 +110,37 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.pathname === "/oauth/callback") {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      const state = params.get("state");
+      const provider = params.get("provider") || sessionStorage.getItem("ultron_pending_oauth_provider");
+      window.history.replaceState({}, document.title, "/command/integrations");
+      if (code && state && provider) {
+        apiFetch(`/api/v1/integrations/oauth/${encodeURIComponent(provider)}/callback`, {
+          method: "POST",
+          body: {
+            code,
+            state,
+            redirect_uri: `${window.location.origin}/oauth/callback`,
+          },
+        })
+          .then(() => {
+            sessionStorage.removeItem("ultron_pending_oauth_provider");
+            navigate("command", "integrations", { replace: true });
+          })
+          .catch(() => {
+            sessionStorage.removeItem("ultron_pending_oauth_provider");
+            navigate("command", "integrations", { replace: true });
+          });
+      } else {
+        navigate("command", "integrations", { replace: true });
+      }
+    }
+  }, [navigate]);
+
+  useEffect(() => {
     const onPopState = () => {
       const next = parseRouteFromPathname(window.location.pathname);
       setActiveModule(next.moduleId);

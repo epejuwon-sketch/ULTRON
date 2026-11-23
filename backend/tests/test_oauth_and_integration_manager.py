@@ -133,3 +133,111 @@ def test_antigravity_adapter_reports_honestly(client: TestClient, auth_headers: 
     api_resp = client.get("/api/v1/integrations/antigravity", headers=auth_headers["owner"])
     assert api_resp.status_code == 200
     assert "connected_plugin_adapters" in api_resp.json()
+
+
+def test_oauth_redirect_uri_consistency_user_isolation_and_replay(client: TestClient) -> None:
+    import pytest
+    from app.core.exceptions import ConflictError, ValidationError
+
+    cfg = Settings(
+        google_oauth_client_id="google-client-id-test",
+        google_oauth_client_secret="google-client-secret-test",
+    )
+    owner = Principal(
+        user_id="usr_owner_1",
+        username="owner",
+        role=Role.OWNER,
+        tenant_id="TENANT-ULTRON-01",
+        jti="jti_1",
+    )
+    other_user_same_tenant = Principal(
+        user_id="usr_admin_2",
+        username="admin2",
+        role=Role.ADMIN,
+        tenant_id="TENANT-ULTRON-01",
+        jti="jti_2",
+    )
+
+    def oauth_handler(req: httpx.Request) -> httpx.Response:
+        if "oauth2.googleapis.com/token" in str(req.url):
+            return httpx.Response(200, json={"access_token": "ya29_test", "refresh_token": "1//rt", "expires_in": 3600})
+        if "googleapis.com/oauth2/v2/userinfo" in str(req.url):
+            return httpx.Response(200, json={"email": "owner@ultron.ai"})
+        if "googleapis.com/drive/v3/about" in str(req.url):
+            return httpx.Response(200, json={"user": {"displayName": "ULTRON Owner"}})
+        return httpx.Response(404)
+
+    http = httpx.Client(transport=httpx.MockTransport(oauth_handler))
+    with get_session_factory()() as db:
+        # 1. Reject non-canonical redirect_uri
+        with pytest.raises(ValidationError):
+            start_oauth_flow(
+                db,
+                principal=owner,
+                provider="google_drive",
+                redirect_uri="https://evil.example.com/steal",
+                settings=cfg,
+            )
+
+        # 2. Start with canonical /oauth/callback
+        canonical_uri = "http://localhost:5173/oauth/callback"
+        started = start_oauth_flow(
+            db,
+            principal=owner,
+            provider="google_drive",
+            redirect_uri=canonical_uri,
+            settings=cfg,
+        )
+
+        # 3. Reject wrong-user callback in same tenant
+        with pytest.raises(ConflictError):
+            complete_oauth_callback(
+                db,
+                principal=other_user_same_tenant,
+                provider="google_drive",
+                code="auth-code-xyz",
+                state=started["state"],
+                redirect_uri=canonical_uri,
+                settings=cfg,
+                http_client=http,
+            )
+
+        # 4. Reject mismatched redirect_uri
+        with pytest.raises(ConflictError):
+            complete_oauth_callback(
+                db,
+                principal=owner,
+                provider="google_drive",
+                code="auth-code-xyz",
+                state=started["state"],
+                redirect_uri="https://other.example.com/oauth/callback",
+                settings=cfg,
+                http_client=http,
+            )
+
+        # 5. Exact user + exact redirect_uri succeeds
+        ok = complete_oauth_callback(
+            db,
+            principal=owner,
+            provider="google_drive",
+            code="auth-code-xyz",
+            state=started["state"],
+            redirect_uri=canonical_uri,
+            settings=cfg,
+            http_client=http,
+        )
+        assert ok["live_verified"] is True
+
+        # 6. Replay with same state is rejected
+        with pytest.raises(ConflictError):
+            complete_oauth_callback(
+                db,
+                principal=owner,
+                provider="google_drive",
+                code="auth-code-xyz",
+                state=started["state"],
+                redirect_uri=canonical_uri,
+                settings=cfg,
+                http_client=http,
+            )
+

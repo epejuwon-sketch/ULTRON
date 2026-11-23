@@ -23,7 +23,7 @@ import {
 import { DataTable, Drawer, MetricDisplay, StatusIndicator, useToast } from "../ui/DesignSystem";
 import { UniversalConnectPanel } from "./UniversalConnectPanel";
 
-const PENDING_OAUTH_KEY = "ultron_cmd_pending_oauth_provider";
+const PENDING_OAUTH_KEY = "ultron_pending_oauth_provider";
 
 type HubLifecycle =
   | "Live Verified"
@@ -124,34 +124,6 @@ export function UniversalIntegrationHub() {
     }
   }
 
-  // Handle OAuth 2.0 callback (?code=...&state=...) returned to Command Centre
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
-    const state = params.get("state");
-    const provider = params.get("provider") || sessionStorage.getItem(PENDING_OAUTH_KEY);
-    if (code && state && provider) {
-      setAwaitingAuth(provider);
-      apiFetch<any>(`/api/v1/integrations/oauth/${encodeURIComponent(provider)}/callback`, {
-        method: "POST",
-        body: { code, state },
-      })
-        .then((res) => {
-          sessionStorage.removeItem(PENDING_OAUTH_KEY);
-          window.history.replaceState({}, document.title, window.location.pathname);
-          pushToast(
-            `${provider} authorized${res.account_label ? ` (${res.account_label})` : ""} — status: ${res.status}.`,
-            "success"
-          );
-          loadAll();
-        })
-        .catch((err) => {
-          pushToast(`OAuth callback failed for ${provider}: ${err.message}`, "error");
-        })
-        .finally(() => setAwaitingAuth(null));
-    }
-  }, []);
-
   useEffect(() => {
     loadAll();
   }, []);
@@ -222,7 +194,7 @@ export function UniversalIntegrationHub() {
         method: "POST",
         body: {
           scopes: entry.permissions,
-          redirect_uri: `${window.location.origin}${window.location.pathname}`,
+          redirect_uri: `${window.location.origin}/oauth/callback`,
         },
       });
       sessionStorage.setItem(PENDING_OAUTH_KEY, entry.backendProviderKey);

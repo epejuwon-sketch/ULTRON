@@ -151,6 +151,11 @@ def build_authorization_url(
         raise ValidationError(f"Unsupported OAuth provider '{provider}'.")
     cid, _csec, default_redirect = get_oauth_client_credentials(provider, settings)
     effective_redirect = (redirect_uri or default_redirect).strip()
+    from urllib.parse import urlparse
+
+    parsed_r = urlparse(effective_redirect)
+    if parsed_r.scheme not in {"http", "https"} or not parsed_r.netloc or parsed_r.path != "/oauth/callback" or parsed_r.query or parsed_r.fragment:
+        raise ValidationError("OAuth redirect_uri must be a valid HTTP(S) URL ending in '/oauth/callback' with no query or fragment.")
     effective_scopes = scopes if scopes else list(spec.default_scopes)
 
     params: dict[str, str] = {
