@@ -86,6 +86,30 @@ SUPPORTED_MANAGED_PROVIDERS: dict[str, dict[str, Any]] = {
             "argon_orchestration",
         ],
     },
+    "openai": {"auth_types": ["API_KEY"], "capabilities": ["models", "chat_completions", "embeddings"]},
+    "anthropic": {"auth_types": ["API_KEY"], "capabilities": ["models", "messages"]},
+    "ollama": {"auth_types": ["API_KEY"], "capabilities": ["local_models", "inference"]},
+    "gitlab": {"auth_types": ["PAT", "API_KEY"], "capabilities": ["repos", "merge_requests", "issues", "pipelines"]},
+    "bitbucket": {"auth_types": ["PAT", "API_KEY"], "capabilities": ["repos", "pull_requests", "commits"]},
+    "whatsapp": {"auth_types": ["API_KEY"], "capabilities": ["send_message_requires_approval", "webhook_receive"]},
+    "email_smtp": {"auth_types": ["API_KEY"], "capabilities": ["drafts", "send_requires_approval"]},
+    "telegram": {"auth_types": ["API_KEY"], "capabilities": ["bot_updates", "send_message_requires_approval"]},
+    "slack": {"auth_types": ["API_KEY", "OAUTH2"], "capabilities": ["channels", "post_message_requires_approval"]},
+    "discord": {"auth_types": ["API_KEY"], "capabilities": ["guilds", "send_message_requires_approval"]},
+    "notion": {"auth_types": ["API_KEY"], "capabilities": ["search", "pages", "databases"]},
+    "linear": {"auth_types": ["API_KEY"], "capabilities": ["issues", "projects", "cycles"]},
+    "trello": {"auth_types": ["API_KEY"], "capabilities": ["boards", "lists", "cards"]},
+    "asana": {"auth_types": ["PAT", "API_KEY"], "capabilities": ["workspaces", "projects", "tasks"]},
+    "jira": {"auth_types": ["API_KEY"], "capabilities": ["projects", "issues", "search"]},
+    "postgresql": {"auth_types": ["API_KEY"], "capabilities": ["sql_query", "rls", "migrations"]},
+    "redis": {"auth_types": ["API_KEY"], "capabilities": ["rate_limiting", "cache"]},
+    "stripe": {"auth_types": ["API_KEY"], "capabilities": ["balance_read", "checkout_requires_approval"]},
+    "paystack": {"auth_types": ["API_KEY"], "capabilities": ["banks_read", "checkout_requires_approval"]},
+    "spotify": {"auth_types": ["API_KEY", "OAUTH2"], "capabilities": ["profile_read", "playback_control"]},
+    "image_gen": {"auth_types": ["API_KEY"], "capabilities": ["image_generation"]},
+    "webhooks": {"auth_types": ["WEBHOOK"], "capabilities": ["hmac_sha256", "delivery_logs"]},
+    "rest_apis": {"auth_types": ["API_KEY"], "capabilities": ["ssrf_guarded_http"]},
+    "mcp": {"auth_types": ["API_KEY"], "capabilities": ["stdio_allowlisted", "streamable_http"]},
 }
 
 
@@ -694,7 +718,23 @@ def verify_provider_live(
     elif p == "google_cloud":
         st = GoogleCloudAPI(token, http_client=http_client).verify_live()
     else:
-        raise ValidationError(f"No live verifier registered for '{p}'.")
+        from app.integrations.ecosystem_adapters import verify_ecosystem_provider
+
+        rec_creds = db.execute(
+            select(IntegrationConnectionRecord).where(
+                IntegrationConnectionRecord.tenant_id == principal.tenant_id,
+                IntegrationConnectionRecord.provider == p,
+                IntegrationConnectionRecord.disconnected_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        creds_dict = _decrypt_credentials(rec_creds, settings) if rec_creds is not None else {}
+        st = verify_ecosystem_provider(
+            provider=p,
+            creds=creds_dict,
+            env_token=token,
+            settings=settings,
+            http_client=http_client,
+        )
 
     now = datetime.now(timezone.utc)
     rec = db.execute(
