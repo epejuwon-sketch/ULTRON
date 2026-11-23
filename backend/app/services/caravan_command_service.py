@@ -10,11 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import AuthorizationError, NotFoundError
+from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
 from app.core.permissions import Principal, Role
 from app.db.models import (
     ApprovalRecord,
     AuditLogRecord,
+    BackgroundJobRecord,
     CaravanApplicationRecord,
     CaravanCustomerAccountRecord,
     CaravanEligibilityAssessmentRecord,
@@ -25,6 +26,7 @@ from app.db.models import (
     CaravanSubscriptionRecord,
     CaravanSupportTicketRecord,
     IntegrationConnectionRecord,
+    ScheduledJobRecord,
 )
 from app.db.repositories import append_audit_log
 from app.services.caravan_product_service import _compute_freshness_status, _serialize_opportunity, _serialize_source
@@ -304,4 +306,149 @@ def get_caravan_command_centre(
             "operational_alerts": operational_alerts,
         },
         "activity_timeline": caravan_audits[:50],
+        "scheduled_discovery": _build_scheduled_discovery_status(db, tenant_id=tid, sources=sources),
     }
+
+
+def _build_scheduled_discovery_status(
+    db: Session,
+    *,
+    tenant_id: str,
+    sources: list[CaravanFundingSourceRecord],
+) -> dict[str, Any]:
+    sched = db.execute(
+        select(ScheduledJobRecord).where(
+            ScheduledJobRecord.tenant_id == tenant_id,
+            ScheduledJobRecord.job_type == "CARAVAN_DISCOVERY_SWEEP",
+        )
+    ).scalar_one_or_none()
+    jobs = db.execute(
+        select(BackgroundJobRecord)
+        .where(
+            BackgroundJobRecord.tenant_id == tenant_id,
+            BackgroundJobRecord.job_type == "CARAVAN_DISCOVERY_SWEEP",
+        )
+        .order_by(BackgroundJobRecord.created_at.desc())
+        .limit(10)
+    ).scalars().all()
+    active_jobs = [j for j in jobs if j.status in {"QUEUED", "RETRYING", "RUNNING"}]
+    sources_awaiting = sum(1 for s in sources if s.status != "DISABLED" and s.last_synced_at is None)
+    return {
+        "configured": sched is not None,
+        "schedule_id": sched.schedule_id if sched else None,
+        "enabled": bool(sched.enabled) if sched else False,
+        "interval_seconds": sched.interval_seconds if sched else 3600,
+        "last_run_at": sched.last_run_at.isoformat() if (sched and sched.last_run_at) else None,
+        "next_run_at": sched.next_run_at.isoformat() if (sched and sched.next_run_at) else None,
+        "sources_awaiting_discovery": sources_awaiting,
+        "active_jobs_count": len(active_jobs),
+        "recent_jobs": [
+            {
+                "job_id": j.job_id,
+                "status": j.status,
+                "attempts": j.attempts,
+                "error_detail": j.error_detail,
+                "created_at": j.created_at.isoformat(),
+                "updated_at": j.updated_at.isoformat(),
+            }
+            for j in jobs
+        ],
+    }
+
+
+def configure_caravan_discovery_schedule(
+    db: Session,
+    *,
+    principal: Principal,
+    enabled: bool,
+    interval_seconds: int = 3600,
+) -> dict[str, Any]:
+    """Create, pause, or resume the recurring CARAVAN_DISCOVERY_SWEEP schedule (OWNER/ADMIN only)."""
+    import uuid
+
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may manage discovery schedules.")
+    interval = max(300, min(604800, int(interval_seconds)))
+    now = _utcnow()
+    sched = db.execute(
+        select(ScheduledJobRecord).where(
+            ScheduledJobRecord.tenant_id == principal.tenant_id,
+            ScheduledJobRecord.job_type == "CARAVAN_DISCOVERY_SWEEP",
+        )
+    ).scalar_one_or_none()
+    if sched is None:
+        sched = ScheduledJobRecord(
+            schedule_id=f"sch_{uuid.uuid4().hex[:14]}",
+            tenant_id=principal.tenant_id,
+            name="Caravan Nigeria-First Funding Discovery",
+            job_type="CARAVAN_DISCOVERY_SWEEP",
+            payload_json="{}",
+            interval_seconds=interval,
+            enabled=enabled,
+            next_run_at=now + timedelta(seconds=interval),
+            created_by=principal.username,
+        )
+        db.add(sched)
+    else:
+        sched.enabled = enabled
+        sched.interval_seconds = interval
+        if enabled:
+            sched.next_run_at = now + timedelta(seconds=interval)
+
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CARAVAN_DISCOVERY_SCHEDULE_UPDATED",
+        resource=sched.schedule_id,
+        outcome=f"enabled={enabled}|interval={interval}",
+    )
+    db.commit()
+    db.refresh(sched)
+    return {
+        "schedule_id": sched.schedule_id,
+        "enabled": bool(sched.enabled),
+        "interval_seconds": sched.interval_seconds,
+        "next_run_at": sched.next_run_at.isoformat() if sched.next_run_at else None,
+        "last_run_at": sched.last_run_at.isoformat() if sched.last_run_at else None,
+    }
+
+
+def trigger_caravan_discovery_now(
+    db: Session,
+    *,
+    principal: Principal,
+) -> dict[str, Any]:
+    """Enqueue a non-overlapping CARAVAN_DISCOVERY_SWEEP job (OWNER/ADMIN only)."""
+    from app.services.job_scheduler import enqueue_background_job
+
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may trigger discovery sweeps.")
+    active = db.execute(
+        select(BackgroundJobRecord).where(
+            BackgroundJobRecord.tenant_id == principal.tenant_id,
+            BackgroundJobRecord.job_type == "CARAVAN_DISCOVERY_SWEEP",
+            BackgroundJobRecord.status.in_(["QUEUED", "RETRYING", "RUNNING"]),
+        )
+    ).scalars().first()
+    if active is not None:
+        raise ConflictError(f"A Caravan discovery sweep job ({active.job_id}) is already active.")
+
+    job = enqueue_background_job(
+        db,
+        tenant_id=principal.tenant_id,
+        job_type="CARAVAN_DISCOVERY_SWEEP",
+        payload={"triggered_by": principal.username},
+        max_attempts=3,
+    )
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CARAVAN_DISCOVERY_TRIGGERED",
+        resource=job["job_id"],
+        outcome="QUEUED",
+    )
+    db.commit()
+    return job
+

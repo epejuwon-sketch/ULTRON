@@ -617,3 +617,53 @@ def api_toggle_caravan_source(
     return toggle_funding_source_status(db, principal=principal, source_id=source_id, enabled=body.enabled)
 
 
+@router.get("/discovery/nigeria-directory")
+def api_nigeria_funding_directory(
+    _principal: Principal = Depends(require_perm("caravan:read")),
+) -> dict:
+    from app.services.caravan_discovery_service import NIGERIA_FUNDING_DIRECTORY
+
+    return {"total": len(NIGERIA_FUNDING_DIRECTORY), "sources": NIGERIA_FUNDING_DIRECTORY}
+
+
+@router.post("/discovery/nigeria-directory/seed")
+def api_seed_nigeria_funding_directory(
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_discovery_service import seed_nigeria_funding_directory
+
+    return seed_nigeria_funding_directory(db, principal=principal)
+
+
+class DiscoveryScheduleRequest(BaseModel):
+    enabled: bool = True
+    interval_seconds: int = Field(default=3600, ge=300, le=604800)
+
+
+@router.post("/command-centre/schedule")
+def api_configure_caravan_discovery_schedule(
+    body: DiscoveryScheduleRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_command_service import configure_caravan_discovery_schedule
+
+    return configure_caravan_discovery_schedule(
+        db,
+        principal=principal,
+        enabled=body.enabled,
+        interval_seconds=body.interval_seconds,
+    )
+
+
+@router.post("/command-centre/trigger-discovery")
+def api_trigger_caravan_discovery(
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_command_service import trigger_caravan_discovery_now
+
+    return trigger_caravan_discovery_now(db, principal=principal)
+
+

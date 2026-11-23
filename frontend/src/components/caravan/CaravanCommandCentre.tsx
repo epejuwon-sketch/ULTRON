@@ -222,6 +222,84 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+
+        {/* Scheduled Discovery & Nigeria Source Directory Controls */}
+        <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+            <strong style={{ fontSize: 13 }}>
+              Scheduled ARGON Discovery ({data?.scheduled_discovery?.enabled ? "ACTIVE" : "PAUSED"})
+            </strong>
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const res = await apiFetch<any>("/api/v1/caravan/discovery/nigeria-directory/seed", { method: "POST" });
+                    pushToast(`Nigeria directory: ${res.added_count} added (${res.skipped_count} already registered).`, "success");
+                    await loadCommandCentre();
+                  } catch (err: any) {
+                    pushToast(err.message, "error");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Load Nigeria Official Sources
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={busy}
+                onClick={async () => {
+                  const nextEnabled = !Boolean(data?.scheduled_discovery?.enabled);
+                  setBusy(true);
+                  try {
+                    await apiFetch("/api/v1/caravan/command-centre/schedule", {
+                      method: "POST",
+                      body: { enabled: nextEnabled, interval_seconds: data?.scheduled_discovery?.interval_seconds || 3600 },
+                    });
+                    pushToast(`Scheduled discovery ${nextEnabled ? "resumed" : "paused"}.`, "info");
+                    await loadCommandCentre();
+                  } catch (err: any) {
+                    pushToast(err.message, "error");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {data?.scheduled_discovery?.enabled ? "Pause Schedule" : "Resume Schedule"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const res = await apiFetch<any>("/api/v1/caravan/command-centre/trigger-discovery", { method: "POST" });
+                    pushToast(`ARGON discovery sweep queued (${res.job_id}).`, "success");
+                    await loadCommandCentre();
+                  } catch (err: any) {
+                    pushToast(err.message, "error");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Trigger Discovery Now
+              </button>
+            </div>
+          </div>
+          <div className="muted mono" style={{ fontSize: 11 }}>
+            Next Run: {data?.scheduled_discovery?.next_run_at || "Not scheduled"} · Last Run:{" "}
+            {data?.scheduled_discovery?.last_run_at || "Never"} · Awaiting Discovery:{" "}
+            {data?.scheduled_discovery?.sources_awaiting_discovery ?? 0} · Active Jobs:{" "}
+            {data?.scheduled_discovery?.active_jobs_count ?? 0}
+          </div>
+        </div>
       </div>
 
       {/* Source Management */}

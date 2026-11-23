@@ -291,6 +291,10 @@ def process_due_jobs(db: Session, *, settings: Settings, max_jobs: int = 10) -> 
             elif job.job_type == "PRUNE_MEMORY":
                 removed = prune_expired_memories(db, principal=worker_principal)
                 result = {"pruned_count": removed}
+            elif job.job_type == "CARAVAN_DISCOVERY_SWEEP":
+                from app.services.caravan_discovery_service import run_caravan_discovery_sweep
+
+                result = run_caravan_discovery_sweep(db, principal=worker_principal)
             elif job.job_type == "FAIL_TEST_JOB":
                 raise RuntimeError(str(payload.get("reason", "Simulated worker failure for DLQ testing")))
             else:

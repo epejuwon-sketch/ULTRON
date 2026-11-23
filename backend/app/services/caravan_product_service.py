@@ -1093,7 +1093,7 @@ def verify_funding_source_via_argon(
     except Exception as exc:
         detail = f"Network error: {type(exc).__name__}"
 
-    src.last_checked_at = now
+    src.last_synced_at = now
     src.status = "ACTIVE" if reachable else "DEGRADED"
     append_audit_log(
         db,

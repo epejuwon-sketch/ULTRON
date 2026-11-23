@@ -346,7 +346,7 @@ def run_argon_source_ingestion(
         seen_pairs.add(pair)
         created_ids.append(opp_id)
 
-    src.last_checked_at = _utcnow()
+    src.last_synced_at = _utcnow()
     src.status = "ACTIVE"
     append_audit_log(
         db,
@@ -460,3 +460,142 @@ def review_discovered_opportunity(
     from app.services.caravan_product_service import _serialize_opportunity
 
     return _serialize_opportunity(rec)
+
+
+NIGERIA_FUNDING_DIRECTORY: list[dict[str, Any]] = [
+    {
+        "name": "Bank of Industry (BOI) Nigeria",
+        "source_type": "OFFICIAL_REGISTRY",
+        "base_url": "https://www.boi.ng/",
+        "country": "Nigeria",
+        "categories": ["LOAN", "GRANT"],
+    },
+    {
+        "name": "Tony Elumelu Foundation (TEF)",
+        "source_type": "PUBLIC_PORTAL",
+        "base_url": "https://www.tonyelumelufoundation.org/",
+        "country": "Nigeria",
+        "categories": ["GRANT", "ACCELERATOR"],
+    },
+    {
+        "name": "NITDA Nigeria",
+        "source_type": "OFFICIAL_REGISTRY",
+        "base_url": "https://nitda.gov.ng/",
+        "country": "Nigeria",
+        "categories": ["GRANT", "SCHOLARSHIP", "COMPETITION"],
+    },
+    {
+        "name": "Lagos State Employment Trust Fund (LSETF)",
+        "source_type": "OFFICIAL_REGISTRY",
+        "base_url": "https://lsetf.ng/",
+        "country": "Nigeria",
+        "categories": ["LOAN", "GRANT"],
+    },
+    {
+        "name": "SMEDAN Nigeria",
+        "source_type": "OFFICIAL_REGISTRY",
+        "base_url": "https://smedan.gov.ng/",
+        "country": "Nigeria",
+        "categories": ["GRANT", "LOAN"],
+    },
+    {
+        "name": "TETFund Nigeria",
+        "source_type": "OFFICIAL_REGISTRY",
+        "base_url": "https://tetfund.gov.ng/",
+        "country": "Nigeria",
+        "categories": ["SCHOLARSHIP", "GRANT"],
+    },
+    {
+        "name": "Development Bank of Nigeria (DBN)",
+        "source_type": "OFFICIAL_REGISTRY",
+        "base_url": "https://devbankng.com/",
+        "country": "Nigeria",
+        "categories": ["LOAN"],
+    },
+    {
+        "name": "Co-Creation Hub (CcHUB) Nigeria",
+        "source_type": "PUBLIC_PORTAL",
+        "base_url": "https://cchub.africa/",
+        "country": "Nigeria",
+        "categories": ["ACCELERATOR", "INVESTMENT"],
+    },
+]
+
+
+def seed_nigeria_funding_directory(db: Session, *, principal: Principal) -> dict[str, Any]:
+    """Register official Nigerian funding organisations into CaravanFundingSourceRecord (no fabricated opportunities)."""
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN administrators may seed official funding sources.")
+    existing = db.execute(
+        select(CaravanFundingSourceRecord).where(CaravanFundingSourceRecord.tenant_id == principal.tenant_id)
+    ).scalars().all()
+    seen_urls = {s.base_url.rstrip("/").lower() for s in existing}
+    added: list[str] = []
+    skipped = 0
+    for item in NIGERIA_FUNDING_DIRECTORY:
+        norm = item["base_url"].rstrip("/").lower()
+        if norm in seen_urls:
+            skipped += 1
+            continue
+        rec = CaravanFundingSourceRecord(
+            source_id=f"csrc_{uuid.uuid4().hex[:14]}",
+            tenant_id=principal.tenant_id,
+            name=item["name"],
+            source_type=item["source_type"],
+            base_url=item["base_url"],
+            verification_policy="MANUAL_REVIEW",
+            status="ACTIVE",
+            created_by=principal.username,
+        )
+        db.add(rec)
+        seen_urls.add(norm)
+        added.append(rec.source_id)
+
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CARAVAN_NIGERIA_DIRECTORY_SEEDED",
+        resource="nigeria_directory",
+        outcome=f"added={len(added)}|skipped={skipped}",
+    )
+    db.commit()
+    return {"added_count": len(added), "skipped_count": skipped, "added_source_ids": added}
+
+
+def run_caravan_discovery_sweep(
+    db: Session,
+    *,
+    principal: Principal,
+    http_client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Execute scheduled ARGON discovery sweep across all enabled funding sources and expire outdated deadlines."""
+    from app.services.caravan_product_service import sweep_expired_opportunities
+
+    sources = db.execute(
+        select(CaravanFundingSourceRecord).where(
+            CaravanFundingSourceRecord.tenant_id == principal.tenant_id,
+            CaravanFundingSourceRecord.status != "DISABLED",
+        )
+    ).scalars().all()
+
+    ingested_total = 0
+    failures: list[dict[str, str]] = []
+    for src in sources:
+        try:
+            res = run_argon_source_ingestion(db, principal=principal, source_id=src.source_id, http_client=http_client)
+            ingested_total += int(res.get("created_count", 0))
+        except Exception as exc:
+            src.status = "DEGRADED"
+            src.last_synced_at = _utcnow()
+            failures.append({"source_id": src.source_id, "name": src.name, "error": str(exc)[:200]})
+            db.commit()
+
+    expired = sweep_expired_opportunities(db, principal=principal)
+    return {
+        "sources_checked": len(sources),
+        "new_opportunities_discovered": ingested_total,
+        "expired_marked": expired["expired_count"],
+        "failures": failures,
+    }
+

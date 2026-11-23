@@ -52,6 +52,8 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [geoFilter, setGeoFilter] = useState("");
+  const [openDeadlinesOnly, setOpenDeadlinesOnly] = useState(false);
 
   // Create opportunity form (Admin)
   const [newTitle, setNewTitle] = useState("");
@@ -263,14 +265,28 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
             </select>
             <select className="select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Verification status">
               <option value="">All Statuses</option>
-              {["VERIFIED", "UNVERIFIED", "EXPIRED", "CLOSED"].map((s) => (
+              {["VERIFIED", "NEEDS_REVIEW", "UNVERIFIED", "EXPIRED", "CLOSED"].map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
+            <select className="select" value={geoFilter} onChange={(e) => setGeoFilter(e.target.value)} aria-label="Market location">
+              <option value="">All Locations</option>
+              <option value="nigeria">Nigeria</option>
+              <option value="africa">Africa</option>
+              <option value="global">Global</option>
+            </select>
+            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              <input type="checkbox" checked={openDeadlinesOnly} onChange={(e) => setOpenDeadlinesOnly(e.target.checked)} />
+              Open Deadlines Only
+            </label>
           </div>
 
           <DataTable
-            rows={opportunities}
+            rows={opportunities.filter((o) => {
+              if (geoFilter && !(o.geographic_restrictions || "").toLowerCase().includes(geoFilter)) return false;
+              if (openDeadlinesOnly && (o.verification_status === "EXPIRED" || o.freshness_status === "EXPIRED")) return false;
+              return true;
+            })}
             rowKey={(r) => r.opportunity_id}
             emptyTitle="No Matching Opportunities"
             emptyDescription="No tracked funding opportunities match the current filter."
