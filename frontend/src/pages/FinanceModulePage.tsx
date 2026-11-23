@@ -2,6 +2,7 @@ import React from "react";
 import { getModule, getSubPage } from "../catalog/navigation";
 import type { ModulePageProps } from "../types/module";
 import { FinanceView } from "../components/OpsViews";
+import { FinanceCardsExperience } from "../components/finance/FinanceCardsExperience";
 import { PageHeader, ResponsiveWorkspace } from "../components/ui/DesignSystem";
 
 export default function FinanceModulePage({ subPage, onSelectSubPage }: ModulePageProps) {
@@ -15,7 +16,10 @@ export default function FinanceModulePage({ subPage, onSelectSubPage }: ModulePa
         title={page.label}
         description={page.description}
       />
-      <FinanceView />
+      <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+        <FinanceCardsExperience />
+        <FinanceView />
+      </div>
     </ResponsiveWorkspace>
   );
 }

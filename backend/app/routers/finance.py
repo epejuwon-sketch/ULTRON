@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -15,6 +16,14 @@ from app.schemas import (
     RecordInvestmentRequest,
     RecordReserveRequest,
     RecordTransactionRequest,
+)
+from app.services.finance_cards_service import (
+    SUPPORTED_CARD_LINK_PROVIDERS,
+    create_card,
+    delete_card,
+    list_cards,
+    process_and_attach_card_image,
+    update_card,
 )
 from app.services.finance_service import (
     add_payment_method,
@@ -35,6 +44,36 @@ from app.services.finance_service import (
 )
 
 router = APIRouter(prefix="/api/v1/finance", tags=["Financial Command Center"])
+
+
+class CreateCardRequest(BaseModel):
+    nickname: str = Field(min_length=1, max_length=120)
+    issuer: str = Field(default="Custom", max_length=120)
+    network: str = Field(default="", max_length=32)
+    card_type: str = Field(default="VIRTUAL", max_length=32)
+    scope: str = Field(default="BUSINESS", max_length=16)
+    background_style: str = Field(default="emerald-obsidian", max_length=64)
+    accent_color: str = Field(default="#10b981", max_length=24)
+    visual_effect: str = Field(default="glass", max_length=32)
+    provider_key: str | None = Field(default=None, max_length=64)
+    provider_token_ref: str | None = Field(default=None, max_length=160)
+    is_preferred: bool = False
+
+
+class UpdateCardRequest(BaseModel):
+    nickname: str | None = Field(default=None, min_length=1, max_length=120)
+    issuer: str | None = Field(default=None, max_length=120)
+    network: str | None = Field(default=None, max_length=32)
+    card_type: str | None = Field(default=None, max_length=32)
+    scope: str | None = Field(default=None, max_length=16)
+    background_style: str | None = Field(default=None, max_length=64)
+    accent_color: str | None = Field(default=None, max_length=24)
+    visual_effect: str | None = Field(default=None, max_length=32)
+    image_crop: dict | None = None
+    display_order: int | None = None
+    is_preferred: bool | None = None
+    provider_key: str | None = Field(default=None, max_length=64)
+    provider_token_ref: str | None = Field(default=None, max_length=160)
 
 
 @router.post("/transactions", status_code=status.HTTP_201_CREATED)
@@ -234,3 +273,83 @@ def api_financial_audit(
 ) -> dict:
     items = list_financial_audit(db, tenant_id=principal.tenant_id)
     return {"total": len(items), "audit_entries": items}
+
+
+@router.get("/cards")
+def api_list_cards(
+    scope: str | None = Query(default=None),
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = list_cards(db, tenant_id=principal.tenant_id, scope=scope)
+    return {
+        "total": len(items),
+        "cards": items,
+        "supported_providers": sorted(SUPPORTED_CARD_LINK_PROVIDERS.keys()),
+        "pci_policy": "DISPLAY_BRANDING_AND_TOKEN_REF_ONLY_NO_RAW_PAN_CVV_PIN",
+    }
+
+
+@router.post("/cards", status_code=status.HTTP_201_CREATED)
+def api_create_card(
+    body: CreateCardRequest,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return create_card(
+        db,
+        principal=principal,
+        nickname=body.nickname,
+        issuer=body.issuer,
+        network=body.network,
+        card_type=body.card_type,
+        scope=body.scope,
+        background_style=body.background_style,
+        accent_color=body.accent_color,
+        visual_effect=body.visual_effect,
+        provider_key=body.provider_key,
+        provider_token_ref=body.provider_token_ref,
+        is_preferred=body.is_preferred,
+    )
+
+
+@router.patch("/cards/{card_id}")
+def api_update_card(
+    card_id: str,
+    body: UpdateCardRequest,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return update_card(
+        db,
+        principal=principal,
+        card_id=card_id,
+        updates=body.model_dump(exclude_unset=True),
+    )
+
+
+@router.post("/cards/{card_id}/image")
+async def api_upload_card_image(
+    card_id: str,
+    file: UploadFile = File(...),
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    raw = await file.read()
+    return process_and_attach_card_image(
+        db,
+        principal=principal,
+        settings=settings,
+        card_id=card_id,
+        raw_bytes=raw,
+    )
+
+
+@router.delete("/cards/{card_id}")
+def api_delete_card(
+    card_id: str,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return delete_card(db, principal=principal, card_id=card_id)

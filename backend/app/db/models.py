@@ -839,6 +839,33 @@ class PaymentMethodRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class FinanceCardRecord(Base):
+    __tablename__ = "finance_cards"
+
+    card_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    nickname: Mapped[str] = mapped_column(String(120), nullable=False)
+    issuer: Mapped[str] = mapped_column(String(120), nullable=False, default="Custom")
+    network: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    card_type: Mapped[str] = mapped_column(String(32), nullable=False, default="VIRTUAL")
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="BUSINESS")
+    background_style: Mapped[str] = mapped_column(String(64), nullable=False, default="emerald-obsidian")
+    accent_color: Mapped[str] = mapped_column(String(24), nullable=False, default="#10b981")
+    visual_effect: Mapped[str] = mapped_column(String(32), nullable=False, default="glass")
+    image_file_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    image_crop_json: Mapped[str] = mapped_column(Text, nullable=False, default='{"zoom":1,"offsetX":0,"offsetY":0}')
+    connection_status: Mapped[str] = mapped_column(String(32), nullable=False, default="DISPLAY_ONLY")
+    provider_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_token_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_preferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 # ---------------------------------------------------------------------------
 # FILE HUB — Two-Way Secure File Intake, Extraction & Generation
 # ---------------------------------------------------------------------------

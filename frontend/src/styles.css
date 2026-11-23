@@ -1511,5 +1511,83 @@ pre.code-block {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Finance Centre — Premium Floating Cards Experience */
+.finance-cards-stage {
+  background: radial-gradient(circle at 50% 15%, rgba(16, 185, 129, 0.14), rgba(7, 10, 15, 0.96) 68%);
+  border: 1px solid rgba(16, 185, 129, 0.18);
+  border-radius: 22px;
+  padding: 24px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.finance-card-carousel-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.finance-floating-card {
+  position: relative;
+  width: 100%;
+  max-width: 410px;
+  aspect-ratio: 1.6 / 1;
+  border-radius: 22px;
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(16, 185, 129, 0.15);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  user-select: none;
+}
+
+.finance-floating-card:hover {
+  transform: translateY(-4px);
+}
+
+.finance-floating-card.effect-metallic::after,
+.finance-floating-card.effect-holographic::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(125deg, rgba(255, 255, 255, 0.14) 0%, transparent 42%, rgba(16, 185, 129, 0.12) 100%);
+}
+
+.finance-card-info-panel {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.finance-card-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .finance-card-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.app-shell.device-mobile .finance-card-info-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+
 
 
