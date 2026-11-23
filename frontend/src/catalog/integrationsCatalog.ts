@@ -10,9 +10,10 @@ export type IntegrationCategory =
   | "Automation";
 
 export type HonestConnectionStatus =
-  | "Connected"
-  | "Not connected"
-  | "Configuration required"
+  | "Live Verified"
+  | "Authenticated"
+  | "Configured"
+  | "Supported"
   | "Authentication expired"
   | "Error"
   | "Coming soon";

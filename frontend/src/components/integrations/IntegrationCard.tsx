@@ -5,17 +5,19 @@ import { IntegrationLogo } from "./IntegrationLogo";
 
 function statusTone(status: HonestConnectionStatus): StatusTone {
   switch (status) {
-    case "Connected":
+    case "Live Verified":
       return "success";
-    case "Configuration required":
+    case "Authenticated":
+      return "info";
+    case "Configured":
       return "warn";
     case "Authentication expired":
     case "Error":
       return "danger";
     case "Coming soon":
-      return "neutral";
+    case "Supported":
     default:
-      return "info";
+      return "neutral";
   }
 }
 
@@ -29,8 +31,10 @@ export function IntegrationCard({
   onSelect: (entry: IntegrationCatalogEntry) => void;
 }) {
   const actionLabel =
-    status === "Connected"
+    status === "Live Verified"
       ? "Manage"
+      : status === "Authenticated"
+      ? "Test & Manage"
       : status === "Coming soon"
       ? "Details"
       : status === "Authentication expired"
@@ -65,7 +69,7 @@ export function IntegrationCard({
         <button
           id={`integration-action-${entry.id}`}
           type="button"
-          className={`btn btn-sm ${status === "Connected" ? "btn-secondary" : ""}`}
+          className={`btn btn-sm ${status === "Live Verified" ? "btn-secondary" : ""}`}
           onClick={() => onSelect(entry)}
         >
           {actionLabel}

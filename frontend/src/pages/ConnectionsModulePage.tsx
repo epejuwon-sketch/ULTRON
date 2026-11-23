@@ -1,5 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ExternalLink, RefreshCw, Shield, Unplug } from "lucide-react";
+import {
+  CheckCircle2,
+  ExternalLink,
+  KeyRound,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Shield,
+  Unplug,
+} from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
 import {
@@ -29,16 +38,44 @@ import {
 } from "../components/ui/DesignSystem";
 import { ReadableSummary } from "../components/ui/HumanPresentation";
 
+const PRIORITY_IDS = ["gemini", "google_drive", "github", "supabase", "google_gmail", "google_calendar"];
+const PENDING_OAUTH_KEY = "ultron_pending_oauth_provider";
+
+function statusTone(status: HonestConnectionStatus): "success" | "info" | "warn" | "danger" | "neutral" {
+  switch (status) {
+    case "Live Verified":
+      return "success";
+    case "Authenticated":
+      return "info";
+    case "Configured":
+      return "warn";
+    case "Authentication expired":
+    case "Error":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+function stageIndex(status: HonestConnectionStatus): number {
+  if (status === "Live Verified") return 4;
+  if (status === "Authenticated") return 3;
+  if (status === "Configured") return 2;
+  if (status === "Supported") return 1;
+  return 0;
+}
+
 /**
- * Strictly computes honest 4-stage connection status from real backend responses.
- * NEVER fakes "Connected" when backend verification / OAuth / credentials are missing.
+ * Strictly computes the 4-stage lifecycle status from real backend responses.
+ * NEVER marks an integration as Live Verified merely because environment variables exist.
  */
 function resolveHonestStatus(
   entry: IntegrationCatalogEntry,
   statusData: any,
   connections: any[],
-  health: any
-): { status: HonestConnectionStatus; detail: string; record?: any } {
+  health: any,
+  geminiDiag: any
+): { status: HonestConnectionStatus; detail: string; record?: any; lastVerifiedAt?: string | null } {
   if (!entry.supportedByBackend || entry.authFlow === "ROADMAP") {
     return {
       status: "Coming soon",
@@ -49,81 +86,117 @@ function resolveHonestStatus(
   const record = connections.find(
     (c) => c.provider === entry.backendProviderKey || c.provider === entry.id
   );
+
+  // Special live-verified check for Gemini via diagnostics endpoint
+  if (entry.id === "gemini" && geminiDiag?.live_inference?.verified) {
+    return {
+      status: "Live Verified",
+      detail: `Live verified on ${geminiDiag.live_inference.last_model || "Gemini"} (${geminiDiag.live_inference.last_latency_ms ?? "—"} ms).`,
+      record,
+      lastVerifiedAt: geminiDiag.live_inference.last_successful_check_at || record?.last_verified_at || null,
+    };
+  }
+
+  // Special live-verified check for PostgreSQL database
+  if (entry.id === "postgresql" && (health?.database?.connected || health?.database?.healthy)) {
+    return {
+      status: "Live Verified",
+      detail: "PostgreSQL Transaction Pooler live connection verified.",
+      record,
+      lastVerifiedAt: health?.timestamp || null,
+    };
+  }
+
   if (record) {
     const st = String(record.status || "").toUpperCase();
-    if (st === "CONNECTED" || st === "VERIFIED" || st === "ACTIVE") {
-      return {
-        status: "Connected",
-        detail: record.account_label || "Authenticated and encrypted via backend VAULT.",
-        record,
-      };
-    }
-    if (st === "EXPIRED") {
+    const stage = String(record.lifecycle_stage || "").toUpperCase();
+
+    if (record.token_expired || st === "EXPIRED" || stage === "EXPIRED") {
       return {
         status: "Authentication expired",
-        detail: "OAuth token expired — reconnect or refresh token.",
+        detail: "OAuth token expired — refresh token or reconnect.",
         record,
+        lastVerifiedAt: record.last_verified_at,
       };
     }
-    if (st === "ERROR" || st === "FAILED") {
+    if (stage === "LIVE_VERIFIED" || st === "AVAILABLE" || st === "VERIFIED") {
+      return {
+        status: "Live Verified",
+        detail: record.account_label
+          ? `Live verified (${record.account_label}).`
+          : "Outbound health check passed; credentials encrypted in VAULT.",
+        record,
+        lastVerifiedAt: record.last_verified_at,
+      };
+    }
+    if (st === "DEGRADED" || st === "ERROR" || st === "FAILED") {
       return {
         status: "Error",
         detail: record.last_error || "Last live verification probe failed.",
         record,
+        lastVerifiedAt: record.last_verified_at,
+      };
+    }
+    if (stage === "AUTHENTICATED" || (record.connection_id && !record.disconnected_at)) {
+      return {
+        status: "Authenticated",
+        detail: "Encrypted tenant credentials stored in VAULT. Run Test Connection to live-verify.",
+        record,
+        lastVerifiedAt: record.last_verified_at,
+      };
+    }
+    if (stage === "CONFIGURED" || record.configured_via_env) {
+      return {
+        status: "Configured",
+        detail: "Server configuration detected; awaiting tenant authentication or live verification.",
+        record,
+        lastVerifiedAt: record.last_verified_at,
       };
     }
   }
 
-  // Check backend /api/v1/integrations/status capabilities
+  // Check /api/v1/integrations/status capabilities
   const cap = entry.statusCapabilityKey ? statusData?.capabilities?.[entry.statusCapabilityKey] : null;
   if (cap) {
-    if (cap.capability_state === "AVAILABLE" || cap.verified === true) {
+    if (cap.verified === true || cap.capability_state === "AVAILABLE") {
       return {
-        status: "Connected",
+        status: "Live Verified",
         detail: cap.detail || "Live verified via backend IntegrationManager.",
+      };
+    }
+    if (cap.configured === true && !cap.verified) {
+      return {
+        status: "Configured",
+        detail: cap.detail || "Server configuration present — run Verify Live Status to test outbound connectivity.",
       };
     }
     if (cap.missing_env_vars?.length > 0) {
       return {
-        status: "Configuration required",
-        detail: `Missing server env: ${cap.missing_env_vars.join(", ")}`,
+        status: "Supported",
+        detail: `Connector implemented. Missing: ${cap.missing_env_vars.join(", ")}`,
       };
     }
-    return {
-      status: "Not connected",
-      detail: cap.detail || "Supported by backend — awaiting operator credentials or OAuth.",
-    };
   }
 
-  // Check /health providers for LLM / DB providers
+  // Check /health providers (configured != live verified!)
   const hp =
     health?.integrations?.capabilities?.[entry.id] ||
     health?.integrations?.providers?.[entry.id] ||
     health?.providers?.[entry.id];
   if (hp) {
-    if (hp.configured) {
-      return { status: "Connected", detail: hp.detail || "Configured on server." };
+    if (hp.live_verified) {
+      return { status: "Live Verified", detail: hp.detail || "Live verified on backend." };
     }
-    return {
-      status: "Configuration required",
-      detail: `Requires ${entry.requiredEnvVars.join(", ") || "provider credentials"}.`,
-    };
-  }
-
-  if (entry.id === "postgresql" && (health?.database?.connected || health?.database?.healthy)) {
-    return { status: "Connected", detail: "PostgreSQL Transaction Pooler verified." };
-  }
-
-  if (entry.authFlow === "SERVER_ENV" && entry.requiredEnvVars.length > 0) {
-    return {
-      status: "Configuration required",
-      detail: `Configure ${entry.requiredEnvVars.join(", ")} in deployment environment.`,
-    };
+    if (hp.configured) {
+      return { status: "Configured", detail: hp.detail || "Configured on server — awaiting live verification." };
+    }
   }
 
   return {
-    status: "Not connected",
-    detail: "Supported by ULTRON backend — connect via OAuth or encrypted API key.",
+    status: "Supported",
+    detail: entry.requiredEnvVars.length > 0
+      ? `Connector supported. Configure ${entry.requiredEnvVars.join(", ")} or connect in VAULT.`
+      : "Connector supported — connect via OAuth 2.0 + PKCE or encrypted API key.",
   };
 }
 
@@ -145,8 +218,12 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
   // Directory filters & detail drawer
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<"All" | IntegrationCategory>("All");
+  const [stageFilter, setStageFilter] = useState<"ALL" | HonestConnectionStatus>("ALL");
   const [selected, setSelected] = useState<IntegrationCatalogEntry | null>(null);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [oauthCode, setOauthCode] = useState("");
+  const [oauthState, setOauthState] = useState("");
+  const [oauthAuthUrl, setOauthAuthUrl] = useState("");
   const [probeResult, setProbeResult] = useState<any>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState<IntegrationCatalogEntry | null>(null);
 
@@ -159,7 +236,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
         apiFetch<any>("/api/v1/integrations/antigravity?live=false").catch(() => null),
         apiFetch<any>("/health").catch(() => null),
         apiFetch<any>("/api/v1/neon/gemini/diagnostics?discover=false").catch(() => null),
-        apiFetch<any>("/api/v1/audit/logs?limit=30").catch(() => ({ logs: [] })),
+        apiFetch<any>("/api/v1/audit/logs?limit=40").catch(() => ({ logs: [] })),
         apiFetch<any>("/api/v1/bridge/shares").catch(() => ({ shares: [] })),
       ]);
       setStatusData(sRes);
@@ -179,24 +256,48 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
     }
   }
 
+  // Handle OAuth 2.0 callback query params (?code=...&state=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    const provider = params.get("provider") || sessionStorage.getItem(PENDING_OAUTH_KEY);
+    if (code && state && provider) {
+      apiFetch(`/api/v1/integrations/oauth/${provider}/callback`, {
+        method: "POST",
+        body: { code, state },
+      })
+        .then(() => {
+          sessionStorage.removeItem(PENDING_OAUTH_KEY);
+          window.history.replaceState({}, document.title, window.location.pathname);
+          pushToast(`OAuth 2.0 authorization completed for ${provider}.`, "success");
+          load();
+        })
+        .catch((e) => {
+          pushToast(`OAuth callback failed: ${e.message}`, "error");
+        });
+    }
+  }, []);
+
   useEffect(() => {
     load();
   }, [subPage]);
 
   const resolvedMap = useMemo(() => {
-    const map = new Map<string, { status: HonestConnectionStatus; detail: string; record?: any }>();
+    const map = new Map<string, { status: HonestConnectionStatus; detail: string; record?: any; lastVerifiedAt?: string | null }>();
     for (const entry of INTEGRATIONS_CATALOG) {
-      map.set(entry.id, resolveHonestStatus(entry, statusData, connections, health));
+      map.set(entry.id, resolveHonestStatus(entry, statusData, connections, health, geminiDiag));
     }
     return map;
-  }, [statusData, connections, health]);
+  }, [statusData, connections, health, geminiDiag]);
 
   async function verifyAll() {
     setVerifying(true);
     try {
       const res = await apiFetch<any>("/api/v1/integrations/verify", { method: "POST" });
       setStatusData(res);
-      pushToast("Live backend integration verification complete.", "success");
+      await load();
+      pushToast("Live outbound integration verification complete.", "success");
     } catch (e: any) {
       pushToast(e.message, "error");
     } finally {
@@ -212,7 +313,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
         body: { credentials: fieldValues },
       });
       setFieldValues({});
-      pushToast(`${entry.name} encrypted & saved in backend VAULT.`, "success");
+      pushToast(`${entry.name} encrypted & saved in backend VAULT (Stage 3: Authenticated).`, "success");
       await load();
     } catch (e: any) {
       pushToast(e.message, "error");
@@ -222,14 +323,41 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
   async function handleStartOAuth(entry: IntegrationCatalogEntry) {
     if (!entry.backendProviderKey) return;
     try {
+      sessionStorage.setItem(PENDING_OAUTH_KEY, entry.backendProviderKey);
       const res = await apiFetch<any>(`/api/v1/integrations/oauth/${entry.backendProviderKey}/start`, {
         method: "POST",
-        body: { redirect_uri: `${window.location.origin}/oauth/callback` },
+        body: { redirect_uri: `${window.location.origin}/connections/oauth?provider=${entry.backendProviderKey}` },
       });
       setProbeResult(res);
-      if (res.authorization_url) {
-        pushToast("OAuth 2.0 + PKCE authorization URL generated.", "info");
-      }
+      setOauthAuthUrl(res.authorization_url || "");
+      setOauthState(res.state || "");
+      pushToast("OAuth 2.0 + PKCE authorization URL ready.", "info");
+    } catch (e: any) {
+      pushToast(e.message, "error");
+    }
+  }
+
+  async function handleCompleteOAuthCallback(entry: IntegrationCatalogEntry) {
+    if (!entry.backendProviderKey || !oauthCode.trim() || !oauthState.trim()) return;
+    try {
+      await apiFetch(`/api/v1/integrations/oauth/${entry.backendProviderKey}/callback`, {
+        method: "POST",
+        body: { code: oauthCode.trim(), state: oauthState.trim() },
+      });
+      setOauthCode("");
+      setOauthAuthUrl("");
+      pushToast(`${entry.name} OAuth tokens encrypted & stored in VAULT.`, "success");
+      await load();
+    } catch (e: any) {
+      pushToast(e.message, "error");
+    }
+  }
+
+  async function handleRefreshToken(providerKey: string) {
+    try {
+      await apiFetch(`/api/v1/integrations/${providerKey}/refresh`, { method: "POST" });
+      pushToast(`OAuth token refreshed for ${providerKey}.`, "success");
+      await load();
     } catch (e: any) {
       pushToast(e.message, "error");
     }
@@ -242,7 +370,12 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
         method: "POST",
       });
       setProbeResult(res);
-      pushToast(`Verification probe finished for ${entry.name}.`, "info");
+      pushToast(
+        res.live_verified
+          ? `${entry.name} live verification PASSED.`
+          : `${entry.name}: ${res.detail || "Verification failed."}`,
+        res.live_verified ? "success" : "info"
+      );
       await load();
     } catch (e: any) {
       pushToast(e.message, "error");
@@ -253,8 +386,9 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
     if (!entry.backendProviderKey) return;
     try {
       await apiFetch(`/api/v1/integrations/${entry.backendProviderKey}/disconnect`, { method: "POST" });
-      pushToast(`${entry.name} disconnected.`, "success");
+      pushToast(`${entry.name} disconnected and VAULT credentials cleared.`, "success");
       setProbeResult(null);
+      setOauthAuthUrl("");
       await load();
     } catch (e: any) {
       pushToast(e.message, "error");
@@ -263,6 +397,8 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
 
   const filteredCatalog = INTEGRATIONS_CATALOG.filter((item) => {
     if (category !== "All" && item.category !== category) return false;
+    const st = resolvedMap.get(item.id)?.status || "Supported";
+    if (stageFilter !== "ALL" && st !== stageFilter) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -273,9 +409,10 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
   });
 
   const supportedCount = INTEGRATIONS_CATALOG.filter((i) => i.supportedByBackend).length;
-  const connectedCount = INTEGRATIONS_CATALOG.filter((i) => resolvedMap.get(i.id)?.status === "Connected").length;
-  const configReqCount = INTEGRATIONS_CATALOG.filter((i) => resolvedMap.get(i.id)?.status === "Configuration required").length;
-  const roadmapCount = INTEGRATIONS_CATALOG.filter((i) => !i.supportedByBackend).length;
+  const configuredCount = INTEGRATIONS_CATALOG.filter((i) => resolvedMap.get(i.id)?.status === "Configured").length;
+  const authenticatedCount = INTEGRATIONS_CATALOG.filter((i) => resolvedMap.get(i.id)?.status === "Authenticated").length;
+  const liveVerifiedCount = INTEGRATIONS_CATALOG.filter((i) => resolvedMap.get(i.id)?.status === "Live Verified").length;
+  const persistedVaultAccounts = connections.filter((c) => Boolean(c.connection_id));
 
   return (
     <ResponsiveWorkspace subPages={mod.subPages} activeSubPage={page.id} onSelectSubPage={onSelectSubPage}>
@@ -284,7 +421,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
         title={page.label}
         description={page.description}
         actions={
-          <div className="row">
+          <div className="row" style={{ gap: 8 }}>
             <button id="connections-verify-all" type="button" className="btn btn-sm" disabled={verifying} onClick={verifyAll}>
               <CheckCircle2 size={13} /> {verifying ? "Verifying..." : "Verify Live Status"}
             </button>
@@ -300,17 +437,71 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
       {/* 34. CONNECTIONS OVERVIEW */}
       {page.id === "overview" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="grid-3">
-            <MetricDisplay label="Stage 1: Supported" value={supportedCount} sub={`Out of ${INTEGRATIONS_CATALOG.length} catalogued`} tone="info" />
-            <MetricDisplay label="Stage 2: Config Needed" value={configReqCount} sub="Missing env or VAULT key" tone="warn" />
-            <MetricDisplay label="Stage 3/4: Live Verified" value={connectedCount} sub="Strictly verified, zero fakes" tone={connectedCount > 0 ? "success" : "neutral"} />
+          <div className="grid-4">
+            <MetricDisplay label="Stage 1: Supported" value={supportedCount} sub={`Out of ${INTEGRATIONS_CATALOG.length} catalogued`} tone="neutral" />
+            <MetricDisplay label="Stage 2: Configured" value={configuredCount} sub="Env config present, unverified" tone="warn" />
+            <MetricDisplay label="Stage 3: Authenticated" value={authenticatedCount} sub="Encrypted in VAULT, run test" tone="info" />
+            <MetricDisplay label="Stage 4: Live Verified" value={liveVerifiedCount} sub="Outbound health check passed" tone={liveVerifiedCount > 0 ? "success" : "neutral"} />
           </div>
+
+          {/* Priority Integrations Matrix */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="card-title">
+              <span>Priority Operational Integrations</span>
+              <span className="muted mono" style={{ fontSize: 11 }}>4-STAGE STRICT LIFECYCLE</span>
+            </div>
+            <div className="grid-2">
+              {PRIORITY_IDS.map((pid) => {
+                const entry = INTEGRATIONS_CATALOG.find((i) => i.id === pid);
+                if (!entry) return null;
+                const info = resolvedMap.get(entry.id) || { status: "Supported" as HonestConnectionStatus, detail: "" };
+                return (
+                  <div key={entry.id} className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div className="row-between" style={{ gap: 8 }}>
+                      <div className="row" style={{ gap: 10 }}>
+                        <IntegrationLogo id={entry.id} size={28} />
+                        <div>
+                          <strong>{entry.name}</strong>
+                          <div className="muted mono" style={{ fontSize: 11 }}>{entry.authFlow}</div>
+                        </div>
+                      </div>
+                      <StatusIndicator label={info.status} tone={statusTone(info.status)} />
+                    </div>
+                    <div className="muted" style={{ fontSize: 12 }}>{info.detail}</div>
+                    <div className="row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+                      <span className="muted mono" style={{ fontSize: 10.5 }}>
+                        {info.lastVerifiedAt ? `Verified: ${info.lastVerifiedAt.slice(0, 19).replace("T", " ")}` : "Not yet live-verified"}
+                      </span>
+                      <div className="row" style={{ gap: 6 }}>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleTestProvider(entry)}>
+                          <Play size={11} /> Test
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => {
+                            setSelected(entry);
+                            setFieldValues({});
+                            setProbeResult(null);
+                            setOauthAuthUrl("");
+                          }}
+                        >
+                          Manage
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="card">
             <div className="card-title">
               <span>Google Gemini Primary Intelligence Diagnostics</span>
               <StatusIndicator
-                label={geminiDiag?.live_inference?.status || (geminiDiag?.configured ? "CONFIGURED" : "NOT CONFIGURED")}
-                tone={geminiDiag?.live_inference?.verified ? "success" : geminiDiag?.configured ? "info" : "warn"}
+                label={geminiDiag?.live_inference?.status || (geminiDiag?.configured ? "CONFIGURED" : "UNCONFIGURED")}
+                tone={geminiDiag?.live_inference?.verified ? "success" : geminiDiag?.configured ? "warn" : "neutral"}
               />
             </div>
             <div className="grid-3" style={{ marginBottom: 12 }}>
@@ -318,7 +509,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                 label="Primary Provider"
                 value={geminiDiag?.provider_label || "Google Gemini"}
                 sub={`API: ${geminiDiag?.api_mode || "generate_content"} · Models: ${geminiDiag?.catalog?.models_discovered ?? 0}`}
-                tone={geminiDiag?.configured ? "success" : "warn"}
+                tone={geminiDiag?.configured ? "info" : "warn"}
               />
               <MetricDisplay
                 label="Live Inference & Latency"
@@ -330,7 +521,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                 sub={
                   geminiDiag?.live_inference?.last_model
                     ? `Last model: ${geminiDiag.live_inference.last_model}`
-                    : "Catalog check alone never marks live inference verified"
+                    : "Env config alone never marks Live Verified"
                 }
                 tone={geminiDiag?.live_inference?.verified ? "success" : "neutral"}
               />
@@ -341,31 +532,13 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                 tone="info"
               />
             </div>
-            {Array.isArray(geminiDiag?.reasoning_tiers) && geminiDiag.reasoning_tiers.length > 0 && (
-              <div className="grid-2">
-                {geminiDiag.reasoning_tiers.map((t: any) => (
-                  <div key={t.tier} className="list-item">
-                    <div className="row-between">
-                      <strong className="mono">T{t.tier} · {t.primary_model}</strong>
-                      <span className="pill mono">{t.api_interface || "generate_content"}</span>
-                    </div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      Fallback: {(t.gemini_fallback_chain || []).slice(0, 3).join(" → ") || "—"}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
 
-          <div className="card">
-            <div className="card-title"><span>4-Stage Honest Connectivity Architecture</span></div>
-            <p className="muted" style={{ marginTop: 0 }}>
-              ULTRON never marks an integration as Connected without real backend verification. {roadmapCount} roadmap integrations are transparently tagged Coming soon.
-            </p>
-            <div className="grid-2">
-              {antigravity?.connected_plugin_adapters &&
-                Object.entries(antigravity.connected_plugin_adapters).map(([k, v]: [string, any]) => (
+          {antigravity?.connected_plugin_adapters && (
+            <div className="card">
+              <div className="card-title"><span>Antigravity Plugin Adapters</span></div>
+              <div className="grid-2">
+                {Object.entries(antigravity.connected_plugin_adapters).map(([k, v]: [string, any]) => (
                   <div key={k} className="list-item">
                     <div className="row-between">
                       <strong>Antigravity Plugin: {k.toUpperCase()}</strong>
@@ -374,20 +547,33 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                     <div className="muted">{v.detail}</div>
                   </div>
                 ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
-      {/* 35. INTEGRATION DIRECTORY (MARKETPLACE) */}
+      {/* 35. INTEGRATION DIRECTORY */}
       {page.id === "directory" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <SearchBar
             id="integrations-search"
             value={search}
             onChange={setSearch}
-            placeholder={`Search ${INTEGRATIONS_CATALOG.length} integrations (Gemini, Google Drive, GitHub, Vercel, Supabase, Stripe, Slack...)`}
+            placeholder={`Search ${INTEGRATIONS_CATALOG.length} integrations (Gemini, Google Drive, GitHub, Supabase, Gmail, Calendar...)`}
           />
+          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+            {(["ALL", "Live Verified", "Authenticated", "Configured", "Supported", "Error", "Coming soon"] as const).map((st) => (
+              <button
+                key={st}
+                type="button"
+                className={`seg-btn ${stageFilter === st ? "active" : ""}`}
+                onClick={() => setStageFilter(st)}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
           <FilterBar<"All" | IntegrationCategory>
             value={category}
             onChange={setCategory}
@@ -401,18 +587,19 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
             ]}
           />
           {filteredCatalog.length === 0 ? (
-            <EmptyState title="No Integrations Match" description="Clear the search query or pick another category." />
+            <EmptyState title="No Integrations Match" description="Clear the search query or pick another category/stage." />
           ) : (
             <div className="integrations-grid">
               {filteredCatalog.map((entry) => (
                 <IntegrationCard
                   key={entry.id}
                   entry={entry}
-                  status={resolvedMap.get(entry.id)?.status || "Not connected"}
+                  status={resolvedMap.get(entry.id)?.status || "Supported"}
                   onSelect={(e) => {
                     setSelected(e);
                     setFieldValues({});
                     setProbeResult(null);
+                    setOauthAuthUrl("");
                   }}
                 />
               ))}
@@ -425,35 +612,75 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
       {page.id === "details" && (
         <div className="card">
           <div className="card-title"><span>Select an Integration to Inspect</span></div>
-          <div className="row" style={{ marginBottom: 12 }}>
+          <div className="row" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
             {INTEGRATIONS_CATALOG.slice(0, 14).map((e) => (
               <button
                 key={e.id}
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={() => setSelected(e)}
+                onClick={() => {
+                  setSelected(e);
+                  setFieldValues({});
+                  setProbeResult(null);
+                  setOauthAuthUrl("");
+                }}
               >
                 <IntegrationLogo id={e.id} size={16} /> {e.name}
               </button>
             ))}
           </div>
-          <div className="muted">Click any integration above or in the Integration Directory to open its full configuration drawer.</div>
+          <div className="muted">Click any integration above or in the Integration Directory to open its full 4-stage lifecycle drawer.</div>
         </div>
       )}
 
       {/* 37. CONNECTED ACCOUNTS */}
       {page.id === "accounts" && (
         <div className="card">
-          <div className="card-title"><span>Tenant Encrypted Connections ({connections.length})</span></div>
+          <div className="card-title"><span>Tenant Encrypted VAULT &amp; OAuth Accounts ({persistedVaultAccounts.length})</span></div>
           <DataTable
-            rows={connections}
+            rows={persistedVaultAccounts}
             rowKey={(c, idx) => c.connection_id || c.provider || String(idx)}
             emptyTitle="No Persisted OAuth / Vault Account Connections"
             emptyDescription="Connect Google Workspace, GitHub, or API providers from the Integration Directory."
             columns={[
               { key: "provider", header: "Provider", mono: true, render: (c) => <strong>{c.provider}</strong> },
-              { key: "status", header: "Status", render: (c) => <StatusIndicator label={c.status || "RECORDED"} tone={c.status === "CONNECTED" ? "success" : "warn"} /> },
-              { key: "updated", header: "Updated", mono: true, render: (c) => c.updated_at || "—" },
+              {
+                key: "stage",
+                header: "Lifecycle Stage",
+                render: (c) => (
+                  <StatusIndicator
+                    label={c.lifecycle_stage || c.status || "AUTHENTICATED"}
+                    tone={c.lifecycle_stage === "LIVE_VERIFIED" ? "success" : c.token_expired ? "danger" : "info"}
+                  />
+                ),
+              },
+              { key: "verified", header: "Last Verified", mono: true, render: (c) => c.last_verified_at ? c.last_verified_at.slice(0, 19).replace("T", " ") : "Never" },
+              {
+                key: "actions",
+                header: "Controls",
+                render: (c) => {
+                  const entry = INTEGRATIONS_CATALOG.find((i) => i.backendProviderKey === c.provider);
+                  return (
+                    <div className="row" style={{ gap: 6 }}>
+                      {entry && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleTestProvider(entry)}>
+                          <Play size={11} /> Test
+                        </button>
+                      )}
+                      {c.auth_type === "OAUTH2" && (
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleRefreshToken(c.provider)}>
+                          <RotateCw size={11} /> Refresh
+                        </button>
+                      )}
+                      {entry && (
+                        <button type="button" className="btn btn-danger btn-sm" onClick={() => setConfirmDisconnect(entry)}>
+                          <Unplug size={11} /> Revoke
+                        </button>
+                      )}
+                    </div>
+                  );
+                },
+              },
             ]}
           />
         </div>
@@ -466,11 +693,12 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
             <IntegrationCard
               key={entry.id}
               entry={entry}
-              status={resolvedMap.get(entry.id)?.status || "Not connected"}
+              status={resolvedMap.get(entry.id)?.status || "Supported"}
               onSelect={(e) => {
                 setSelected(e);
                 setFieldValues({});
                 setProbeResult(null);
+                setOauthAuthUrl("");
               }}
             />
           ))}
@@ -484,11 +712,12 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
             <IntegrationCard
               key={entry.id}
               entry={entry}
-              status={resolvedMap.get(entry.id)?.status || "Not connected"}
+              status={resolvedMap.get(entry.id)?.status || "Supported"}
               onSelect={(e) => {
                 setSelected(e);
                 setFieldValues({});
                 setProbeResult(null);
+                setOauthAuthUrl("");
               }}
             />
           ))}
@@ -528,11 +757,10 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
             emptyLabel="No integration connection or verification events recorded yet."
             items={auditLogs.map((l, idx) => ({
               id: l.audit_id || String(idx),
-              title: l.action || "Integration Event",
-              actor: l.actor_user_id || "system",
-              status: l.status || "RECORDED",
+              title: `${l.action || "Integration Event"} (${l.resource || "system"})`,
+              actor: l.actor || l.actor_user_id || "system",
+              status: l.outcome || l.status || "RECORDED",
               timestamp: l.created_at,
-              detail: l.resource,
             }))}
           />
         </div>
@@ -575,7 +803,8 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
         onClose={() => setSelected(null)}
       >
         {selected && (() => {
-          const info = resolvedMap.get(selected.id) || { status: "Not connected" as HonestConnectionStatus, detail: "" };
+          const info = resolvedMap.get(selected.id) || { status: "Supported" as HonestConnectionStatus, detail: "" };
+          const activeStage = stageIndex(info.status);
           return (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div className="row-between">
@@ -586,14 +815,42 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                     <div className="muted">{selected.category}</div>
                   </div>
                 </div>
-                <StatusIndicator
-                  label={info.status}
-                  tone={info.status === "Connected" ? "success" : info.status === "Configuration required" ? "warn" : info.status === "Error" ? "danger" : "neutral"}
-                />
+                <StatusIndicator label={info.status} tone={statusTone(info.status)} />
+              </div>
+
+              {/* 4-Stage Lifecycle Stepper */}
+              <div className="grid-4" style={{ gap: 6 }}>
+                {[
+                  { n: 1, label: "1. Supported" },
+                  { n: 2, label: "2. Configured" },
+                  { n: 3, label: "3. Authenticated" },
+                  { n: 4, label: "4. Live Verified" },
+                ].map((s) => (
+                  <div
+                    key={s.n}
+                    className="list-item"
+                    style={{
+                      padding: "6px 8px",
+                      textAlign: "center",
+                      fontSize: 11,
+                      borderColor: activeStage >= s.n ? "var(--accent, #22d3ee)" : undefined,
+                      opacity: activeStage >= s.n ? 1 : 0.55,
+                    }}
+                  >
+                    <strong>{s.label}</strong>
+                  </div>
+                ))}
               </div>
 
               <p className="muted" style={{ margin: 0 }}>{selected.shortDescription}</p>
-              <div className="alert-box">{info.detail}</div>
+              <div className="alert-box">
+                <div>{info.detail}</div>
+                {info.lastVerifiedAt && (
+                  <div className="muted mono" style={{ fontSize: 11, marginTop: 4 }}>
+                    Last Verified: {info.lastVerifiedAt}
+                  </div>
+                )}
+              </div>
 
               {selected.requiredEnvVars.length > 0 && (
                 <div className="list-item">
@@ -604,7 +861,7 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
 
               <div className="list-item">
                 <div className="telemetry-label">LEAST-PRIVILEGE SCOPES</div>
-                <div className="row">
+                <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
                   {selected.permissions.map((p) => (
                     <span key={p} className="pill mono">{p}</span>
                   ))}
@@ -612,8 +869,11 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
               </div>
 
               {selected.authFlow === "API_KEY" && selected.connectFields && (
-                <div className="list-item" style={{ gap: 8 }}>
-                  <div className="telemetry-label">ENCRYPTED VAULT CREDENTIAL CONNECT</div>
+                <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div className="telemetry-label">
+                    <KeyRound size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                    VAULT CREDENTIAL CONNECT / ROTATE
+                  </div>
                   {selected.connectFields.map((f) => (
                     <input
                       key={f.key}
@@ -625,29 +885,55 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                     />
                   ))}
                   <button type="button" className="btn btn-sm" onClick={() => handleConnectApiKey(selected)}>
-                    Encrypt & Connect
+                    Encrypt &amp; Save in VAULT
                   </button>
                 </div>
               )}
 
               {selected.authFlow === "OAUTH2" && selected.backendProviderKey && (
-                <button type="button" className="btn" onClick={() => handleStartOAuth(selected)}>
-                  <ExternalLink size={14} /> Start OAuth 2.0 + PKCE Flow
-                </button>
+                <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div className="telemetry-label">OAUTH 2.0 + PKCE AUTHORIZATION</div>
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <button type="button" className="btn btn-sm" onClick={() => handleStartOAuth(selected)}>
+                      <ExternalLink size={13} /> Start OAuth 2.0 + PKCE
+                    </button>
+                    {info.record?.connection_id && (
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleRefreshToken(selected.backendProviderKey!)}>
+                        <RotateCw size={13} /> Refresh Token
+                      </button>
+                    )}
+                  </div>
+                  {oauthAuthUrl && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+                      <a href={oauthAuthUrl} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
+                        <ExternalLink size={12} /> Authorize in {selected.name}
+                      </a>
+                      <input
+                        className="input mono"
+                        value={oauthCode}
+                        onChange={(e) => setOauthCode(e.target.value)}
+                        placeholder="Paste authorization code (if redirected externally)"
+                      />
+                      <button type="button" className="btn btn-sm" onClick={() => handleCompleteOAuthCallback(selected)} disabled={!oauthCode.trim()}>
+                        Complete OAuth Callback
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
 
               {selected.backendProviderKey && (
-                <div className="row">
+                <div className="row" style={{ gap: 8 }}>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleTestProvider(selected)}>
-                    Test Connection
+                    <Play size={12} /> Test Connection
                   </button>
-                  {info.status === "Connected" && (
+                  {(info.status === "Live Verified" || info.status === "Authenticated" || info.status === "Authentication expired") && info.record?.connection_id && (
                     <button
                       type="button"
                       className="btn btn-danger btn-sm"
                       onClick={() => setConfirmDisconnect(selected)}
                     >
-                      <Unplug size={13} /> Disconnect
+                      <Unplug size={13} /> Disconnect &amp; Revoke
                     </button>
                   )}
                 </div>
@@ -663,9 +949,9 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
 
       <ConfirmationDialog
         open={Boolean(confirmDisconnect)}
-        title="Disconnect Integration"
-        message={`Revoke stored credentials for ${confirmDisconnect?.name}? Agents using this provider will stop until reconnected.`}
-        confirmLabel="Disconnect"
+        title="Disconnect & Revoke Integration"
+        message={`Revoke stored VAULT credentials and OAuth tokens for ${confirmDisconnect?.name}? Agents using this provider will stop until reconnected.`}
+        confirmLabel="Disconnect & Revoke"
         onCancel={() => setConfirmDisconnect(null)}
         onConfirm={async () => {
           if (confirmDisconnect) await handleDisconnect(confirmDisconnect);

@@ -477,6 +477,25 @@ def verify_provider_live(
     return st.to_dict()
 
 
+def _compute_lifecycle_stage(
+    *,
+    status: str,
+    has_connection: bool,
+    configured_via_env: bool,
+    token_expired: bool,
+) -> str:
+    if token_expired:
+        return "EXPIRED"
+    st = (status or "").upper()
+    if st == "AVAILABLE":
+        return "LIVE_VERIFIED"
+    if has_connection and st in {"IMPLEMENTED_NOT_LIVE", "DEGRADED", "AUTHENTICATED"}:
+        return "AUTHENTICATED"
+    if configured_via_env or st == "DEGRADED":
+        return "CONFIGURED"
+    return "SUPPORTED"
+
+
 def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict[str, Any]:
     """Return full tenant integration inventory combining stored connections + env configuration + Antigravity adapter."""
     rows = db.execute(
@@ -491,6 +510,9 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
         stored = by_provider.get(provider)
         env_tok = resolve_provider_token(db, tenant_id=tenant_id, provider=provider, settings=settings)
         if stored is not None:
+            stored["configured_via_env"] = bool(env_tok)
+            if stored.get("lifecycle_stage") == "SUPPORTED" and env_tok:
+                stored["lifecycle_stage"] = "CONFIGURED"
             catalog.append(stored)
         else:
             catalog.append(
@@ -502,7 +524,9 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
                     "scopes": [],
                     "capabilities": meta["capabilities"],
                     "status": "IMPLEMENTED_NOT_LIVE" if env_tok else "REQUIRES_CONFIGURATION",
+                    "lifecycle_stage": "CONFIGURED" if env_tok else "SUPPORTED",
                     "configured_via_env": bool(env_tok),
+                    "token_expired": False,
                     "last_verified_at": None,
                     "last_error": None,
                 }
@@ -519,6 +543,18 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
 
 def serialize_connection(r: IntegrationConnectionRecord) -> dict[str, Any]:
     """Serialize metadata only — NEVER returns encrypted or decrypted credentials."""
+    now = datetime.now(timezone.utc)
+    exp = r.token_expires_at
+    if exp is not None and exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    token_expired = bool(exp is not None and now >= exp and r.disconnected_at is None)
+    has_active_creds = bool(r.encrypted_credentials_b64 and r.disconnected_at is None)
+    lifecycle_stage = _compute_lifecycle_stage(
+        status=r.status,
+        has_connection=has_active_creds,
+        configured_via_env=False,
+        token_expired=token_expired,
+    )
     return {
         "connection_id": r.connection_id,
         "tenant_id": r.tenant_id,
@@ -527,6 +563,8 @@ def serialize_connection(r: IntegrationConnectionRecord) -> dict[str, Any]:
         "scopes": json.loads(r.scopes_json or "[]"),
         "capabilities": json.loads(r.capabilities_json or "[]"),
         "status": r.status,
+        "lifecycle_stage": lifecycle_stage,
+        "token_expired": token_expired,
         "account_label": r.account_label,
         "connected_by": r.connected_by,
         "token_expires_at": r.token_expires_at.isoformat() if r.token_expires_at else None,
