@@ -377,7 +377,7 @@ export function OrbitAppPermissionsSection() {
           <div className="list-item" data-testid="orbit-app-launch-result" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div className="row-between" style={{ flexWrap: "wrap", gap: 6 }}>
               <strong>{launchResult.app_name} ({launchResult.permission_mode})</strong>
-              <StatusIndicator label={launchResult.launch_status} tone={launchResult.launch_url_resolved ? "info" : "warning"} />
+              <StatusIndicator label={launchResult.launch_status} tone={launchResult.launch_url_resolved ? "info" : "warn"} />
             </div>
             <div className="row" style={{ flexWrap: "wrap", gap: 8, fontSize: 12 }}>
               <span className="pill"><CheckCircle2 size={11} /> Recognised: Yes</span>

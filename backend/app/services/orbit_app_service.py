@@ -396,14 +396,23 @@ _SPOTIFY_URI_RE = re.compile(r"spotify:(playlist|artist|track|album):([A-Za-z0-9
 _SPOTIFY_URL_RE = re.compile(r"open\.spotify\.com/(playlist|artist|track|album)/([A-Za-z0-9]+)")
 
 
+_ANDROID_INTENT_RE = re.compile(
+    r"^intent:(?://)?[^\s`|$<>\\\r\n\x00]*#Intent;(?:[a-zA-Z0-9_.-]+=[^;\s`|$<>\\\r\n\x00]+;)+end$"
+)
+
+
 def validate_launch_target(url: str | None) -> str:
     """Strictly validate a resolved launch URL or URI scheme before returning or dispatching it."""
     raw = (url or "").strip()
     if not raw:
         return ""
+    lower = raw.lower()
+    if lower.startswith("intent:"):
+        if not _ANDROID_INTENT_RE.match(raw):
+            raise ValidationError("Invalid Android intent URI format.")
+        return raw
     if _SHELL_METACHAR_RE.search(raw):
         raise ValidationError("Launch target contains disallowed control or shell characters.")
-    lower = raw.lower()
     if lower.startswith(_UNSAFE_SCHEMES):
         raise ValidationError("Launch target uses a disallowed URI scheme.")
     if raw.startswith("/"):
@@ -412,8 +421,6 @@ def validate_launch_target(url: str | None) -> str:
         parsed = urlparse(raw)
         if not parsed.netloc:
             raise ValidationError("HTTP(S) launch target must include a valid host.")
-        return raw
-    if lower.startswith("intent://"):
         return raw
     if lower.startswith(("mailto:", "tel:", "sms:", "app-prefs:")):
         return raw
@@ -523,7 +530,13 @@ def _find_app_metadata(
     ).scalars().all()
     for cr in custom_rows:
         aliases = [a.lower() for a in json.loads(cr.aliases_json or "[]")]
-        if cr.app_id == slug or cr.app_id == raw.lower() or cr.name.lower() == norm or norm in aliases:
+        if (
+            cr.app_id == slug
+            or cr.app_id == raw.lower()
+            or cr.name.lower() in (norm, raw.lower())
+            or norm in aliases
+            or raw.lower() in aliases
+        ):
             return _serialize_registered_app(cr), cr
 
     # 2. Check built-in extensible catalog
