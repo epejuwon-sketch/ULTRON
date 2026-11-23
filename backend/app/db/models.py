@@ -1060,3 +1060,46 @@ class FlutterwaveCheckoutPaymentRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class UniversalConnectorRecord(Base):
+    __tablename__ = "universal_connectors"
+
+    connector_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    provider_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="Custom websites and APIs")
+    connection_method: Mapped[str] = mapped_column(String(32), nullable=False, default="API_KEY")
+    lifecycle_state: Mapped[str] = mapped_column(String(32), nullable=False, default="NOT_CONFIGURED")
+    website_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    docs_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    api_base_url: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    required_headers_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    required_scopes_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    capabilities_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    discovered_auth_methods_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    webhook_endpoint_path: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    encrypted_webhook_secret_b64: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_secret_nonce_b64: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    subscribed_events_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class WebhookDeliveryRecord(Base):
+    __tablename__ = "universal_webhook_deliveries"
+
+    delivery_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    signature_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACCEPTED")
+    payload_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+

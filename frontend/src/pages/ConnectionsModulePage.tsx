@@ -20,6 +20,7 @@ import {
 } from "../catalog/integrationsCatalog";
 import { IntegrationCard } from "../components/integrations/IntegrationCard";
 import { IntegrationLogo } from "../components/integrations/IntegrationLogo";
+import { UniversalConnectPanel } from "../components/integrations/UniversalConnectPanel";
 import type { ModulePageProps } from "../types/module";
 import {
   ActivityFeed,
@@ -533,6 +534,8 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
               />
             </div>
           </div>
+
+          <UniversalConnectPanel onChanged={loadAll} />
 
           {antigravity?.connected_plugin_adapters && (
             <div className="card">
