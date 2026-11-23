@@ -1036,3 +1036,27 @@ class OrbitRegisteredAppRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class FlutterwaveCheckoutPaymentRecord(Base):
+    __tablename__ = "flutterwave_checkout_payments"
+
+    payment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    tx_ref: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    flw_transaction_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(12), nullable=False, default="NGN")
+    payment_options: Mapped[str] = mapped_column(String(120), nullable=False, default="card,banktransfer,ussd")
+    customer_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    customer_name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    checkout_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    environment: Mapped[str] = mapped_column(String(16), nullable=False, default="test")
+    status: Mapped[str] = mapped_column(String(48), nullable=False, default="INITIATED")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_webhook_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+

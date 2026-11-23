@@ -398,6 +398,20 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = Field(default="", alias="WHATSAPP_PHONE_NUMBER_ID")
     payment_provider_key: SecretStr | None = Field(default=None, alias="PAYMENT_PROVIDER_KEY")
 
+    # UBA Verve Direct Integration (Developer Zone)
+    uba_api_base_url: str = Field(default="", alias="UBA_API_BASE_URL")
+    uba_client_id: str = Field(default="", alias="UBA_CLIENT_ID")
+    uba_client_secret: SecretStr | None = Field(default=None, alias="UBA_CLIENT_SECRET")
+    uba_api_key: SecretStr | None = Field(default=None, alias="UBA_API_KEY")
+    uba_environment: Literal["sandbox", "production"] = Field(default="sandbox", alias="UBA_ENVIRONMENT")
+
+    # Flutterwave Sandbox Integration (Hosted Checkout)
+    flw_public_key: str = Field(default="", alias="FLW_PUBLIC_KEY")
+    flw_secret_key: SecretStr | None = Field(default=None, alias="FLW_SECRET_KEY")
+    flw_encryption_key: SecretStr | None = Field(default=None, alias="FLW_ENCRYPTION_KEY")
+    flw_secret_hash: SecretStr | None = Field(default=None, alias="FLW_SECRET_HASH")
+    flw_environment: Literal["test", "live"] = Field(default="test", alias="FLW_ENVIRONMENT")
+
     @model_validator(mode="after")
     def _enforce_production_secrets(self) -> "Settings":
         if self.ultron_env == "production":

@@ -24,7 +24,7 @@ from app.services.file_hub_service import generate_and_store_file
 
 SUPPORTED_CARD_LINK_PROVIDERS = {
     "paystack": "Paystack tokenized authorization reference",
-    "flutterwave": "Flutterwave tokenized card reference",
+    "uba_verve": "UBA Verve direct Developer Zone / tokenized card reference",
     "stripe": "Stripe PaymentMethod token (pm_...)",
 }
 
@@ -418,31 +418,39 @@ def verify_card_provider_authorization(
     if prov not in SUPPORTED_CARD_LINK_PROVIDERS or not tok_ref:
         raise ValidationError("Card must have a supported provider_key and provider_token_ref to verify.")
 
-    api_secret = resolve_provider_token(db, tenant_id=principal.tenant_id, provider=prov, settings=settings)
-    if not api_secret:
-        raise ConflictError(
-            f"No live {prov} API credentials configured for this tenant. Card remains at AWAITING_PROVIDER_AUTH."
-        )
+    if prov == "uba_verve":
+        from app.services.uba_verve_adapter import verify_uba_verve_connection
 
-    url_map = {
-        "stripe": f"https://api.stripe.com/v1/payment_methods/{tok_ref}",
-        "paystack": "https://api.paystack.co/bank",
-        "flutterwave": f"https://api.flutterwave.com/v3/tokens/{tok_ref}",
-    }
-    client = http_client or httpx.Client(timeout=8.0)
-    should_close = http_client is None
-    try:
-        resp = client.get(url_map[prov], headers={"Authorization": f"Bearer {api_secret}"})
-    except Exception as exc:
-        raise ConflictError(f"Provider verification request failed: {exc}") from exc
-    finally:
-        if should_close:
-            client.close()
+        res = verify_uba_verve_connection(db, principal=principal, settings=settings, http_client=http_client)
+        if res.get("lifecycle_state") != "LIVE_VERIFIED":
+            raise ConflictError(
+                f"UBA Verve connection is {res.get('lifecycle_state')} ({res.get('detail', 'not live verified')}). Card remains at AWAITING_PROVIDER_AUTH."
+            )
+    else:
+        api_secret = resolve_provider_token(db, tenant_id=principal.tenant_id, provider=prov, settings=settings)
+        if not api_secret:
+            raise ConflictError(
+                f"No live {prov} API credentials configured for this tenant. Card remains at AWAITING_PROVIDER_AUTH."
+            )
 
-    if resp.status_code != 200:
-        raise ConflictError(
-            f"Provider {prov} rejected card authorization check (HTTP {resp.status_code}). Card remains AWAITING_PROVIDER_AUTH."
-        )
+        url_map = {
+            "stripe": f"https://api.stripe.com/v1/payment_methods/{tok_ref}",
+            "paystack": "https://api.paystack.co/bank",
+        }
+        client = http_client or httpx.Client(timeout=8.0)
+        should_close = http_client is None
+        try:
+            resp = client.get(url_map[prov], headers={"Authorization": f"Bearer {api_secret}"})
+        except Exception as exc:
+            raise ConflictError(f"Provider verification request failed: {exc}") from exc
+        finally:
+            if should_close:
+                client.close()
+
+        if resp.status_code != 200:
+            raise ConflictError(
+                f"Provider {prov} rejected card authorization check (HTTP {resp.status_code}). Card remains AWAITING_PROVIDER_AUTH."
+            )
 
     now = datetime.now(timezone.utc)
     rec.last_synced_at = now

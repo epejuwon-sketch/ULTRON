@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -390,3 +390,239 @@ def api_verify_card_provider(
         card_id=card_id,
         settings=settings,
     )
+
+
+# ---------------------------------------------------------------------------
+# UBA Verve Direct Integration (Developer Zone Sandbox & Capability Governance)
+# ---------------------------------------------------------------------------
+class UbaVerifyRequest(BaseModel):
+    use_sandbox_mock: bool = False
+
+
+class UbaAccountQueryRequest(BaseModel):
+    account_ref: str = Field(min_length=3, max_length=64)
+    use_sandbox_mock: bool = False
+
+
+class UbaFinancialActionRequest(BaseModel):
+    capability: str = Field(min_length=4, max_length=32)
+    card_id: str = Field(min_length=3, max_length=64)
+    amount_ngn: float = Field(gt=0)
+    counterparty: str = Field(min_length=2, max_length=160)
+
+
+@router.get("/uba-verve/status")
+def api_uba_verve_status(
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.uba_verve_adapter import get_uba_verve_status
+
+    return get_uba_verve_status(db, principal=principal, settings=settings)
+
+
+@router.post("/uba-verve/verify")
+def api_uba_verve_verify(
+    body: UbaVerifyRequest,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.uba_verve_adapter import verify_uba_verve_connection
+
+    return verify_uba_verve_connection(
+        db,
+        principal=principal,
+        settings=settings,
+        use_sandbox_mock=body.use_sandbox_mock,
+    )
+
+
+@router.post("/uba-verve/balance")
+def api_uba_verve_balance(
+    body: UbaAccountQueryRequest,
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.uba_verve_adapter import query_uba_account_balance
+
+    return query_uba_account_balance(
+        db,
+        principal=principal,
+        account_ref=body.account_ref,
+        settings=settings,
+        use_sandbox_mock=body.use_sandbox_mock,
+    )
+
+
+@router.post("/uba-verve/transactions")
+def api_uba_verve_transactions(
+    body: UbaAccountQueryRequest,
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.uba_verve_adapter import query_uba_account_transactions
+
+    return query_uba_account_transactions(
+        db,
+        principal=principal,
+        account_ref=body.account_ref,
+        settings=settings,
+        use_sandbox_mock=body.use_sandbox_mock,
+    )
+
+
+@router.post("/uba-verve/action")
+def api_uba_verve_action(
+    body: UbaFinancialActionRequest,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.uba_verve_adapter import request_uba_financial_action
+
+    return request_uba_financial_action(
+        db,
+        principal=principal,
+        capability=body.capability,
+        card_id=body.card_id,
+        amount_ngn=body.amount_ngn,
+        counterparty=body.counterparty,
+        settings=settings,
+    )
+
+
+@router.post("/uba-verve/revoke")
+def api_uba_verve_revoke(
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.uba_verve_adapter import revoke_uba_verve_consent
+
+    return revoke_uba_verve_consent(db, principal=principal)
+
+
+# ---------------------------------------------------------------------------
+# Flutterwave Sandbox Integration (Hosted Checkout, Callback, Webhook & Verify)
+# ---------------------------------------------------------------------------
+class FlutterwaveCheckoutRequest(BaseModel):
+    amount: float = Field(gt=0)
+    currency: str = Field(default="NGN", max_length=12)
+    customer_email: str = Field(min_length=5, max_length=255)
+    customer_name: str = Field(default="", max_length=160)
+    redirect_url: str = Field(default="https://ultron.local/finance/flutterwave/callback", max_length=500)
+    payment_options: str = Field(default="card,banktransfer,ussd", max_length=120)
+    idempotency_key: str | None = Field(default=None, max_length=120)
+    use_sandbox_mock: bool = False
+
+
+class FlutterwaveVerifyRequest(BaseModel):
+    tx_ref: str = Field(min_length=4, max_length=120)
+    transaction_id: str = Field(min_length=1, max_length=64)
+
+
+@router.get("/flutterwave/status")
+def api_flutterwave_status(
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.flutterwave_service import get_flutterwave_status
+
+    return get_flutterwave_status(db, principal=principal, settings=settings)
+
+
+@router.get("/flutterwave/payments")
+def api_list_flutterwave_payments(
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.flutterwave_service import list_flutterwave_payments
+
+    items = list_flutterwave_payments(db, tenant_id=principal.tenant_id)
+    return {"total": len(items), "payments": items}
+
+
+@router.post("/flutterwave/checkout", status_code=status.HTTP_201_CREATED)
+def api_flutterwave_checkout(
+    body: FlutterwaveCheckoutRequest,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.flutterwave_service import initiate_hosted_checkout
+
+    return initiate_hosted_checkout(
+        db,
+        principal=principal,
+        amount=body.amount,
+        currency=body.currency,
+        customer_email=body.customer_email,
+        customer_name=body.customer_name,
+        redirect_url=body.redirect_url,
+        payment_options=body.payment_options,
+        idempotency_key=body.idempotency_key,
+        settings=settings,
+        use_sandbox_mock=body.use_sandbox_mock,
+    )
+
+
+@router.get("/flutterwave/callback")
+def api_flutterwave_callback(
+    tx_ref: str = Query(..., min_length=4),
+    status_param: str = Query(..., alias="status"),
+    transaction_id: str | None = Query(default=None),
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.flutterwave_service import handle_flutterwave_callback
+
+    return handle_flutterwave_callback(
+        db,
+        principal=principal,
+        tx_ref=tx_ref,
+        status=status_param,
+        transaction_id=transaction_id,
+        settings=settings,
+    )
+
+
+@router.post("/flutterwave/verify")
+def api_flutterwave_verify(
+    body: FlutterwaveVerifyRequest,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.flutterwave_service import verify_flutterwave_transaction
+
+    return verify_flutterwave_transaction(
+        db,
+        principal=principal,
+        tx_ref=body.tx_ref,
+        transaction_id=body.transaction_id,
+        settings=settings,
+    )
+
+
+@router.post("/flutterwave/webhook")
+async def api_flutterwave_webhook(
+    request: Request,
+    verif_hash: str | None = Header(default=None, alias="verif-hash"),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    from app.services.flutterwave_service import handle_flutterwave_webhook
+
+    payload = await request.json()
+    return handle_flutterwave_webhook(
+        db,
+        verif_hash=verif_hash,
+        payload=payload,
+        settings=settings,
+    )
+

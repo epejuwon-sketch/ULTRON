@@ -37,7 +37,7 @@ function connectionTone(status: string): "success" | "info" | "warn" | "neutral"
 export function FinanceCardsExperience({ scope }: { scope?: string }) {
   const { pushToast } = useToast();
   const [cards, setCards] = useState<any[]>([]);
-  const [supportedProviders, setSupportedProviders] = useState<string[]>(["paystack", "flutterwave", "stripe"]);
+  const [supportedProviders, setSupportedProviders] = useState<string[]>(["paystack", "stripe", "uba_verve"]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [blobUrls, setBlobUrls] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -71,16 +71,27 @@ export function FinanceCardsExperience({ scope }: { scope?: string }) {
     redactionMode: "standard" | "full";
     loading: boolean;
   } | null>(null);
+  const [ubaStatus, setUbaStatus] = useState<any>(null);
+  const [flwStatus, setFlwStatus] = useState<any>(null);
+  const [flwPayments, setFlwPayments] = useState<any[]>([]);
   const touchStartX = useRef<number | null>(null);
 
   async function loadCards() {
     setLoading(true);
     try {
       const qs = scope ? `?scope=${encodeURIComponent(scope)}` : "";
-      const res = await apiFetch<any>(`/api/v1/finance/cards${qs}`);
+      const [res, ubaRes, flwRes, flwPayRes] = await Promise.all([
+        apiFetch<any>(`/api/v1/finance/cards${qs}`),
+        apiFetch<any>("/api/v1/finance/uba-verve/status").catch(() => null),
+        apiFetch<any>("/api/v1/finance/flutterwave/status").catch(() => null),
+        apiFetch<any>("/api/v1/finance/flutterwave/payments").catch(() => ({ payments: [] })),
+      ]);
       const list = res.cards || [];
       setCards(list);
       if (Array.isArray(res.supported_providers)) setSupportedProviders(res.supported_providers);
+      setUbaStatus(ubaRes);
+      setFlwStatus(flwRes);
+      setFlwPayments(flwPayRes?.payments || []);
       setActiveIndex((idx) => (list.length === 0 ? 0 : Math.min(idx, list.length - 1)));
     } catch (e: any) {
       pushToast(e.message, "error");
@@ -477,6 +488,34 @@ export function FinanceCardsExperience({ scope }: { scope?: string }) {
           )}
         </>
       )}
+
+      {/* UBA Verve Direct & Flutterwave Sandbox Panel */}
+      <div className="finance-card-info-panel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+          <strong>Nigerian Rail Sandbox: UBA Verve Direct &amp; Flutterwave</strong>
+          <span className="pill mono">NO LIVE TRANSFERS</span>
+        </div>
+        <div className="grid-2" style={{ gap: 10, fontSize: 12 }}>
+          <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div className="row-between">
+              <strong>UBA Verve Direct</strong>
+              <StatusIndicator label={ubaStatus?.lifecycle_state || "UNCONFIGURED"} tone={ubaStatus?.lifecycle_state === "LIVE_VERIFIED" ? "success" : "neutral"} />
+            </div>
+            <div className="muted">
+              Capabilities: {ubaStatus?.capabilities ? Object.entries(ubaStatus.capabilities).map(([k, v]: [string, any]) => `${k} (${v.mode})`).join(" · ") : "CARD_DISPLAY only"}
+            </div>
+          </div>
+          <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div className="row-between">
+              <strong>Flutterwave Hosted Checkout</strong>
+              <StatusIndicator label={flwStatus?.status || "UNCONFIGURED"} tone={flwStatus?.status === "SANDBOX_CONFIGURED" ? "info" : "neutral"} />
+            </div>
+            <div className="muted">
+              Env: {flwStatus?.environment || "test"} · NGN &amp; Verve · Sandbox payments recorded: {flwPayments.length}
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Add / Edit Card Drawer */}
       <Drawer open={drawerOpen} title={editingCard ? `Edit Card: ${editingCard.nickname}` : "Add Card to ULTRON"} onClose={() => setDrawerOpen(false)}>

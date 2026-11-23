@@ -56,6 +56,25 @@ SUPPORTED_MANAGED_PROVIDERS: dict[str, dict[str, Any]] = {
     "google_slides": {"auth_types": ["OAUTH2"], "capabilities": ["create_presentation", "read_presentation", "add_slides"]},
     "google_cloud": {"auth_types": ["OAUTH2", "SERVICE_ACCOUNT"], "capabilities": ["list_projects", "list_enabled_services", "resource_inspection"]},
     "google_search": {"auth_types": ["API_KEY"], "capabilities": ["web_search", "citations"]},
+    "uba_verve": {
+        "auth_types": ["OAUTH2_CLIENT_CREDENTIALS", "API_KEY"],
+        "capabilities": [
+            "CARD_DISPLAY",
+            "CARD_PAYMENT",
+            "ACCOUNT_BALANCE",
+            "ACCOUNT_TRANSACTIONS",
+            "CARD_AUTHORIZATION",
+        ],
+    },
+    "flutterwave": {
+        "auth_types": ["API_KEY"],
+        "capabilities": [
+            "hosted_checkout",
+            "ngn_verve_checkout",
+            "webhook_verif_hash",
+            "transaction_verify",
+        ],
+    },
 }
 
 

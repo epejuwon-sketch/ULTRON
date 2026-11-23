@@ -223,7 +223,7 @@ class RecordTransactionRequest(BaseModel):
 
 
 class CreatePaymentMethodRequest(BaseModel):
-    provider: Literal["paystack", "flutterwave", "stripe", "bank_token"]
+    provider: Literal["paystack", "uba_verve", "stripe", "bank_token"]
     provider_token_ref: str = Field(min_length=6, max_length=160)
     brand: Literal["VISA", "MASTERCARD", "VERVE", "AMEX"]
     last4: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
