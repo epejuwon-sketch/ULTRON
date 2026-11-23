@@ -25,13 +25,21 @@ _WIKIPEDIA_USER_AGENT = (
 )
 
 _QUESTION_PREFIX_RE = re.compile(
-    r"^\s*(?:can you tell me|please tell me|tell me|do you know|what is|what's|what are|"
-    r"how much does|how much do|how much is|how much are|where can i buy|who is|when did|why is)\s+",
+    r"^\s*(?:can you tell me|please tell me|tell me|can you show me|please show me|show me|give me|find me|"
+    r"research|search for|look up|do you know|what is the|what is|what's|what are|"
+    r"how much does|how much do|how much is|how much are|where can i buy|who is|when did|why is)"
+    r"(?:\s+(?:current|latest|actual|real))?"
+    r"(?:\s+(?:market value|price|prices|pricing|cost|worth|specifications|specs|details|report|overview))?"
+    r"(?:\s+(?:of|for|about|on))?\s+",
     re.IGNORECASE,
 )
 _LEADING_ARTICLE_RE = re.compile(r"^\s*(?:a|an|the)\s+", re.IGNORECASE)
 _TRAILING_VERB_RE = re.compile(
     r"\s+(?:cost|costs|worth|sell for|selling for|go for|going for|price|priced at|today|right now|currently)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+_MULTI_SENTENCE_SPLIT_RE = re.compile(
+    r"(?:\.\s+|\?\s+|!\s+|;\s+|\s+-\s+|\s+—\s+|\b(?:display|include|separate|explain|compare|show me the source|list|provide)\b)",
     re.IGNORECASE,
 )
 
@@ -216,13 +224,20 @@ def _record_provider_attempt(
 
 
 def extract_core_subject(raw_query: str) -> str:
-    """Convert a conversational question into a clean entity/subject keyword phrase for search engines."""
+    """Convert a conversational or multi-sentence question into a clean entity/subject keyword phrase for search engines."""
     cleaned = re.sub(r"\s+", " ", (raw_query or "").strip())
-    cleaned = _QUESTION_PREFIX_RE.sub("", cleaned)
-    cleaned = _LEADING_ARTICLE_RE.sub("", cleaned)
-    cleaned = _TRAILING_VERB_RE.sub("", cleaned)
-    cleaned = cleaned.strip(" ?!.,;:\"'")
-    return cleaned or (raw_query or "").strip()
+    # If the prompt has multiple sentences or directive clauses ("Show me X. Display Y. Separate Z."), focus on the primary subject clause
+    parts = [p.strip() for p in _MULTI_SENTENCE_SPLIT_RE.split(cleaned) if p and len(p.strip()) >= 3]
+    primary_clause = parts[0] if parts else cleaned
+    primary_clause = _QUESTION_PREFIX_RE.sub("", primary_clause)
+    primary_clause = _LEADING_ARTICLE_RE.sub("", primary_clause)
+    primary_clause = _TRAILING_VERB_RE.sub("", primary_clause)
+    primary_clause = primary_clause.strip(" ?!.,;:\"'")
+    # Cap overly long subject strings to 8 words so search engines never reject the query
+    words = primary_clause.split()
+    if len(words) > 8:
+        primary_clause = " ".join(words[:8])
+    return primary_clause or (raw_query or "").strip()[:80]
 
 
 def is_result_relevant_to_query(title: str, snippet: str, url: str, query: str) -> bool:

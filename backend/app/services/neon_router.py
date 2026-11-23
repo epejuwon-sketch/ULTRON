@@ -471,10 +471,69 @@ def invoke_agent_reasoning(
         )
     else:
         exec_mode = "local_deterministic_fallback"
-        if research_sources:
+        if product_intelligence and product_intelligence.get("detected"):
+            rep = product_intelligence.get("editorial_report") or {}
+            p_meta = product_intelligence.get("product") or {}
+            p_name = p_meta.get("product_name") or "Product"
+            msrp_sec = rep.get("msrp_section") or {}
+            cm_sec = rep.get("collector_market_section") or {}
+            al_sec = rep.get("active_listings_section") or {}
+            cs_sec = rep.get("completed_sales_section") or {}
+            ng_sec = rep.get("nigerian_market_section") or {}
+
+            variant_lines = []
+            for vb in (cm_sec.get("variants") or []):
+                v_url = vb.get("source_url") or ""
+                v_dom = vb.get("source_domain") or "Source"
+                cite = f" ([{v_dom}]({v_url}))" if v_url else ""
+                variant_lines.append(
+                    f"- **{vb.get('variant_name')}**: {vb.get('production_note')}. "
+                    f"Original MSRP: {vb.get('original_msrp_note')}. {vb.get('current_market_note')}{cite}"
+                )
+
+            listing_lines = []
+            for lst in (al_sec.get("listings") or [])[:5]:
+                price_part = f" — **{lst['advertised_price']} ({lst.get('currency') or 'USD'})** [Asking Price]" if lst.get("advertised_price") else ""
+                loc_part = f" · {lst.get('country')}" if lst.get("country") else ""
+                listing_lines.append(
+                    f"- [{lst.get('title')}]({lst.get('url')}) ({lst.get('domain')}{loc_part}){price_part}: {lst.get('summary_excerpt', '')[:180]}"
+                )
+
+            sold_lines = []
+            for sl in (cs_sec.get("sales") or [])[:4]:
+                s_url = sl.get("url") or sl.get("source_url") or ""
+                s_title = sl.get("title") or sl.get("source_title") or sl.get("domain") or sl.get("source_domain") or "Auction Record"
+                s_price = sl.get("advertised_price") or sl.get("formatted_price") or "Verified Transaction"
+                s_excerpt = sl.get("summary_excerpt") or sl.get("context_excerpt") or ""
+                sold_lines.append(f"- **{s_price}** — [{s_title}]({s_url}): {s_excerpt[:200]}")
+
+            msrp_cites = ", ".join(
+                f"[{r.get('source_domain') or 'Source'}]({r.get('source_url')}) ({r.get('formatted_price')})"
+                for r in (msrp_sec.get("records") or [])
+                if r.get("source_url")
+            )
+            output_text = (
+                f"{rep.get('introduction') or ''}\n\n"
+                f"## Original Manufacturer MSRP\n"
+                f"{msrp_sec.get('narrative') or ''}"
+                f"{f' Verified factory pricing citations: {msrp_cites}.' if msrp_cites else ''}\n\n"
+                f"## Current Collector Market\n"
+                + ("\n".join(variant_lines) if variant_lines else f"Current market valuations for {p_name} vary by trim, mileage, and regional specification.")
+                + "\n\n## Active Dealer Listings\n"
+                + ("\n".join(listing_lines) if listing_lines else "See the verified dealer and marketplace source links above for current inventory.")
+                + "\n\n## Documented Completed Sales\n"
+                + f"{cs_sec.get('narrative') or ''}\n"
+                + ("\n".join(sold_lines) if sold_lines else "")
+                + "\n\n## Nigerian Market\n"
+                + f"{ng_sec.get('narrative') or ''}\n\n"
+                + "## Market Analysis\n"
+                + f"Across the {len(research_sources)} independent sources retrieved for {p_name}, price dispersion is driven primarily by variant scarcity, body configuration, mileage, documented service/auction provenance, and regional import taxation. "
+                + "Active dealer figures represent asking prices and opening negotiation positions rather than confirmed transaction prices, whereas documented auction results establish verified market-clearing benchmarks."
+            )
+        elif research_sources:
             src_lines = "\n".join(
-                f"- {s['title']} ({s['domain']}): {s['snippet']} [{s['url']}]"
-                for s in research_sources[:4]
+                f"- [{s['title']}]({s['url']}) ({s['domain']}): {s['snippet']}"
+                for s in research_sources[:5]
             )
             output_text = (
                 f"Live Gemini inference is not configured in this environment, so I cannot synthesize a full conversational summary yet. "

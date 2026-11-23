@@ -788,18 +788,13 @@ export default function NeonModulePage({
                         )}
                       </div>
                     </div>
-                    {m.role === "assistant" && displayProductIntel?.detected && (
-                      <ProductDiscoveryShowcase data={displayProductIntel} />
-                    )}
-                    {hasVisibleBody ? (
-                      <div>
-                        {m.role === "assistant" && displayProductIntel?.detected && (
-                          <div className="eyebrow-mono" style={{ marginBottom: 6, color: "var(--accent, #38bdf8)" }}>
-                            NEON INTELLIGENCE SYNTHESIS &amp; VALUATION ANALYSIS
-                          </div>
-                        )}
-                        {renderFormattedMessage(rawBody, handleCopyCode)}
-                      </div>
+                    {m.role === "assistant" && displayProductIntel?.detected ? (
+                      <ProductDiscoveryShowcase
+                        data={displayProductIntel}
+                        articleMarkdown={hasVisibleBody ? rawBody : undefined}
+                      />
+                    ) : hasVisibleBody ? (
+                      renderFormattedMessage(rawBody, handleCopyCode)
                     ) : (
                       <div className="alert-box alert-warn" style={{ marginTop: 4 }}>
                         <strong>Response Body Unavailable:</strong> Model <code className="mono">{m.model || "Gemini"}</code> completed execution without returning visible answer text (possible thinking-token budget exhaustion on earlier execution). Send a new message to retry with the expanded 4096-token output budget and automatic fallback guard.

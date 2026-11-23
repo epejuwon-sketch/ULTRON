@@ -132,18 +132,18 @@ def build_natural_language_guidance(
     if is_pricing_query:
         lines.extend(
             [
-                "PRICING & VALUATION ACCURACY RULES:",
-                "- Clearly distinguish and separate:",
-                "  (1) Original Manufacturer MSRP / launch price (prioritize official manufacturer and established automotive/industry test sources),",
-                "  (2) Current Dealer & Used-Market Asking Prices (active listings — explicitly note these are asking prices, not confirmed sale prices),",
-                "  (3) Documented Completed Auction & Transactional Sales (verified sold/hammer prices and median transactional benchmarks), and",
-                "  (4) Estimated Market Value Ranges across trims (e.g., Coupe vs. Roadster / special editions).",
+                "EDITORIAL PRODUCT & COLLECTOR MARKET REPORT STRUCTURE (MANDATORY):",
+                "- Write as a refined, authoritative automotive/luxury-market editorial publication in clear natural language.",
+                "- Organize your analysis with clear markdown section headings (`## ...`):",
+                "  1. Opening editorial introduction (engineering/product overview, performance or technical significance, production history, and market standing),",
+                "  2. `## Original Manufacturer MSRP` (factory launch pricing with clickable source links),",
+                "  3. `## Current Collector Market` (explicitly separate variants/trims such as Coupe, Roadster, SVJ 63 Coupe, and SVJ 63 Roadster without mixing them),",
+                "  4. `## Active Dealer Listings` (summarize advertised inventory, asking prices, currencies, regions, mileage/condition, and clickable listing links),",
+                "  5. `## Documented Completed Sales` (strictly separate confirmed completed auction/transactional sales from asking prices, including auction source, date, and sold price),",
+                "  6. `## Nigerian Market` (honestly state whether confirmed local Nigerian dealer inventory or documented local sales were found; never invent local NGN prices), and",
+                "  7. `## Market Analysis` (explain why prices differ across trims/regions, identify high/low outliers, and state what the evidence establishes vs. what remains uncertain).",
                 "- Never mix different variants, specifications, or conditions when comparing prices.",
-                "- Identify any unusually high or low outlier prices and explain the drivers (mileage, year, condition, rarity, Coupe vs. Roadster/63 Edition, provenance, or regional import duties).",
-                "- Always specify the currency (e.g., USD, EUR, GBP, AED, NGN), geographic market/location, and the retrieval date/timeframe of the figures.",
-                "- Explain clearly what the retrieved evidence establishes and what it does not establish.",
-                "- Include clickable markdown citations `[Source Name](https://...)` directly beside key factual and pricing claims.",
-                "- NIGERIAN MARKET HONESTY RULE: If verified active Nigerian dealer listings or confirmed local sales are unavailable in the retrieved sources, explicitly report that verified Nigerian market evidence is unavailable rather than inventing local NGN prices or treating automated currency-conversion directory pages as confirmed local inventory.",
+                "- Include clickable markdown citations `[Source Name](https://...)` directly beside every price and factual claim.",
             ]
         )
     if research_bundle is not None:

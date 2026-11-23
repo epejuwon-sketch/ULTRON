@@ -1,16 +1,11 @@
 import React, { useState } from "react";
 import {
-  ChevronLeft,
-  ChevronRight,
+  CheckCircle2,
   ExternalLink,
-  Globe,
-  Image as ImageIcon,
   ImageOff,
   MapPin,
   ShieldCheck,
-  Tag,
 } from "lucide-react";
-import { StatusIndicator } from "./DesignSystem";
 
 export interface ProductImageItem {
   image_url: string;
@@ -66,6 +61,16 @@ export interface ProductPriceEvidenceItem {
   retrieved_at?: string;
 }
 
+export interface VariantBreakdownItem {
+  variant_name: string;
+  production_note?: string;
+  original_msrp_note?: string;
+  current_market_note?: string;
+  source_title?: string;
+  source_url?: string;
+  source_domain?: string;
+}
+
 export interface ProductIntelligenceData {
   detected?: boolean;
   product?: {
@@ -81,6 +86,37 @@ export interface ProductIntelligenceData {
   image_availability_status?: string;
   listings?: ProductListingItem[];
   price_evidence?: ProductPriceEvidenceItem[];
+  variant_breakdowns?: VariantBreakdownItem[];
+  editorial_report?: {
+    headline?: string;
+    subheadline?: string;
+    formatted_date?: string;
+    verification_badges?: Array<{ label: string; tone?: string }>;
+    introduction?: string;
+    msrp_section?: {
+      heading?: string;
+      narrative?: string;
+      records?: ProductPriceEvidenceItem[];
+    };
+    collector_market_section?: {
+      heading?: string;
+      variants?: VariantBreakdownItem[];
+    };
+    active_listings_section?: {
+      heading?: string;
+      listings?: ProductListingItem[];
+    };
+    completed_sales_section?: {
+      heading?: string;
+      narrative?: string;
+      sales?: any[];
+    };
+    nigerian_market_section?: {
+      heading?: string;
+      verified_local_listings_found?: boolean;
+      narrative?: string;
+    };
+  };
   pricing_summary?: {
     original_msrp?: ProductPriceEvidenceItem[];
     active_asking_prices?: ProductPriceEvidenceItem[];
@@ -97,516 +133,912 @@ export interface ProductIntelligenceData {
   retrieved_at?: string;
 }
 
-function priceTypeTone(priceType?: string): "success" | "info" | "warn" | "neutral" {
-  const t = String(priceType || "").toUpperCase();
-  if (t === "COMPLETED_SALE") return "success";
-  if (t === "ORIGINAL_MSRP") return "info";
-  if (t.includes("UNVERIFIED")) return "warn";
-  return "neutral";
+function renderInlineRichText(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)]+)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return (
+        <strong key={idx} style={{ color: "#f8fafc", fontWeight: 600 }}>
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    const mdLink = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+    if (mdLink) {
+      return (
+        <a
+          key={idx}
+          href={mdLink[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            color: "#38bdf8",
+            textDecoration: "underline",
+            textUnderlineOffset: "3px",
+            fontWeight: 500,
+          }}
+        >
+          {mdLink[1]}
+        </a>
+      );
+    }
+    if (/^https?:\/\/[^\s)]+$/.test(part)) {
+      const cleanUrl = part.replace(/[.,;!?]+$/, "");
+      let hostLabel = cleanUrl;
+      try {
+        hostLabel = new URL(cleanUrl).hostname.replace(/^www\./, "");
+      } catch {
+        // keep raw URL
+      }
+      return (
+        <a
+          key={idx}
+          href={cleanUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            color: "#38bdf8",
+            textDecoration: "underline",
+            textUnderlineOffset: "3px",
+          }}
+        >
+          {hostLabel}
+        </a>
+      );
+    }
+    return <React.Fragment key={idx}>{part}</React.Fragment>;
+  });
 }
 
-function formatShortDate(iso?: string): string {
-  if (!iso) return "";
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
+export function renderEditorialArticleMarkdown(markdown: string): React.ReactNode {
+  const lines = (markdown || "").split("\n");
+  const elements: React.ReactNode[] = [];
+  let bulletBuffer: string[] = [];
+
+  const flushBullets = (keyPrefix: string) => {
+    if (bulletBuffer.length === 0) return;
+    const items = [...bulletBuffer];
+    bulletBuffer = [];
+    elements.push(
+      <ul
+        key={`ul-${keyPrefix}`}
+        style={{
+          margin: "8px 0 16px",
+          paddingLeft: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          color: "#cbd5e1",
+          fontSize: 15,
+          lineHeight: 1.68,
+        }}
+      >
+        {items.map((item, i) => (
+          <li key={i}>{renderInlineRichText(item)}</li>
+        ))}
+      </ul>
+    );
+  };
+
+  lines.forEach((rawLine, idx) => {
+    const line = rawLine.trim();
+    if (!line) {
+      flushBullets(`empty-${idx}`);
+      return;
+    }
+    if (line.startsWith("### ")) {
+      flushBullets(`h3-${idx}`);
+      elements.push(
+        <h4
+          key={`h3-${idx}`}
+          style={{
+            margin: "20px 0 8px",
+            fontSize: 16.5,
+            fontWeight: 600,
+            color: "#f1f5f9",
+            letterSpacing: "-0.01em",
+          }}
+        >
+          {renderInlineRichText(line.slice(4))}
+        </h4>
+      );
+      return;
+    }
+    if (line.startsWith("## ") || line.startsWith("# ")) {
+      flushBullets(`h2-${idx}`);
+      const headingText = line.replace(/^#+\s+/, "");
+      elements.push(
+        <h3
+          key={`h2-${idx}`}
+          style={{
+            margin: "26px 0 10px",
+            paddingTop: 18,
+            borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+            fontSize: 19,
+            fontWeight: 700,
+            color: "#ffffff",
+            letterSpacing: "-0.015em",
+          }}
+        >
+          {renderInlineRichText(headingText)}
+        </h3>
+      );
+      return;
+    }
+    if (line.startsWith("- ") || line.startsWith("* ") || /^\d+\.\s+/.test(line)) {
+      const cleaned = line.replace(/^(?:[-*]|\d+\.)\s+/, "");
+      bulletBuffer.push(cleaned);
+      return;
+    }
+    flushBullets(`p-${idx}`);
+    elements.push(
+      <p
+        key={`p-${idx}`}
+        style={{
+          margin: "0 0 14px",
+          fontSize: 15,
+          lineHeight: 1.72,
+          color: "#cbd5e1",
+        }}
+      >
+        {renderInlineRichText(line)}
+      </p>
+    );
+  });
+
+  flushBullets("final");
+  return <div>{elements}</div>;
 }
 
 export function ProductDiscoveryShowcase({
   data,
+  articleMarkdown,
 }: {
   data?: ProductIntelligenceData | null;
+  articleMarkdown?: string;
 }) {
-  const [activeImageIdx, setActiveImageIdx] = useState(0);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
-  const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
-  const [activeFilter, setActiveFilter] = useState<"ALL" | "ASKING" | "SOLD" | "MSRP">("ALL");
+  const [selectedPrimaryIdx, setSelectedPrimaryIdx] = useState(0);
 
   if (!data || !data.detected || !data.product) return null;
 
   const product = data.product;
+  const report = data.editorial_report || {};
   const specs = data.specifications || [];
-  const allImages = (data.images || []).filter(
+
+  // Deduplicate valid authentic images
+  const validImages = (data.images || []).filter(
     (img) => img.image_url && !failedImages[img.image_url]
   );
-  const safeIdx = allImages.length > 0 ? Math.min(activeImageIdx, allImages.length - 1) : 0;
-  const currentImg = allImages[safeIdx];
 
-  const listings = data.listings || [];
-  const filteredListings = listings.filter((item) => {
-    if (activeFilter === "ALL") return true;
-    if (activeFilter === "SOLD") return Boolean(item.is_completed_sale);
-    if (activeFilter === "MSRP") return item.price_type === "ORIGINAL_MSRP" || item.category === "manufacturer_msrp";
-    return !item.is_completed_sale;
-  });
+  // Arrange collage images: Primary hero (2/3 left) + up to 2 stacked secondary photos (1/3 right)
+  const primaryIdx = validImages.length > 0 ? Math.min(selectedPrimaryIdx, validImages.length - 1) : 0;
+  const primaryImage = validImages[primaryIdx];
+  const secondaryImages = validImages.filter((_, i) => i !== primaryIdx).slice(0, 2);
+  const extraImages = validImages.slice(3);
 
-  const summary = data.pricing_summary || {};
-  const msrpList = summary.original_msrp || [];
-  const askingList = summary.active_asking_prices || [];
-  const soldList = summary.confirmed_completed_sales || [];
-  const ngEvidence = summary.nigeria_market_evidence;
+  const formattedDate =
+    report.formatted_date ||
+    (data.retrieved_at
+      ? new Date(data.retrieved_at).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        })
+      : "");
+
+  const badges =
+    report.verification_badges && report.verification_badges.length > 0
+      ? report.verification_badges
+      : [
+          ...(specs.length >= 2 ? [{ label: "Factory specifications verified", tone: "success" }] : []),
+          ...(formattedDate ? [{ label: `Market data: ${formattedDate}`, tone: "info" }] : []),
+          ...((data.listings || []).length > 0
+            ? [{ label: `${(data.listings || []).length} live sources retrieved`, tone: "success" }]
+            : []),
+        ];
+
+  const activeListings =
+    report.active_listings_section?.listings ||
+    (data.listings || []).filter((l) => !l.is_completed_sale);
+  const completedSales =
+    report.completed_sales_section?.sales ||
+    (data.listings || []).filter((l) => l.is_completed_sale);
+  const variants = report.collector_market_section?.variants || data.variant_breakdowns || [];
+  const ngSection = report.nigerian_market_section || data.pricing_summary?.nigeria_market_evidence;
 
   return (
-    <div
-      className="card"
+    <article
       data-testid="product-discovery-showcase"
       style={{
-        marginTop: 10,
-        marginBottom: 10,
-        border: "1px solid rgba(56, 189, 248, 0.25)",
-        background: "linear-gradient(180deg, rgba(15, 23, 42, 0.85) 0%, rgba(9, 13, 24, 0.92) 100%)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 14,
+        marginTop: 6,
+        marginBottom: 14,
+        padding: "22px 20px",
+        borderRadius: 18,
+        background: "linear-gradient(180deg, rgba(13, 18, 30, 0.96) 0%, rgba(8, 11, 20, 0.98) 100%)",
+        border: "1px solid rgba(255, 255, 255, 0.08)",
+        color: "#f8fafc",
+        maxWidth: "100%",
+        overflow: "hidden",
       }}
     >
-      {/* 1. PRODUCT IDENTITY HEADER */}
-      <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
-        <div>
-          <div className="eyebrow-mono" style={{ color: "var(--accent, #38bdf8)" }}>
-            VISUAL PRODUCT DISCOVERY // {product.product_category?.toUpperCase() || "MARKET INTELLIGENCE"}
-          </div>
-          <h3 style={{ margin: "3px 0 0", fontSize: 17, fontWeight: 700 }}>
-            {product.product_name}
-          </h3>
-          <div className="row" style={{ flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-            {product.manufacturer && (
-              <span className="pill mono">Manufacturer: {product.manufacturer}</span>
-            )}
-            {product.model && <span className="pill mono">Model: {product.model}</span>}
-            {product.variant && (
-              <span className="pill pill-cyan mono">Variant: {product.variant}</span>
-            )}
-            {product.year && <span className="pill mono">Year: {product.year}</span>}
-          </div>
-        </div>
-        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-          <StatusIndicator
-            label={allImages.length > 0 ? `${allImages.length} VERIFIED PHOTO${allImages.length === 1 ? "" : "S"}` : "IMAGE UNAVAILABLE"}
-            tone={allImages.length > 0 ? "success" : "neutral"}
-          />
-          <StatusIndicator
-            label={`${listings.length} LIVE SOURCE${listings.length === 1 ? "" : "S"}`}
-            tone="info"
-          />
-        </div>
-      </div>
-
-      {/* 2. PRODUCT IMAGE GALLERY + SPECIFICATIONS GRID */}
-      <div className="grid-2" style={{ alignItems: "stretch", gap: 14 }}>
-        {/* Image Gallery with Official vs Listing Attribution & Honest Fallback State */}
+      {/* 1. LARGE PROMINENT EDITORIAL REPORT TITLE */}
+      <header style={{ marginBottom: 18 }}>
         <div
+          className="mono"
           style={{
-            border: "1px solid var(--border-subtle, rgba(255,255,255,0.09))",
-            borderRadius: 12,
-            overflow: "hidden",
-            background: "rgba(0,0,0,0.35)",
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
+            fontSize: 11,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            color: "#38bdf8",
+            marginBottom: 6,
           }}
         >
-          {currentImg ? (
-            <>
-              <div style={{ position: "relative", minHeight: 210, maxHeight: 290, display: "flex", alignItems: "center", justifyContent: "center", background: "#050811" }}>
-                {!loadedImages[currentImg.image_url] && (
-                  <div className="muted mono" style={{ position: "absolute", fontSize: 11.5 }}>
-                    Loading verified product photograph...
-                  </div>
-                )}
-                <img
-                  src={currentImg.image_url}
-                  alt={currentImg.title || product.product_name || "Product photograph"}
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                  onLoad={() =>
-                    setLoadedImages((prev) => ({ ...prev, [currentImg.image_url]: true }))
-                  }
-                  onError={() =>
-                    setFailedImages((prev) => ({ ...prev, [currentImg.image_url]: true }))
-                  }
-                  style={{
-                    width: "100%",
-                    maxHeight: 280,
-                    objectFit: "cover",
-                    display: "block",
-                    opacity: loadedImages[currentImg.image_url] ? 1 : 0.15,
-                    transition: "opacity 0.2s ease",
-                  }}
-                />
-                {/* Distinction badge: Official Manufacturer vs Listing / Auction / Commons */}
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 8,
-                    left: 8,
-                    background: "rgba(9, 13, 24, 0.86)",
-                    backdropFilter: "blur(6px)",
-                    padding: "4px 8px",
-                    borderRadius: 6,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    fontSize: 10.5,
-                  }}
-                  className="mono"
-                >
-                  <ImageIcon size={11} style={{ verticalAlign: "middle", marginRight: 4 }} />
-                  {currentImg.image_type_label || "Verified Source Photograph"}
-                </div>
-                {allImages.length > 1 && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      bottom: 8,
-                      right: 8,
-                      display: "flex",
-                      gap: 5,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      aria-label="Previous product photo"
-                      onClick={() =>
-                        setActiveImageIdx((prev) => (prev - 1 + allImages.length) % allImages.length)
-                      }
-                    >
-                      <ChevronLeft size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      aria-label="Next product photo"
-                      onClick={() => setActiveImageIdx((prev) => (prev + 1) % allImages.length)}
-                    >
-                      <ChevronRight size={13} />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ padding: "8px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-                <div className="row-between" style={{ gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 12, fontWeight: 600 }}>
-                    {(currentImg.title || product.product_name || "").slice(0, 75)}
-                  </span>
-                  {currentImg.source_page_url && (
-                    <a
-                      href={currentImg.source_page_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="pill mono"
-                      style={{ textDecoration: "none", fontSize: 10.5, display: "inline-flex", alignItems: "center", gap: 4 }}
-                    >
-                      Photo Source: {currentImg.source_domain || "Open"} <ExternalLink size={10} />
-                    </a>
-                  )}
-                </div>
-
-                {/* Thumbnail strip */}
-                {allImages.length > 1 && (
-                  <div
-                    className="row"
-                    style={{
-                      gap: 6,
-                      overflowX: "auto",
-                      paddingBottom: 2,
-                    }}
-                  >
-                    {allImages.map((img, i) => (
-                      <button
-                        key={img.image_url}
-                        type="button"
-                        onClick={() => setActiveImageIdx(i)}
-                        aria-label={`View photo ${i + 1}`}
-                        style={{
-                          border:
-                            i === safeIdx
-                              ? "2px solid var(--accent, #38bdf8)"
-                              : "1px solid rgba(255,255,255,0.14)",
-                          borderRadius: 6,
-                          padding: 0,
-                          width: 48,
-                          height: 36,
-                          overflow: "hidden",
-                          cursor: "pointer",
-                          background: "#050811",
-                          flexShrink: 0,
-                        }}
-                      >
-                        <img
-                          src={img.image_url}
-                          alt={img.title || `Thumbnail ${i + 1}`}
-                          loading="lazy"
-                          referrerPolicy="no-referrer"
-                          onError={() =>
-                            setFailedImages((prev) => ({ ...prev, [img.image_url]: true }))
-                          }
-                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          ) : (
-            <div
-              style={{
-                minHeight: 200,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 20,
-                textAlign: "center",
-                gap: 8,
-              }}
-            >
-              <ImageOff size={28} className="muted" />
-              <strong style={{ fontSize: 13 }}>Verified Photograph Unavailable</strong>
-              <span className="muted" style={{ fontSize: 12, maxWidth: 290 }}>
-                No verified public product photograph was returned by the live sources. ULTRON never generates synthetic placeholder photos for real-world products or listings.
-              </span>
-            </div>
-          )}
+          ULTRON EDITORIAL RESEARCH // {product.product_category || "COLLECTOR MARKET INTELLIGENCE"}
         </div>
+        <h1
+          style={{
+            margin: 0,
+            fontSize: "clamp(22px, 3.4vw, 31px)",
+            fontWeight: 800,
+            lineHeight: 1.2,
+            letterSpacing: "-0.02em",
+            color: "#ffffff",
+          }}
+        >
+          {report.headline || `${product.product_name} — Collector Market Report`}
+        </h1>
 
-        {/* Specifications & Market Valuation Separation Panel */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {/* Pricing Evidence Matrix: Original MSRP vs Active Asking vs Confirmed Completed Sales */}
-          <div
-            style={{
-              border: "1px solid var(--border-subtle, rgba(255,255,255,0.09))",
-              borderRadius: 12,
-              padding: "10px 12px",
-              background: "rgba(255,255,255,0.02)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <div className="eyebrow-mono" style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <Tag size={12} /> VERIFIED PRICING &amp; TRANSACTION EVIDENCE
-            </div>
-            <div className="grid-3" style={{ gap: 8 }}>
-              <div className="list-item" style={{ padding: "8px 10px" }}>
-                <div className="muted mono" style={{ fontSize: 10.5 }}>ORIGINAL MSRP</div>
-                <strong style={{ fontSize: 14, display: "block", marginTop: 2 }}>
-                  {msrpList[0]?.formatted_price || "See Sources"}
-                </strong>
-                <span className="muted" style={{ fontSize: 11 }}>
-                  {msrpList[0] ? `${msrpList[0].currency} · Factory Launch` : "Manufacturer baseline"}
-                </span>
-              </div>
-              <div className="list-item" style={{ padding: "8px 10px" }}>
-                <div className="muted mono" style={{ fontSize: 10.5 }}>ACTIVE ASKING PRICES</div>
-                <strong style={{ fontSize: 14, display: "block", marginTop: 2, color: "var(--accent, #38bdf8)" }}>
-                  {askingList[0]?.formatted_price || "See Listings"}
-                </strong>
-                <span className="muted" style={{ fontSize: 11 }}>
-                  {askingList[0]
-                    ? `${askingList[0].country} (Asking, not sold)`
-                    : "Dealer / seller quotes"}
-                </span>
-              </div>
-              <div className="list-item" style={{ padding: "8px 10px" }}>
-                <div className="muted mono" style={{ fontSize: 10.5 }}>CONFIRMED COMPLETED SALES</div>
-                <strong style={{ fontSize: 14, display: "block", marginTop: 2, color: "#34d399" }}>
-                  {soldList[0]?.formatted_price || "No Confirmed Sale"}
-                </strong>
-                <span className="muted" style={{ fontSize: 11 }}>
-                  {soldList[0]
-                    ? `${soldList[0].source_domain || "Auction"} verified sale`
-                    : "Asking prices ≠ sales"}
-                </span>
-              </div>
-            </div>
-
-            {ngEvidence?.checked && (
-              <div
-                className="list-item"
+        {/* 2. COMPACT VERIFICATION & RESEARCH-DATE BADGES */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            marginTop: 12,
+          }}
+        >
+          {badges.map((b, idx) => {
+            const isGreen = b.tone === "success" || idx % 2 === 0;
+            return (
+              <span
+                key={b.label}
                 style={{
-                  padding: "7px 10px",
-                  fontSize: 11.5,
-                  borderLeft: ngEvidence.verified_local_listings_found
-                    ? "3px solid #34d399"
-                    : "3px solid #f59e0b",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "4px 11px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: isGreen
+                    ? "rgba(16, 185, 129, 0.14)"
+                    : "rgba(56, 189, 248, 0.14)",
+                  color: isGreen ? "#34d399" : "#38bdf8",
+                  border: isGreen
+                    ? "1px solid rgba(52, 211, 153, 0.28)"
+                    : "1px solid rgba(56, 189, 248, 0.28)",
                 }}
               >
-                <strong>Nigerian Regional Market Check: </strong>
-                <span className="muted">{ngEvidence.note}</span>
+                <CheckCircle2 size={12} />
+                {b.label}
+              </span>
+            );
+          })}
+        </div>
+      </header>
+
+      {/* 3. PRODUCT PHOTOGRAPH COLLAGE (2/3 Primary Left + 1/3 Two Stacked Right, Rounded Outer Corners) */}
+      {validImages.length > 0 ? (
+        <section aria-label="Verified Product Photograph Collage" style={{ marginBottom: 22 }}>
+          <div
+            data-testid="editorial-photo-collage"
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                secondaryImages.length > 0
+                  ? "minmax(0, 1.85fr) minmax(0, 1fr)"
+                  : "minmax(0, 1fr)",
+              gap: 10,
+              borderRadius: 18,
+              overflow: "hidden",
+              background: "#05070e",
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+            }}
+          >
+            {/* Primary 2/3 Hero Photograph */}
+            {primaryImage && (
+              <div
+                style={{
+                  position: "relative",
+                  minHeight: secondaryImages.length > 0 ? 270 : 240,
+                  maxHeight: 420,
+                  overflow: "hidden",
+                  background: "#070b14",
+                }}
+              >
+                <a
+                  href={primaryImage.source_page_url || primaryImage.image_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Open source: ${primaryImage.title || product.product_name}`}
+                  style={{ display: "block", width: "100%", height: "100%" }}
+                >
+                  <img
+                    src={primaryImage.image_url}
+                    alt={primaryImage.title || product.product_name || "Primary product photograph"}
+                    loading="eager"
+                    referrerPolicy="no-referrer"
+                    onError={() =>
+                      setFailedImages((prev) => ({ ...prev, [primaryImage.image_url]: true }))
+                    }
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      minHeight: secondaryImages.length > 0 ? 270 : 240,
+                      maxHeight: 420,
+                      objectFit: "cover",
+                      display: "block",
+                    }}
+                  />
+                </a>
+                <a
+                  href={primaryImage.source_page_url || primaryImage.image_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    position: "absolute",
+                    left: 10,
+                    bottom: 10,
+                    right: 10,
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    background: "rgba(6, 10, 19, 0.82)",
+                    backdropFilter: "blur(6px)",
+                    color: "#e2e8f0",
+                    textDecoration: "none",
+                    fontSize: 11,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <strong>{primaryImage.image_type_label || "Verified Photo"}</strong>
+                    {primaryImage.source_domain ? ` · ${primaryImage.source_domain}` : ""}
+                  </span>
+                  <ExternalLink size={11} style={{ flexShrink: 0, color: "#38bdf8" }} />
+                </a>
               </div>
             )}
-          </div>
 
-          {/* Retrieved Product Specifications */}
-          {specs.length > 0 && (
-            <div
-              style={{
-                border: "1px solid var(--border-subtle, rgba(255,255,255,0.09))",
-                borderRadius: 12,
-                padding: "10px 12px",
-                background: "rgba(255,255,255,0.02)",
-              }}
-            >
-              <div className="eyebrow-mono" style={{ marginBottom: 6 }}>
-                VERIFIED PRODUCT SPECIFICATIONS
-              </div>
-              <div className="grid-2" style={{ gap: 6 }}>
-                {specs.slice(0, 6).map((sp) => (
-                  <div key={sp.label} className="list-item" style={{ padding: "6px 9px" }}>
-                    <div className="muted mono" style={{ fontSize: 10 }}>{sp.label.toUpperCase()}</div>
-                    <div style={{ fontSize: 12.5, fontWeight: 600 }}>{sp.value}</div>
+            {/* Right Column: Two Vertically Stacked Photographs */}
+            {secondaryImages.length > 0 && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateRows:
+                    secondaryImages.length === 2 ? "1fr 1fr" : "1fr",
+                  gap: 10,
+                  minHeight: 270,
+                  maxHeight: 420,
+                }}
+              >
+                {secondaryImages.map((img, sIdx) => (
+                  <div
+                    key={img.image_url}
+                    style={{
+                      position: "relative",
+                      overflow: "hidden",
+                      background: "#070b14",
+                      minHeight: 130,
+                    }}
+                  >
+                    <a
+                      href={img.source_page_url || img.image_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`Open source: ${img.title || product.product_name}`}
+                      style={{ display: "block", width: "100%", height: "100%" }}
+                    >
+                      <img
+                        src={img.image_url}
+                        alt={img.title || `${product.product_name} perspective ${sIdx + 2}`}
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        onError={() =>
+                          setFailedImages((prev) => ({ ...prev, [img.image_url]: true }))
+                        }
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          minHeight: 130,
+                          maxHeight: 205,
+                          objectFit: "cover",
+                          display: "block",
+                        }}
+                      />
+                    </a>
+                    <a
+                      href={img.source_page_url || img.image_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        position: "absolute",
+                        left: 8,
+                        bottom: 8,
+                        right: 8,
+                        padding: "4px 8px",
+                        borderRadius: 6,
+                        background: "rgba(6, 10, 19, 0.82)",
+                        backdropFilter: "blur(6px)",
+                        color: "#e2e8f0",
+                        textDecoration: "none",
+                        fontSize: 10,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 6,
+                        border: "1px solid rgba(255,255,255,0.12)",
+                      }}
+                    >
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {img.source_domain || img.image_type_label || "Source"}
+                      </span>
+                      <ExternalLink size={10} style={{ flexShrink: 0, color: "#38bdf8" }} />
+                    </a>
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Caption & Clickable Source Attribution Strip under Collage */}
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
+              marginTop: 8,
+              fontSize: 11.5,
+              color: "#94a3b8",
+            }}
+          >
+            <div>
+              Photographs sourced from{" "}
+              {validImages.slice(0, 3).map((im, i) => (
+                <React.Fragment key={im.image_url}>
+                  {i > 0 && ", "}
+                  <a
+                    href={im.source_page_url || im.image_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: "#38bdf8", textDecoration: "underline" }}
+                  >
+                    {im.source_domain || "verified source"}
+                  </a>
+                </React.Fragment>
+              ))}
+              .
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* 3. CLICKABLE PRODUCT & LISTING CARDS */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
-          <div className="eyebrow-mono" style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <ShieldCheck size={12} /> CLICKABLE PRODUCT PAGES, DEALER LISTINGS &amp; AUCTION SOURCES ({filteredListings.length})
+            {extraImages.length > 0 && (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span>More perspectives:</span>
+                {validImages.slice(0, 6).map((im, i) => (
+                  <button
+                    key={im.image_url}
+                    type="button"
+                    onClick={() => setSelectedPrimaryIdx(i)}
+                    style={{
+                      padding: "2px 7px",
+                      borderRadius: 6,
+                      fontSize: 11,
+                      cursor: "pointer",
+                      border:
+                        i === primaryIdx
+                          ? "1px solid #38bdf8"
+                          : "1px solid rgba(255,255,255,0.12)",
+                      background:
+                        i === primaryIdx ? "rgba(56, 189, 248, 0.16)" : "transparent",
+                      color: i === primaryIdx ? "#38bdf8" : "#94a3b8",
+                    }}
+                  >
+                    #{i + 1}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="row" style={{ gap: 4, flexWrap: "wrap" }}>
-            {(
-              [
-                { id: "ALL", label: `All (${listings.length})` },
-                { id: "ASKING", label: "Active Listings / Asking" },
-                { id: "SOLD", label: "Completed Sales" },
-                { id: "MSRP", label: "MSRP / Reference" },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={`btn btn-sm ${activeFilter === tab.id ? "" : "btn-secondary"}`}
-                onClick={() => setActiveFilter(tab.id)}
+        </section>
+      ) : (
+        <section
+          style={{
+            marginBottom: 20,
+            padding: "18px 16px",
+            borderRadius: 14,
+            background: "rgba(255,255,255,0.02)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <ImageOff size={22} className="muted" />
+          <div style={{ fontSize: 13, color: "#94a3b8" }}>
+            <strong style={{ color: "#e2e8f0" }}>Verified Photograph Unavailable: </strong>
+            No verified public product photograph was returned by the live sources. ULTRON never fabricates synthetic images for real-world products.
+          </div>
+        </section>
+      )}
+
+      {/* 4. NATURAL-LANGUAGE EDITORIAL ARTICLE (NEON / Gemini Analysis) */}
+      {articleMarkdown && articleMarkdown.trim() ? (
+        <section
+          data-testid="editorial-article-prose"
+          style={{
+            marginBottom: 24,
+            fontSize: 15,
+            lineHeight: 1.72,
+            color: "#cbd5e1",
+          }}
+        >
+          {renderEditorialArticleMarkdown(articleMarkdown)}
+        </section>
+      ) : (
+        report.introduction && (
+          <section style={{ marginBottom: 22 }}>
+            <p style={{ margin: "0 0 14px", fontSize: 15.5, lineHeight: 1.72, color: "#e2e8f0" }}>
+              {report.introduction}
+            </p>
+          </section>
+        )
+      )}
+
+      {/* 5. VARIANT & TRIM SEPARATION (Coupe vs Roadster vs Special Editions) */}
+      {variants.length > 0 && (
+        <section
+          style={{
+            paddingTop: 18,
+            marginBottom: 22,
+            borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 12px", fontSize: 18.5, fontWeight: 700, color: "#ffffff" }}>
+            {report.collector_market_section?.heading || "Collector Market by Variant"}
+          </h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {variants.map((vb) => (
+              <div
+                key={vb.variant_name}
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: "rgba(255, 255, 255, 0.025)",
+                  borderLeft: "3px solid #38bdf8",
+                }}
               >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid-2" style={{ gap: 10 }}>
-          {filteredListings.map((item, idx) => (
-            <div
-              key={item.url || idx}
-              className="list-item"
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
-                gap: 8,
-                padding: "10px 12px",
-                border: "1px solid var(--border-subtle, rgba(255,255,255,0.1))",
-              }}
-            >
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div className="row-between" style={{ gap: 6, flexWrap: "wrap" }}>
-                  <StatusIndicator
-                    label={
-                      item.is_completed_sale
-                        ? "CONFIRMED COMPLETED SALE"
-                        : item.price_type === "ORIGINAL_MSRP"
-                        ? "ORIGINAL MSRP"
-                        : item.price_type === "UNVERIFIED_CONVERTED_ESTIMATE"
-                        ? "UNVERIFIED NGN ESTIMATE"
-                        : "ASKING PRICE / LISTING"
-                    }
-                    tone={priceTypeTone(item.price_type)}
-                  />
-                  {item.advertised_price && (
-                    <span
-                      className="mono"
-                      style={{
-                        fontSize: 13.5,
-                        fontWeight: 700,
-                        color: item.is_completed_sale ? "#34d399" : "var(--accent, #38bdf8)",
-                      }}
-                    >
-                      {item.advertised_price} {item.currency ? `(${item.currency})` : ""}
-                    </span>
-                  )}
-                </div>
-
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <div
                   style={{
-                    color: "inherit",
-                    textDecoration: "none",
-                    fontWeight: 600,
-                    fontSize: 13.5,
-                    lineHeight: 1.35,
+                    display: "flex",
+                    flexWrap: "wrap",
+                    justifyContent: "space-between",
+                    alignItems: "baseline",
+                    gap: 8,
+                    marginBottom: 4,
                   }}
                 >
-                  {item.title}
-                </a>
-
-                <div className="row" style={{ flexWrap: "wrap", gap: 6, fontSize: 11 }}>
-                  <span className="pill mono">
-                    <Globe size={10} style={{ verticalAlign: "middle", marginRight: 3 }} />
-                    {item.domain}
-                  </span>
-                  {item.country && (
-                    <span className="pill mono">
-                      <MapPin size={10} style={{ verticalAlign: "middle", marginRight: 3 }} />
-                      {item.country}
+                  <strong style={{ fontSize: 15, color: "#ffffff" }}>{vb.variant_name}</strong>
+                  {vb.original_msrp_note && (
+                    <span className="mono" style={{ fontSize: 12, color: "#94a3b8" }}>
+                      {vb.original_msrp_note}
                     </span>
                   )}
-                  {item.condition && <span className="pill mono">{item.condition}</span>}
-                  {item.mileage && <span className="pill mono">{item.mileage}</span>}
-                  {item.page_fetched && (
-                    <span className="pill pill-cyan mono">FULL PAGE VERIFIED</span>
-                  )}
                 </div>
-
-                {item.summary_excerpt && (
-                  <div className="muted" style={{ fontSize: 12, lineHeight: 1.45 }}>
-                    {item.summary_excerpt}
+                {vb.production_note && (
+                  <div style={{ fontSize: 12.5, color: "#94a3b8", marginBottom: 4 }}>
+                    {vb.production_note}
+                  </div>
+                )}
+                {vb.current_market_note && (
+                  <div style={{ fontSize: 14, lineHeight: 1.6, color: "#cbd5e1" }}>
+                    {vb.current_market_note}{" "}
+                    {vb.source_url && (
+                      <a
+                        href={vb.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: "#38bdf8",
+                          textDecoration: "underline",
+                          fontSize: 13,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        [{vb.source_domain || "Source"} ↗]
+                      </a>
+                    )}
                   </div>
                 )}
               </div>
+            ))}
+          </div>
+        </section>
+      )}
 
+      {/* 6. ACTIVE DEALER LISTINGS & MARKET SOURCES (With Direct Clickable Links) */}
+      {activeListings.length > 0 && (
+        <section
+          style={{
+            paddingTop: 18,
+            marginBottom: 22,
+            borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 6px", fontSize: 18.5, fontWeight: 700, color: "#ffffff" }}>
+            Active Dealer Listings &amp; Valuation Sources
+          </h3>
+          <p style={{ margin: "0 0 12px", fontSize: 13, color: "#94a3b8" }}>
+            Advertised asking prices and live market inventory. Every entry links directly to its original listing or valuation page.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {activeListings.map((item, idx) => (
               <div
-                className="row-between"
+                key={item.url || idx}
                 style={{
-                  paddingTop: 6,
-                  borderTop: "1px solid rgba(255,255,255,0.06)",
-                  flexWrap: "wrap",
-                  gap: 6,
+                  display: "flex",
+                  gap: 12,
+                  alignItems: "flex-start",
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  background: "rgba(255, 255, 255, 0.025)",
+                  border: "1px solid rgba(255, 255, 255, 0.07)",
                 }}
               >
-                <span className="muted mono" style={{ fontSize: 10.5 }}>
-                  Checked {formatShortDate(item.last_checked_at)}
-                </span>
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn btn-secondary btn-sm"
-                  style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}
-                >
-                  Open Source Page <ExternalLink size={12} />
-                </a>
+                {item.image_url && !failedImages[item.image_url] && (
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ flexShrink: 0 }}
+                  >
+                    <img
+                      src={item.image_url}
+                      alt={item.title}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      onError={() =>
+                        setFailedImages((prev) => ({ ...prev, [item.image_url!]: true }))
+                      }
+                      style={{
+                        width: 84,
+                        height: 62,
+                        objectFit: "cover",
+                        borderRadius: 8,
+                        display: "block",
+                      }}
+                    />
+                  </a>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      gap: 8,
+                    }}
+                  >
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: "#ffffff",
+                        fontWeight: 600,
+                        fontSize: 14.5,
+                        textDecoration: "underline",
+                        textDecorationColor: "rgba(56, 189, 248, 0.5)",
+                        textUnderlineOffset: "3px",
+                      }}
+                    >
+                      {item.title}
+                    </a>
+                    {item.advertised_price && (
+                      <span
+                        className="mono"
+                        style={{
+                          fontSize: 14,
+                          fontWeight: 700,
+                          color: "#38bdf8",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {item.advertised_price} {item.currency ? `(${item.currency})` : ""} · Asking
+                      </span>
+                    )}
+                  </div>
+                  {item.summary_excerpt && (
+                    <div
+                      style={{
+                        fontSize: 13.5,
+                        color: "#cbd5e1",
+                        lineHeight: 1.55,
+                        marginTop: 4,
+                      }}
+                    >
+                      {item.summary_excerpt}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 10,
+                      alignItems: "center",
+                      marginTop: 6,
+                      fontSize: 12,
+                      color: "#94a3b8",
+                    }}
+                  >
+                    <span className="mono">{item.domain}</span>
+                    {item.country && (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        <MapPin size={11} /> {item.country}
+                      </span>
+                    )}
+                    {item.condition && <span>· {item.condition}</span>}
+                    {item.mileage && <span>· {item.mileage}</span>}
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: "#38bdf8",
+                        textDecoration: "none",
+                        fontWeight: 600,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        marginLeft: "auto",
+                      }}
+                    >
+                      Open Listing / Source <ExternalLink size={11} />
+                    </a>
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 7. DOCUMENTED COMPLETED SALES (Strictly Separated from Asking Prices) */}
+      {completedSales.length > 0 && (
+        <section
+          style={{
+            paddingTop: 18,
+            marginBottom: 22,
+            borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 6px", fontSize: 18.5, fontWeight: 700, color: "#ffffff" }}>
+            Documented Completed Auction &amp; Transactional Sales
+          </h3>
+          <p style={{ margin: "0 0 12px", fontSize: 13, color: "#94a3b8" }}>
+            Verified completed sales and auction hammer results, separated from advertised asking prices.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {completedSales.map((sale: any, idx: number) => {
+              const sUrl = sale.url || sale.source_url || "";
+              const sTitle = sale.title || sale.source_title || sale.domain || sale.source_domain || "Completed Auction Record";
+              const sDomain = sale.domain || sale.source_domain || "";
+              const sPrice = sale.advertised_price || sale.formatted_price || "Verified Sale";
+              const sExcerpt = sale.summary_excerpt || sale.context_excerpt || "";
+              return (
+                <div
+                  key={`${sUrl}-${idx}`}
+                  style={{
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    background: "rgba(16, 185, 129, 0.06)",
+                    border: "1px solid rgba(52, 211, 153, 0.22)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      justifyContent: "space-between",
+                      alignItems: "baseline",
+                      gap: 8,
+                    }}
+                  >
+                    <a
+                      href={sUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: "#ffffff",
+                        fontWeight: 600,
+                        fontSize: 14.5,
+                        textDecoration: "underline",
+                        textDecorationColor: "rgba(52, 211, 153, 0.5)",
+                        textUnderlineOffset: "3px",
+                      }}
+                    >
+                      {sTitle}
+                    </a>
+                    <span
+                      className="mono"
+                      style={{ fontSize: 14, fontWeight: 700, color: "#34d399" }}
+                    >
+                      {sPrice} · Confirmed Completed Sale
+                    </span>
+                  </div>
+                  {sExcerpt && (
+                    <div style={{ fontSize: 13.5, color: "#cbd5e1", lineHeight: 1.55, marginTop: 4 }}>
+                      {sExcerpt}
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginTop: 6,
+                      fontSize: 12,
+                      color: "#94a3b8",
+                    }}
+                  >
+                    <span className="mono">
+                      <ShieldCheck size={12} style={{ verticalAlign: "middle", marginRight: 4, color: "#34d399" }} />
+                      {sDomain}
+                    </span>
+                    {sUrl && (
+                      <a
+                        href={sUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: "#34d399",
+                          textDecoration: "none",
+                          fontWeight: 600,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                      >
+                        View Auction Record <ExternalLink size={11} />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 8. NIGERIAN REGIONAL MARKET VERIFICATION */}
+      {ngSection && (
+        <section
+          style={{
+            paddingTop: 16,
+            borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+            fontSize: 13.5,
+            lineHeight: 1.6,
+            color: "#cbd5e1",
+          }}
+        >
+          <strong style={{ color: "#ffffff" }}>Nigerian Market Verification: </strong>
+          {(ngSection as any).narrative || (ngSection as any).note}
+        </section>
+      )}
+    </article>
   );
 }

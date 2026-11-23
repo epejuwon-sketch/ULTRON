@@ -1078,6 +1078,26 @@ def test_visual_product_discovery_images_pricing_separation_and_conversation_per
     assert no_img_bundle["image_availability_status"] == "UNAVAILABLE"
     assert no_img_bundle["images"] == []
 
+    # 6. Verify exact multi-sentence acceptance prompt normalizes to "Lamborghini Aventador SVJ" and builds editorial_report + 4 SVJ variants
+    from app.integrations.web_research import extract_core_subject
+
+    exact_acceptance_prompt = (
+        "Show me the Lamborghini Aventador SVJ. Display real photographs, current listings, their actual website links, "
+        "original MSRP and documented completed sales. Separate the Coupe, Roadster and SVJ 63. "
+        "Explain the market in natural language and show me the source for every price."
+    )
+    assert extract_core_subject(exact_acceptance_prompt) == "Lamborghini Aventador SVJ"
+
+    editorial = bundle.get("editorial_report") or {}
+    assert "Lamborghini Aventador SVJ" in editorial.get("headline", "")
+    assert len(editorial.get("verification_badges") or []) >= 2
+    variant_names = [v["variant_name"] for v in (bundle.get("variant_breakdowns") or [])]
+    assert any("Coupe" in vn for vn in variant_names)
+    assert any("Roadster" in vn for vn in variant_names)
+    assert any("SVJ 63 Coupe" in vn for vn in variant_names)
+    assert any("SVJ 63 Roadster" in vn for vn in variant_names)
+
+
 
 
 
