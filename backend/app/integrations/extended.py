@@ -133,6 +133,8 @@ class GoogleDriveClient:
 
     @property
     def _token(self) -> str:
+        if getattr(self, "_oauth_token", None):
+            return str(self._oauth_token).strip()
         return (
             self._settings.google_drive_access_token.get_secret_value().strip()
             if self._settings.google_drive_access_token
@@ -144,13 +146,23 @@ class GoogleDriveClient:
 
     def status_without_network(self) -> IntegrationStatus:
         if not self.is_configured():
+            oauth_ready = bool(
+                self._settings.google_oauth_client_id
+                and self._settings.google_oauth_client_secret
+                and self._settings.google_oauth_client_secret.get_secret_value()
+            )
+            detail = (
+                "Ready for Google OAuth 2.0 authorization via Configure."
+                if oauth_ready
+                else "Google Drive setup is not yet available. Administrator configuration is required."
+            )
             return IntegrationStatus(
                 provider="google_drive",
                 configured=False,
                 capability_state=HonestCapabilityState.DEFINED_NOT_INSTALLED,
                 live_verified=False,
-                missing_env_vars=["GOOGLE_DRIVE_ACCESS_TOKEN"],
-                detail="GOOGLE_DRIVE_ACCESS_TOKEN not configured; read-only knowledge sync inactive.",
+                missing_env_vars=[],
+                detail=detail,
             )
         return IntegrationStatus(
             provider="google_drive",
@@ -158,7 +170,7 @@ class GoogleDriveClient:
             capability_state=HonestCapabilityState.INSTALLED,
             live_verified=False,
             endpoint=f"{self.BASE_URL}/about?fields=user",
-            detail="Google Drive token configured; run live verification to confirm access.",
+            detail="Google Drive OAuth credentials stored in VAULT; run health check to verify live access.",
         )
 
     def verify_live(self, timeout_seconds: float = 8.0) -> IntegrationStatus:

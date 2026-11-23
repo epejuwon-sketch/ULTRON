@@ -306,10 +306,9 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
         method: "POST",
         body: { redirect_uri: `${window.location.origin}/oauth/callback` },
       });
-      setProbeResult(res);
-      setOauthAuthUrl(res.authorization_url || "");
-      setOauthState(res.state || "");
-      pushToast("OAuth 2.0 + PKCE authorization URL ready.", "info");
+      if (res.authorization_url) {
+        window.location.assign(res.authorization_url);
+      }
     } catch (e: any) {
       pushToast(e.message, "error");
     }
@@ -832,13 +831,6 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                 )}
               </div>
 
-              {selected.requiredEnvVars.length > 0 && (
-                <div className="list-item">
-                  <div className="telemetry-label">REQUIRED SERVER ENVIRONMENT VARIABLES</div>
-                  <div className="mono" style={{ fontSize: 12 }}>{selected.requiredEnvVars.join(", ")}</div>
-                </div>
-              )}
-
               <div className="list-item">
                 <div className="telemetry-label">LEAST-PRIVILEGE SCOPES</div>
                 <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
@@ -873,9 +865,19 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
               {selected.authFlow === "OAUTH2" && selected.backendProviderKey && (
                 <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div className="telemetry-label">OAUTH 2.0 + PKCE AUTHORIZATION</div>
+                  {!info.record?.oauth_client_configured && (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {selected.name} setup is not yet available. Administrator configuration is required.
+                    </div>
+                  )}
                   <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                    <button type="button" className="btn btn-sm" onClick={() => handleStartOAuth(selected)}>
-                      <ExternalLink size={13} /> Start OAuth 2.0 + PKCE
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={!info.record?.oauth_client_configured}
+                      onClick={() => handleStartOAuth(selected)}
+                    >
+                      <ExternalLink size={13} /> {info.record?.connection_id ? "Reauthorize in Browser" : "Configure"}
                     </button>
                     {info.record?.connection_id && (
                       <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleRefreshToken(selected.backendProviderKey!)}>
@@ -883,39 +885,21 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
                       </button>
                     )}
                   </div>
-                  {oauthAuthUrl && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
-                      <a href={oauthAuthUrl} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
-                        <ExternalLink size={12} /> Authorize in {selected.name}
-                      </a>
-                      <input
-                        className="input mono"
-                        value={oauthCode}
-                        onChange={(e) => setOauthCode(e.target.value)}
-                        placeholder="Paste authorization code (if redirected externally)"
-                      />
-                      <button type="button" className="btn btn-sm" onClick={() => handleCompleteOAuthCallback(selected)} disabled={!oauthCode.trim()}>
-                        Complete OAuth Callback
-                      </button>
-                    </div>
-                  )}
                 </div>
               )}
 
-              {selected.backendProviderKey && (
+              {selected.backendProviderKey && info.record?.connection_id && !info.record?.disconnected_at && (
                 <div className="row" style={{ gap: 8 }}>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleTestProvider(selected)}>
-                    <Play size={12} /> Test Connection
+                    <Play size={12} /> Run Health Check
                   </button>
-                  {(info.status === "Live Verified" || info.status === "Authenticated" || info.status === "Authentication expired") && info.record?.connection_id && (
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      onClick={() => setConfirmDisconnect(selected)}
-                    >
-                      <Unplug size={13} /> Disconnect &amp; Revoke
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={() => setConfirmDisconnect(selected)}
+                  >
+                    <Unplug size={13} /> Disconnect &amp; Revoke
+                  </button>
                 </div>
               )}
 

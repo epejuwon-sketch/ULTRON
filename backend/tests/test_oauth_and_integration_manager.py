@@ -228,6 +228,17 @@ def test_oauth_redirect_uri_consistency_user_isolation_and_replay(client: TestCl
         )
         assert ok["live_verified"] is True
 
+        # 5b. Unified /api/v1/integrations/status reflects the same connected VAULT OAuth state
+        # without requiring GOOGLE_DRIVE_ACCESS_TOKEN
+        from app.routers.health import integrations_status
+
+        unified_status = integrations_status(principal=owner, db=db, settings=cfg)
+        gd_cap = unified_status["capabilities"]["google_drive"]
+        assert gd_cap["configured"] is True
+        assert gd_cap["live_verified"] is True
+        assert gd_cap["missing_env_vars"] == []
+        assert "GOOGLE_DRIVE_ACCESS_TOKEN" not in gd_cap["detail"]
+
         # 6. Replay with same state is rejected
         with pytest.raises(ConflictError):
             complete_oauth_callback(

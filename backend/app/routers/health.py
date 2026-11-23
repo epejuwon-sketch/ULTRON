@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.permissions import Principal
-from app.db.session import check_database_health_detailed
+from app.db.session import check_database_health_detailed, get_db
 from app.integrations.registry import IntegrationRegistry
 from app.routers.deps import require_perm
 
@@ -51,18 +52,60 @@ def health_root(settings: Settings = Depends(get_settings)) -> dict:
 
 @router.get("/api/v1/integrations/status")
 def integrations_status(
-    _principal: Principal = Depends(require_perm("integrations:verify")),
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Return honest configuration status for Supabase, Gemini, Vercel, and Cloudflare."""
-    return IntegrationRegistry(settings).get_static_status()
+    """Return unified integration status combining static config and VAULT OAuth/API-key records."""
+    from app.services.integration_manager import list_connections
+
+    static = IntegrationRegistry(settings).get_static_status()
+    managed = list_connections(db, tenant_id=principal.tenant_id, settings=settings)
+    by_provider = {c["provider"]: c for c in managed.get("connections", [])}
+
+    caps = static.get("capabilities", {})
+    mapping = {
+        "google_drive": "google_drive",
+        "github": "github",
+        "google_calendar": "calendar",
+        "google_gmail": "email",
+    }
+    for provider_key, cap_key in mapping.items():
+        rec = by_provider.get(provider_key)
+        if rec and rec.get("connection_id") and not rec.get("disconnected_at"):
+            caps[cap_key] = {
+                **caps.get(cap_key, {}),
+                "provider": provider_key,
+                "configured": True,
+                "live_verified": rec.get("status") == "AVAILABLE",
+                "capability_state": rec.get("status", "IMPLEMENTED_NOT_LIVE"),
+                "detail": (
+                    f"Connected via {rec.get('auth_type', 'OAUTH2')}"
+                    + (f" ({rec['account_label']})" if rec.get("account_label") else "")
+                ),
+                "missing_env_vars": [],
+            }
+    return static
 
 
 @router.post("/api/v1/integrations/verify")
 def integrations_verify_live(
     timeout_seconds: float = Query(default=8.0, ge=1.0, le=20.0),
-    _principal: Principal = Depends(require_perm("integrations:verify")),
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Run live outbound connectivity checks against all configured providers honestly."""
-    return IntegrationRegistry(settings).verify_all_live(timeout_seconds=timeout_seconds)
+    """Run live outbound connectivity checks against configured providers and active VAULT OAuth connections."""
+    from app.services.integration_manager import list_connections, verify_provider_live
+
+    report = IntegrationRegistry(settings).verify_all_live(timeout_seconds=timeout_seconds)
+    managed = list_connections(db, tenant_id=principal.tenant_id, settings=settings)
+    for rec in managed.get("connections", []):
+        if rec.get("connection_id") and not rec.get("disconnected_at"):
+            try:
+                v = verify_provider_live(db, principal=principal, provider=rec["provider"], settings=settings)
+                if rec["provider"] in report.get("capabilities", {}):
+                    report["capabilities"][rec["provider"]] = v
+            except Exception:
+                pass
+    return report

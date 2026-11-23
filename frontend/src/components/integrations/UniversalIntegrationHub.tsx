@@ -430,7 +430,7 @@ export function UniversalIntegrationHub() {
                 <strong><Link2 size={12} /> OAuth 2.0 + PKCE Authorization</strong>
                 {!activeConfigItem.oauthReady && (
                   <div className="muted">
-                    Server OAuth client credentials are not configured yet ({activeConfigItem.entry.requiredEnvVars.join(", ")}). Browser OAuth cannot start until configured on the backend.
+                    {activeConfigItem.entry.name} setup is not yet available. Administrator configuration is required.
                   </div>
                 )}
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
