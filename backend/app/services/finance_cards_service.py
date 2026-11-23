@@ -398,6 +398,69 @@ def process_and_attach_card_image(
     return serialize_card(db, rec)
 
 
+def verify_card_provider_authorization(
+    db: Session,
+    *,
+    principal: Principal,
+    card_id: str,
+    settings: Settings,
+    http_client: Any = None,
+) -> dict[str, Any]:
+    """Verify card-level provider authorization against live provider API before setting PROVIDER_LINKED."""
+    import httpx
+
+    from app.core.exceptions import ConflictError
+    from app.services.integration_manager import resolve_provider_token
+
+    rec = _get_card(db, tenant_id=principal.tenant_id, card_id=card_id)
+    prov = (rec.provider_key or "").strip().lower()
+    tok_ref = (rec.provider_token_ref or "").strip()
+    if prov not in SUPPORTED_CARD_LINK_PROVIDERS or not tok_ref:
+        raise ValidationError("Card must have a supported provider_key and provider_token_ref to verify.")
+
+    api_secret = resolve_provider_token(db, tenant_id=principal.tenant_id, provider=prov, settings=settings)
+    if not api_secret:
+        raise ConflictError(
+            f"No live {prov} API credentials configured for this tenant. Card remains at AWAITING_PROVIDER_AUTH."
+        )
+
+    url_map = {
+        "stripe": f"https://api.stripe.com/v1/payment_methods/{tok_ref}",
+        "paystack": "https://api.paystack.co/bank",
+        "flutterwave": f"https://api.flutterwave.com/v3/tokens/{tok_ref}",
+    }
+    client = http_client or httpx.Client(timeout=8.0)
+    should_close = http_client is None
+    try:
+        resp = client.get(url_map[prov], headers={"Authorization": f"Bearer {api_secret}"})
+    except Exception as exc:
+        raise ConflictError(f"Provider verification request failed: {exc}") from exc
+    finally:
+        if should_close:
+            client.close()
+
+    if resp.status_code != 200:
+        raise ConflictError(
+            f"Provider {prov} rejected card authorization check (HTTP {resp.status_code}). Card remains AWAITING_PROVIDER_AUTH."
+        )
+
+    now = datetime.now(timezone.utc)
+    rec.last_synced_at = now
+    rec.connection_status = "PROVIDER_LINKED"
+    rec.updated_at = now
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="FINANCE_CARD_PROVIDER_VERIFIED",
+        resource=rec.card_id,
+        outcome=f"provider={prov}|status=PROVIDER_LINKED",
+    )
+    db.commit()
+    db.refresh(rec)
+    return serialize_card(db, rec)
+
+
 def serialize_card(db: Session, r: FinanceCardRecord) -> dict[str, Any]:
     """Never expose raw card credentials or full provider tokens."""
     _, support_note = _resolve_connection_status(
@@ -405,6 +468,7 @@ def serialize_card(db: Session, r: FinanceCardRecord) -> dict[str, Any]:
         tenant_id=r.tenant_id,
         provider_key=r.provider_key,
         provider_token_ref=r.provider_token_ref,
+        last_synced_at=r.last_synced_at,
     )
     return {
         "card_id": r.card_id,

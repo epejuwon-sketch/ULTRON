@@ -158,3 +158,93 @@ def test_finance_cards_sanitized_preview_portrait_and_invalid_image(
         files={"file": ("bad.png", b"not-an-image", "image/png")},
     )
     assert bad_img.status_code in (400, 422)
+
+
+def test_migration_registry_includes_005_and_006() -> None:
+    from app.db.session import MIGRATION_REGISTRY
+
+    versions = {v for v, _ in MIGRATION_REGISTRY}
+    assert "005" in versions
+    assert "006" in versions
+
+
+def test_verify_card_provider_authorization(client, auth_headers, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import httpx
+    from app.core.config import get_settings
+    from app.db.session import get_engine
+    from app.services import finance_cards_service
+    from sqlalchemy.orm import sessionmaker
+
+    created = client.post(
+        "/api/v1/finance/cards",
+        headers=auth_headers["owner"],
+        json={
+            "nickname": "Verify Test Card",
+            "issuer": "Stripe",
+            "network": "VISA",
+            "card_type": "CORPORATE",
+            "scope": "BUSINESS",
+            "provider_key": "stripe",
+            "provider_token_ref": "pm_test_123",
+        },
+    )
+    assert created.status_code == 201, created.text
+    card = created.json()
+    cid = card["card_id"]
+    assert card["connection_status"] == "AWAITING_PROVIDER_AUTH"
+    assert card["last_synced_at"] is None
+
+    # Without live provider credentials, verify-provider returns 409 and keeps AWAITING_PROVIDER_AUTH
+    res_409 = client.post(
+        f"/api/v1/finance/cards/{cid}/verify-provider",
+        headers=auth_headers["owner"],
+    )
+    assert res_409.status_code == 409, res_409.text
+
+    fetched = client.get("/api/v1/finance/cards", headers=auth_headers["owner"])
+    assert fetched.status_code == 200
+    items = fetched.json()["cards"]
+    fetched_card = next(item for item in items if item["card_id"] == cid)
+    assert fetched_card["connection_status"] == "AWAITING_PROVIDER_AUTH"
+    assert fetched_card["last_synced_at"] is None
+
+    # With a valid tenant provider token and mocked HTTP 200, status becomes PROVIDER_LINKED
+    from app.services import integration_manager
+
+    monkeypatch.setattr(
+        integration_manager,
+        "resolve_provider_token",
+        lambda *args, **kwargs: "sk_test_mocked",
+    )
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"id": "pm_test_123"}))
+    with httpx.Client(transport=transport) as mock_http:
+        from sqlalchemy import text
+
+        settings = get_settings()
+        db = sessionmaker(bind=get_engine(settings), autocommit=False, autoflush=False, expire_on_commit=False)()
+        try:
+            tenant_id = db.execute(
+                text("SELECT tenant_id FROM finance_cards WHERE card_id = :cid"),
+                {"cid": cid},
+            ).scalar_one()
+            principal = SimpleNamespace(
+                user_id="owner-user",
+                username="owner",
+                tenant_id=tenant_id,
+                role="owner",
+                email="owner@ultron.test",
+            )
+            verified = finance_cards_service.verify_card_provider_authorization(
+                db,
+                principal=principal,
+                card_id=cid,
+                settings=settings,
+                http_client=mock_http,
+            )
+            assert verified["connection_status"] == "PROVIDER_LINKED"
+            assert verified["last_synced_at"] is not None
+        finally:
+            db.close()
+

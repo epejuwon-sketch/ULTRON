@@ -25,6 +25,7 @@ from app.services.finance_cards_service import (
     preview_sanitized_card_image,
     process_and_attach_card_image,
     update_card,
+    verify_card_provider_authorization,
 )
 from app.services.finance_service import (
     add_payment_method,
@@ -374,3 +375,18 @@ def api_delete_card(
     db: Session = Depends(get_db),
 ) -> dict:
     return delete_card(db, principal=principal, card_id=card_id)
+
+
+@router.post("/cards/{card_id}/verify-provider")
+def api_verify_card_provider(
+    card_id: str,
+    principal: Principal = Depends(require_perm("finance:write")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    return verify_card_provider_authorization(
+        db,
+        principal=principal,
+        card_id=card_id,
+        settings=settings,
+    )
