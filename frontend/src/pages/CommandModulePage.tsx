@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Send,
   Shield,
+  ShieldAlert,
   Sparkles,
   Workflow,
 } from "lucide-react";
@@ -26,6 +27,7 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FilterBar,
   LoadingState,
   MetricDisplay,
   PageHeader,
@@ -36,6 +38,17 @@ import {
 import { ReadableSummary } from "../components/ui/HumanPresentation";
 
 export type { ModulePageProps };
+
+type TaskFilter = "all" | "active" | "completed" | "failed" | "cancelled";
+
+function taskTone(state?: string): "success" | "info" | "warn" | "danger" | "neutral" {
+  const s = String(state || "").toUpperCase();
+  if (s === "COMPLETED") return "success";
+  if (s === "FAILED") return "danger";
+  if (s === "PENDING_APPROVAL" || s === "PAUSED") return "warn";
+  if (s === "CANCELLED") return "neutral";
+  return "info";
+}
 
 export default function CommandModulePage({
   subPage,
@@ -54,11 +67,14 @@ export default function CommandModulePage({
   const [overview, setOverview] = useState<any>(null);
   const [agents, setAgents] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [approvals, setApprovals] = useState<any[]>([]);
+  const [connections, setConnections] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [conversations, setConversations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
 
   // Quick command dispatch on Home
   const [cmd, setCmd] = useState("");
@@ -75,13 +91,15 @@ export default function CommandModulePage({
       return fallback;
     };
     try {
-      const [h, r, gd, ov, ag, tk, notif, aud, conv] = await Promise.all([
+      const [h, r, gd, ov, ag, tk, ap, conn, notif, aud, conv] = await Promise.all([
         apiFetch<any>("/health").catch(() => null),
         apiFetch<any>("/health/ready").catch(() => null),
         apiFetch<any>("/api/v1/neon/gemini/diagnostics?discover=false").catch(trackErr(null)),
         apiFetch<any>("/api/v1/monitoring/overview").catch(trackErr(null)),
         apiFetch<any>("/api/v1/agents").catch(trackErr({ agents: [] })),
         apiFetch<any>("/api/v1/tasks").catch(trackErr({ tasks: [] })),
+        apiFetch<any>("/api/v1/approvals").catch(trackErr({ approvals: [] })),
+        apiFetch<any>("/api/v1/integrations/connections").catch(trackErr({ connections: [] })),
         apiFetch<any>("/api/v1/notifications").catch(trackErr({ notifications: [] })),
         apiFetch<any>("/api/v1/audit/logs?limit=25").catch(trackErr({ logs: [] })),
         apiFetch<any>("/api/v1/neon/conversations").catch(trackErr({ conversations: [] })),
@@ -92,6 +110,8 @@ export default function CommandModulePage({
       setOverview(ov);
       setAgents(ag.agents || []);
       setTasks(tk.tasks || []);
+      setApprovals(ap.approvals || []);
+      setConnections(conn.connections || conn.integrations || []);
       setNotifications(notif.notifications || []);
       setAuditLogs(aud.logs || []);
       setConversations(conv.conversations || []);
@@ -175,21 +195,52 @@ export default function CommandModulePage({
   }
 
   async function markNotificationRead(id: string) {
-    await apiFetch(`/api/v1/notifications/${id}/read`, { method: "POST" });
-    refresh();
+    try {
+      await apiFetch(`/api/v1/notifications/${id}/read`, { method: "POST" });
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message, "error");
+    }
   }
 
   async function markAllNotificationsRead() {
-    await apiFetch("/api/v1/notifications/read-all", { method: "POST" });
-    pushToast("All notifications marked read.", "success");
-    refresh();
+    try {
+      await apiFetch("/api/v1/notifications/read-all", { method: "POST" });
+      pushToast("All notifications marked read.", "success");
+      refresh();
+    } catch (e: any) {
+      pushToast(e.message, "error");
+    }
   }
 
   const dbConnected = ready ? ready.status === "ready" || Boolean(ready.database?.connected) : null;
   const geminiStatus = resolveGeminiProviderStatus({ geminiDiag, health, ready });
   const globeStatus: "ready" | "degraded" | "loading" =
     dbConnected === null ? "loading" : dbConnected ? "ready" : "degraded";
+
   const unreadCount = notifications.filter((n) => !n.read).length;
+  const pendingApprovals = approvals.filter((a) => a.status === "PENDING");
+  const availableAgentsCount = agents.filter(
+    (a) => String(a.capability_state || "AVAILABLE").toUpperCase() === "AVAILABLE"
+  ).length;
+  const degradedAgentsCount = agents.length - availableAgentsCount;
+  const completedTasksCount = tasks.filter((t) => t.lifecycle_state === "COMPLETED").length;
+  const failedTasksCount = tasks.filter((t) => t.lifecycle_state === "FAILED").length;
+  const activeTasksCount = tasks.filter(
+    (t) => !["COMPLETED", "FAILED", "CANCELLED"].includes(String(t.lifecycle_state || "").toUpperCase())
+  ).length;
+  const connectedIntegrations = connections.filter(
+    (c) => String(c.status || c.state || "").toUpperCase() === "CONNECTED" || c.connected === true
+  );
+
+  const filteredTasks = tasks.filter((t) => {
+    const st = String(t.lifecycle_state || t.status || "").toUpperCase();
+    if (taskFilter === "completed") return st === "COMPLETED";
+    if (taskFilter === "failed") return st === "FAILED";
+    if (taskFilter === "cancelled") return st === "CANCELLED";
+    if (taskFilter === "active") return !["COMPLETED", "FAILED", "CANCELLED"].includes(st);
+    return true;
+  });
 
   return (
     <ResponsiveWorkspace subPages={mod.subPages} activeSubPage={page.id} onSelectSubPage={onSelectSubPage}>
@@ -206,61 +257,74 @@ export default function CommandModulePage({
 
       {error && <ErrorState message={error} onRetry={refresh} />}
 
-      {/* 1. HOME / COMMAND CENTER — Rotating 3D Earth ONLY on Home */}
+      {/* 1. HOME / COMMAND CENTER — Central Operational Headquarters */}
       {page.id === "home" && (
         <div className="command-stage">
           <section className="orbital-hero">
             <div className="orbital-header">
               <div>
-                <div className="eyebrow-mono">ORBITAL COMMAND INTERFACE · {user.username.toUpperCase()}</div>
-                <h2 className="hero-title">Global System Command</h2>
+                <div className="eyebrow-mono">OPERATIONAL HEADQUARTERS · {user.username.toUpperCase()}</div>
+                <h2 className="hero-title">ULTRON Command Centre</h2>
               </div>
-              <div className="row">
+              <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
                 <StatusIndicator
                   label={dbConnected ? "DATABASE READY" : dbConnected === false ? "DB DEGRADED" : "SYNCING"}
                   tone={dbConnected ? "success" : dbConnected === false ? "warn" : "neutral"}
                 />
+                <StatusIndicator label={geminiStatus.label} tone={geminiStatus.tone} />
                 <StatusIndicator
-                  label={geminiStatus.label}
-                  tone={geminiStatus.tone}
+                  label={`ARGON: ${activeTasksCount} ACTIVE`}
+                  tone={failedTasksCount > 0 ? "warn" : "info"}
                 />
               </div>
             </div>
 
             <div className="orbital-core">
               <div className="orbital-globe-wrap">
-                <EarthGlobe size={device.isMobile ? 250 : 320} status={globeStatus} />
+                <EarthGlobe size={device.isMobile ? 240 : 300} status={globeStatus} />
                 <div className="orbital-caption mono">
                   <span>{device.deviceClass.toUpperCase()}</span>
                   <span>·</span>
-                  <span>DRAG TO ROTATE</span>
+                  <span>{ready?.config?.env ? String(ready.config.env).toUpperCase() : "ACTIVE"}</span>
                 </div>
               </div>
 
               <div className="telemetry-rail">
                 <MetricDisplay
-                  label="Specialist Agents"
-                  value={`${agents.length || 60} Registered`}
-                  sub="25 Core · 35 Extensible"
-                  tone="info"
+                  label="60 Specialist Agents"
+                  value={`${availableAgentsCount || agents.length}/${agents.length || 60} Ready`}
+                  sub={degradedAgentsCount > 0 ? `${degradedAgentsCount} degraded/disabled` : "25 Core · 35 Specialist"}
+                  tone={degradedAgentsCount > 0 ? "warn" : "success"}
                 />
                 <MetricDisplay
-                  label="Persistence"
-                  value={ready?.database?.backend ? String(ready.database.backend).toUpperCase() : "Checking"}
-                  sub={dbConnected ? "Transaction Pooler / Verified" : "Awaiting check"}
-                  tone={dbConnected ? "success" : "warn"}
-                />
-                <MetricDisplay
-                  label="Active Tasks"
+                  label="ARGON Tasks"
                   value={tasks.length}
-                  sub={`${tasks.filter((t) => t.lifecycle_state === "COMPLETED").length} completed`}
-                  tone="neutral"
+                  sub={`${completedTasksCount} done · ${failedTasksCount} failed`}
+                  tone={failedTasksCount > 0 ? "warn" : "info"}
                 />
                 <MetricDisplay
-                  label="Security & Alerts"
+                  label="ApprovalGate Queue"
+                  value={`${pendingApprovals.length} Pending`}
+                  sub={pendingApprovals.length > 0 ? "Requires operator review" : "All gates clear"}
+                  tone={pendingApprovals.length > 0 ? "warn" : "success"}
+                />
+                <MetricDisplay
+                  label="Integrations"
+                  value={`${connectedIntegrations.length} Connected`}
+                  sub={`${connections.length} tenant record(s)`}
+                  tone={connectedIntegrations.length > 0 ? "success" : "neutral"}
+                />
+                <MetricDisplay
+                  label="System Health"
+                  value={`${overview?.error_rate_pct ?? 0}% Err`}
+                  sub={`${overview?.total_requests ?? 0} HTTP requests`}
+                  tone={Number(overview?.error_rate_pct || 0) > 2 ? "warn" : "success"}
+                />
+                <MetricDisplay
+                  label="Alerts & Audit"
                   value={`${unreadCount} Unread`}
-                  sub="AEGIS + VAULT Active"
-                  tone={unreadCount > 0 ? "warn" : "success"}
+                  sub={`${auditLogs.length} recent audit events`}
+                  tone={unreadCount > 0 ? "warn" : "neutral"}
                 />
               </div>
             </div>
@@ -324,11 +388,122 @@ export default function CommandModulePage({
             )}
           </section>
 
+          {/* Operational Headquarters Panels (Live Backend State Only) */}
+          <section className="grid-3">
+            {/* Live Tasks & Recent Operations */}
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="card-title">
+                <span>Live Tasks &amp; Operations</span>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => onSelectSubPage("recent-tasks")}>
+                  Manage
+                </button>
+              </div>
+              {tasks.length === 0 ? (
+                <div className="muted" style={{ fontSize: 12.5 }}>No tasks recorded yet. Dispatch via ARGON or the command dock above.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {tasks.slice(0, 4).map((t) => (
+                    <div key={t.task_id} className="list-item" style={{ padding: "8px 10px" }}>
+                      <div className="row-between" style={{ gap: 6 }}>
+                        <strong style={{ fontSize: 12.5 }}>{t.title || t.objective?.slice(0, 42)}</strong>
+                        <StatusIndicator label={t.lifecycle_state || t.status} tone={taskTone(t.lifecycle_state)} />
+                      </div>
+                      <div className="muted mono" style={{ fontSize: 11, marginTop: 2 }}>
+                        {t.assigned_agent_id || "AGT-02"} · {(t.steps || []).length} steps
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Pending Approvals & Connected Integrations */}
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="card-title">
+                <span><ShieldAlert size={14} style={{ verticalAlign: "middle", marginRight: 5 }} />Approvals &amp; Integrations</span>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigate("argon", "approvals")}>
+                  Queue
+                </button>
+              </div>
+              {pendingApprovals.length > 0 ? (
+                <div className="list-item" style={{ borderLeft: "3px solid var(--warn)" }}>
+                  <div className="row-between">
+                    <strong>{pendingApprovals.length} Pending Approval{pendingApprovals.length === 1 ? "" : "s"}</strong>
+                    <button type="button" className="btn btn-sm" onClick={() => onNavigate("argon", "approvals")}>
+                      Review
+                    </button>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {pendingApprovals[0]?.action_type || pendingApprovals[0]?.resource || "Governed mutation awaiting decision"}
+                  </div>
+                </div>
+              ) : (
+                <div className="list-item" style={{ padding: "8px 10px" }}>
+                  <div className="row-between">
+                    <span style={{ fontSize: 12.5 }}>ApprovalGate Queue</span>
+                    <StatusIndicator label="CLEAR" tone="success" />
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div className="row-between">
+                  <span className="telemetry-label">INTEGRATION STATES</span>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigate("connections", "directory")}>
+                    Directory
+                  </button>
+                </div>
+                {connections.length === 0 ? (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    Gemini: {geminiStatus.label}. Open Connections Centre to configure OAuth or API providers.
+                  </div>
+                ) : (
+                  connections.slice(0, 3).map((c: any, idx: number) => (
+                    <div key={c.provider || idx} className="row-between list-item" style={{ padding: "6px 10px" }}>
+                      <span className="mono" style={{ fontSize: 12 }}>{c.provider || c.name}</span>
+                      <StatusIndicator
+                        label={String(c.status || "CONFIGURED").toUpperCase()}
+                        tone={String(c.status || "").toUpperCase() === "CONNECTED" ? "success" : "neutral"}
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Recent Activity & Audit Trail */}
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="card-title">
+                <span>Recent Audit &amp; Activity</span>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => onSelectSubPage("activity")}>
+                  Full Feed
+                </button>
+              </div>
+              {auditLogs.length === 0 ? (
+                <div className="muted" style={{ fontSize: 12.5 }}>No audit events recorded yet.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {auditLogs.slice(0, 4).map((l: any, idx: number) => (
+                    <div key={l.audit_id || idx} className="list-item" style={{ padding: "7px 10px" }}>
+                      <div className="row-between">
+                        <strong style={{ fontSize: 12 }}>{l.action || l.event_type || "AUDIT"}</strong>
+                        <span className="pill mono" style={{ fontSize: 10 }}>{l.outcome || l.status || "OK"}</span>
+                      </div>
+                      <div className="muted mono" style={{ fontSize: 10.5 }}>
+                        {l.resource || "system"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
           <section className="workspace-strip">
             {[
               { m: "neon" as ModuleId, label: "NEON Intelligence", desc: "Streaming AI console & multimodal", icon: Sparkles },
               { m: "argon" as ModuleId, label: "ARGON Orchestration", desc: "DAG workflows, jobs & approvals", icon: Workflow },
-              { m: "agents" as ModuleId, label: "60 Specialist Agents", desc: "Inspect manifests & invoke directly", icon: Bot },
+              { m: "agents" as ModuleId, label: "60 Specialist Agents", desc: "Domain workbenches & manifests", icon: Bot },
               { m: "connections" as ModuleId, label: "Connections Centre", desc: "38 integrations & honest OAuth", icon: Plug },
               { m: "files" as ModuleId, label: "Files & Knowledge", desc: "File Hub, Drive & semantic memory", icon: FolderOpen },
               { m: "projects" as ModuleId, label: "Projects & FORGE", desc: "Code generation, preview & GitHub", icon: Hammer },
@@ -362,10 +537,10 @@ export default function CommandModulePage({
         loading ? <LoadingState /> : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div className="grid-3">
-              <MetricDisplay label="Registered Agents" value={agents.length} sub="Independent manifests" tone="info" />
+              <MetricDisplay label="Registered Agents" value={agents.length} sub={`${availableAgentsCount} available`} tone="info" />
               <MetricDisplay label="HTTP Requests" value={overview?.total_requests ?? 0} sub="Live telemetry counter" tone="neutral" />
               <MetricDisplay label="Error Rate" value={`${overview?.error_rate_pct ?? 0}%`} sub="5xx response ratio" tone={Number(overview?.error_rate_pct || 0) > 2 ? "warn" : "success"} />
-              <MetricDisplay label="Tenant Tasks" value={tasks.length} sub="ARGON task ledger" tone="info" />
+              <MetricDisplay label="Tenant Tasks" value={tasks.length} sub={`${completedTasksCount} completed · ${failedTasksCount} failed`} tone="info" />
               <MetricDisplay label="NEON Sessions" value={conversations.length} sub="Persisted conversations" tone="neutral" />
               <MetricDisplay label="Audit Events" value={auditLogs.length} sub="Hash-chained entries" tone="success" />
             </div>
@@ -394,7 +569,7 @@ export default function CommandModulePage({
       {page.id === "activity" && (
         loading ? <LoadingState /> : (
           <div className="card">
-            <div className="card-title"><span>Live System & Audit Activity ({auditLogs.length})</span></div>
+            <div className="card-title"><span>Live System &amp; Audit Activity ({auditLogs.length})</span></div>
             <ActivityFeed
               items={auditLogs.map((l: any, i: number) => ({
                 id: l.audit_id || String(i),
@@ -449,29 +624,46 @@ export default function CommandModulePage({
 
       {/* 5. RECENT TASKS */}
       {page.id === "recent-tasks" && (
-        <div className="card">
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="card-title">
-            <span>Recent Tasks ({tasks.length})</span>
+            <span>Task Lifecycle Manager ({filteredTasks.length})</span>
             <button type="button" className="btn btn-sm" onClick={() => onNavigate("argon", "orchestrate")}>
               New Orchestration
             </button>
           </div>
+          <FilterBar<TaskFilter>
+            value={taskFilter}
+            onChange={setTaskFilter}
+            options={[
+              { value: "all", label: "All", count: tasks.length },
+              { value: "active", label: "Active", count: activeTasksCount },
+              { value: "completed", label: "Completed", count: completedTasksCount },
+              { value: "failed", label: "Failed", count: failedTasksCount },
+              { value: "cancelled", label: "Cancelled" },
+            ]}
+          />
           <DataTable
-            rows={tasks}
+            rows={filteredTasks}
             rowKey={(t) => t.task_id}
-            emptyTitle="No Tasks Recorded"
+            emptyTitle="No Matching Tasks"
             emptyDescription="Dispatch a task from Home or ARGON Orchestration to track lifecycle execution here."
             columns={[
               { key: "title", header: "Task", render: (t) => <strong>{t.title || t.objective?.slice(0, 64)}</strong> },
               { key: "agent", header: "Agent", mono: true, render: (t) => t.assigned_agent_id || "AGT-02" },
-              { key: "state", header: "Lifecycle", render: (t) => <StatusIndicator label={t.lifecycle_state || t.status} tone={t.lifecycle_state === "COMPLETED" ? "success" : t.lifecycle_state === "FAILED" ? "danger" : "info"} /> },
+              { key: "state", header: "Lifecycle", render: (t) => <StatusIndicator label={t.lifecycle_state || t.status} tone={taskTone(t.lifecycle_state)} /> },
               {
                 key: "actions",
                 header: "Controls",
                 render: (t) => (
-                  <div className="row">
-                    {["READY", "APPROVED"].includes(t.lifecycle_state) && (
+                  <div className="row" style={{ flexWrap: "wrap", gap: 5 }}>
+                    {["READY", "APPROVED", "PLANNED"].includes(t.lifecycle_state) && (
                       <button type="button" className="btn btn-sm" onClick={() => runTaskAction(t.task_id, "execute")}><Play size={12} /> Run</button>
+                    )}
+                    {t.lifecycle_state === "RUNNING" && (
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={() => runTaskAction(t.task_id, "pause")}>Pause</button>
+                    )}
+                    {t.lifecycle_state === "PAUSED" && (
+                      <button type="button" className="btn btn-sm" onClick={() => runTaskAction(t.task_id, "resume")}>Resume</button>
                     )}
                     {t.lifecycle_state === "FAILED" && (
                       <button type="button" className="btn btn-secondary btn-sm" onClick={() => runTaskAction(t.task_id, "retry")}>Retry</button>
@@ -493,7 +685,7 @@ export default function CommandModulePage({
           {[
             { title: "Start NEON Session", desc: "Open streaming intelligence chat", action: () => onNavigate("neon", "chat") },
             { title: "Review ApprovalGate", desc: "Approve or reject governed actions", action: () => onNavigate("argon", "approvals") },
-            { title: "Browse All 60 Agents", desc: "Inspect manifests and invoke specialists", action: () => onNavigate("agents", "directory") },
+            { title: "Browse All 60 Agents", desc: "Inspect manifests and specialist workbenches", action: () => onNavigate("agents", "directory") },
             { title: "Verify Integrations", desc: "Inspect honest 4-stage connectivity", action: () => onNavigate("connections", "directory") },
             { title: "Run AEGIS Security Scan", desc: "Check posture, incidents & audit chain", action: () => onNavigate("security", "overview") },
             { title: "Upload to File Hub", desc: "Upload documents with VAULT redaction", action: () => onNavigate("files", "upload") },

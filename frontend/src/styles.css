@@ -1324,3 +1324,52 @@ pre.code-block {
   }
 }
 
+/* ==================== ARGON DAG PIPELINE ==================== */
+.argon-dag-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.argon-dag-node {
+  flex: 1 1 210px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.argon-dag-node.node-success {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.argon-dag-node.node-danger {
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.argon-dag-node.node-warn {
+  border-color: rgba(251, 191, 36, 0.38);
+}
+
+.argon-dag-connector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.app-shell.device-mobile .argon-dag-track {
+  flex-direction: column;
+}
+
+.app-shell.device-mobile .argon-dag-connector {
+  transform: rotate(90deg);
+  padding: 2px 0;
+}
+
+

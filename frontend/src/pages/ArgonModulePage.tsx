@@ -1,7 +1,20 @@
 import React, { useEffect, useState } from "react";
-import { Play, RefreshCw, RotateCcw, Send } from "lucide-react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  Clock,
+  GitBranch,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Send,
+  ShieldAlert,
+  Square,
+} from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
+import { AgentIcon } from "../catalog/agentIcons";
 import type { ModulePageProps } from "../types/module";
 import {
   ApprovalCard,
@@ -9,13 +22,162 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FilterBar,
   MetricDisplay,
   PageHeader,
   ResponsiveWorkspace,
   StatusIndicator,
   useToast,
 } from "../components/ui/DesignSystem";
-import { ReadableSummary } from "../components/ui/HumanPresentation";
+import { ReadableSummary, TechnicalDiagnostics } from "../components/ui/HumanPresentation";
+
+type ArgonTaskFilter = "all" | "active" | "pending_approval" | "completed" | "failed" | "cancelled";
+
+function lifecycleTone(state?: string): "success" | "info" | "warn" | "danger" | "neutral" {
+  const s = String(state || "").toUpperCase();
+  if (s === "COMPLETED") return "success";
+  if (s === "FAILED" || s === "DEAD_LETTER") return "danger";
+  if (s === "PENDING_APPROVAL" || s === "PAUSED") return "warn";
+  if (s === "CANCELLED") return "neutral";
+  return "info";
+}
+
+function ArgonTaskDagInspector({
+  task,
+  onAction,
+  onCancelRequest,
+}: {
+  task: any;
+  onAction: (taskId: string, action: "execute" | "enqueue" | "pause" | "resume" | "retry") => Promise<void>;
+  onCancelRequest: (taskId: string) => void;
+}) {
+  if (!task) {
+    return (
+      <EmptyState
+        title="Select a Task to Inspect DAG"
+        description="Click any orchestrated task to inspect its multi-agent execution steps, handoffs, and verification outcome."
+      />
+    );
+  }
+  const state = String(task.lifecycle_state || task.status || "PLANNED").toUpperCase();
+  const steps: any[] = Array.isArray(task.steps) ? task.steps : [];
+
+  return (
+    <div className="card" data-testid="argon-dag-inspector" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div className="row-between" style={{ flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="eyebrow-mono">DAG EXECUTION INSPECTOR · {task.task_id}</div>
+          <h3 style={{ margin: "2px 0 0", fontSize: 16.5 }}>{task.title || task.objective?.slice(0, 72)}</h3>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>{task.objective}</div>
+        </div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+          <StatusIndicator label={state} tone={lifecycleTone(state)} />
+          <span className="pill mono">Lead: {task.assigned_agent_id || "AGT-02"}</span>
+          {Number(task.financial_amount_usd || 0) > 0 && (
+            <span className="pill pill-warn mono">${task.financial_amount_usd} USD</span>
+          )}
+        </div>
+      </div>
+
+      {/* Visual Multi-Agent DAG Pipeline */}
+      <div>
+        <div className="telemetry-label" style={{ marginBottom: 8 }}>
+          <GitBranch size={12} style={{ verticalAlign: "middle", marginRight: 5 }} />
+          MULTI-AGENT WORKFLOW PIPELINE ({steps.length} STEP{steps.length === 1 ? "" : "S"})
+        </div>
+        {steps.length === 0 ? (
+          <div className="muted" style={{ fontSize: 12.5 }}>Single-stage execution task (no decomposed sub-steps recorded).</div>
+        ) : (
+          <div className="argon-dag-track">
+            {steps.map((step, idx) => {
+              const st = String(step.status || "PENDING").toUpperCase();
+              const tone = lifecycleTone(st);
+              return (
+                <React.Fragment key={step.step_id || idx}>
+                  <div className={`argon-dag-node node-${tone}`}>
+                    <div className="row-between" style={{ gap: 6 }}>
+                      <span className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>
+                        STEP {step.step_order ?? idx + 1} · {step.agent_id}
+                      </span>
+                      <StatusIndicator label={st} tone={tone} />
+                    </div>
+                    <div className="row" style={{ gap: 8, marginTop: 6 }}>
+                      <span className="agent-icon-badge" style={{ width: 28, height: 28 }}>
+                        <AgentIcon agentId={step.agent_id || "AGT-02"} size={14} />
+                      </span>
+                      <strong style={{ fontSize: 13 }}>{step.action || "Execute Step"}</strong>
+                    </div>
+                    {step.output_summary && (
+                      <div className="muted" style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.45 }}>
+                        {String(step.output_summary).slice(0, 180)}
+                      </div>
+                    )}
+                  </div>
+                  {idx < steps.length - 1 && (
+                    <div className="argon-dag-connector" aria-hidden="true">
+                      <ArrowRight size={15} />
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Outcome / Verification Summary */}
+      {task.result_summary && (
+        <div className="dispatch-output">
+          <div className="row-between" style={{ marginBottom: 4 }}>
+            <span className="mono-tag">
+              <CheckCircle2 size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
+              VERIFICATION &amp; OUTCOME SUMMARY
+            </span>
+            <span className="muted mono" style={{ fontSize: 11 }}>Risk: {task.risk_level || "LOW"}</span>
+          </div>
+          <div className="dispatch-text">{task.result_summary}</div>
+        </div>
+      )}
+
+      {/* Lifecycle Controls */}
+      <div className="row-between" style={{ flexWrap: "wrap", gap: 8, paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+        <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+          {["PLANNED", "READY", "APPROVED"].includes(state) && (
+            <>
+              <button type="button" className="btn btn-sm" onClick={() => onAction(task.task_id, "execute")}>
+                <Play size={12} /> Execute Now
+              </button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAction(task.task_id, "enqueue")}>
+                <Clock size={12} /> Enqueue Worker
+              </button>
+            </>
+          )}
+          {state === "RUNNING" && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAction(task.task_id, "pause")}>
+              <Pause size={12} /> Pause
+            </button>
+          )}
+          {state === "PAUSED" && (
+            <button type="button" className="btn btn-sm" onClick={() => onAction(task.task_id, "resume")}>
+              <Play size={12} /> Resume
+            </button>
+          )}
+          {state === "FAILED" && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAction(task.task_id, "retry")}>
+              <RotateCcw size={12} /> Retry Failed Task
+            </button>
+          )}
+          {!["COMPLETED", "CANCELLED"].includes(state) && (
+            <button type="button" className="btn btn-danger btn-sm" onClick={() => onCancelRequest(task.task_id)}>
+              <Square size={12} /> Cancel Task
+            </button>
+          )}
+        </div>
+        <TechnicalDiagnostics title="Technical Diagnostics — Task & Step Payload" data={task} />
+      </div>
+    </div>
+  );
+}
 
 export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePageProps) {
   const mod = getModule("argon");
@@ -23,23 +185,28 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
   const { pushToast } = useToast();
 
   const [tasks, setTasks] = useState<any[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState<string>("");
+  const [taskFilter, setTaskFilter] = useState<ArgonTaskFilter>("all");
   const [jobs, setJobs] = useState<any[]>([]);
   const [schedules, setSchedules] = useState<any[]>([]);
   const [approvals, setApprovals] = useState<any[]>([]);
   const [messages, setMessages] = useState<any[]>([]);
+  const [agents, setAgents] = useState<any[]>([]);
   const [error, setError] = useState("");
+  const [dispatching, setDispatching] = useState(false);
 
   // Forms
   const [objective, setObjective] = useState("");
   const [taskTitle, setTaskTitle] = useState("");
   const [amountUsd, setAmountUsd] = useState("0");
+  const [preferredAgent, setPreferredAgent] = useState("");
   const [schedName, setSchedName] = useState("");
   const [schedInterval, setSchedInterval] = useState("300");
   const [schedPrompt, setSchedPrompt] = useState("");
   const [routePrompt, setRoutePrompt] = useState("");
   const [routePreview, setRoutePreview] = useState<any>(null);
   const [fromAgent, setFromAgent] = useState("AGT-01");
-  const [toAgent, setToAgent] = useState("AGT-02");
+  const [toAgent, setToAgent] = useState("AGT-03");
   const [msgSubject, setMsgSubject] = useState("");
 
   // Confirmation modal state
@@ -54,18 +221,24 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
   async function load() {
     setError("");
     try {
-      const [tRes, jRes, sRes, aRes, mRes] = await Promise.all([
+      const [tRes, jRes, sRes, aRes, mRes, agRes] = await Promise.all([
         apiFetch<any>("/api/v1/tasks").catch(() => ({ tasks: [] })),
         apiFetch<any>("/api/v1/argon/jobs").catch(() => ({ jobs: [] })),
         apiFetch<any>("/api/v1/argon/schedules").catch(() => ({ schedules: [] })),
         apiFetch<any>("/api/v1/approvals").catch(() => ({ approvals: [] })),
         apiFetch<any>("/api/v1/agents/messages").catch(() => ({ messages: [] })),
+        apiFetch<any>("/api/v1/agents").catch(() => ({ agents: [] })),
       ]);
-      setTasks(tRes.tasks || []);
+      const tList = tRes.tasks || [];
+      setTasks(tList);
+      if (tList.length > 0 && !selectedTaskId) {
+        setSelectedTaskId(tList[0].task_id);
+      }
       setJobs(jRes.jobs || []);
       setSchedules(sRes.schedules || []);
       setApprovals(aRes.approvals || []);
       setMessages(mRes.messages || []);
+      setAgents(agRes.agents || []);
     } catch (e: any) {
       setError(e.message);
     }
@@ -78,29 +251,47 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
   async function dispatchOrchestration(e: React.FormEvent) {
     e.preventDefault();
     if (!objective.trim()) return;
+    setDispatching(true);
     try {
-      if (Number(amountUsd) > 0 || taskTitle.trim()) {
-        await apiFetch("/api/v1/tasks", {
+      let createdTaskId = "";
+      if (Number(amountUsd) > 0 || taskTitle.trim() || preferredAgent) {
+        const res = await apiFetch<any>("/api/v1/tasks", {
           method: "POST",
           body: {
             title: taskTitle.trim() || objective.trim().slice(0, 48),
             objective: objective.trim(),
             financial_amount_usd: Number(amountUsd) || 0,
+            preferred_agent_id: preferredAgent || undefined,
           },
         });
+        createdTaskId = res.task?.task_id || res.task_id || "";
       } else {
-        await apiFetch("/api/v1/orchestrate", {
+        const res = await apiFetch<any>("/api/v1/orchestrate", {
           method: "POST",
           body: { objective: objective.trim(), auto_execute: true },
         });
+        createdTaskId = res.task?.task_id || "";
       }
       setObjective("");
       setTaskTitle("");
       setAmountUsd("0");
+      if (createdTaskId) setSelectedTaskId(createdTaskId);
       pushToast("ARGON workflow planned & dispatched.", "success");
-      load();
+      await load();
     } catch (err: any) {
       pushToast(err.message, "error");
+    } finally {
+      setDispatching(false);
+    }
+  }
+
+  async function runTaskAction(taskId: string, action: "execute" | "enqueue" | "pause" | "resume" | "retry" | "cancel") {
+    try {
+      await apiFetch(`/api/v1/tasks/${taskId}/${action}`, { method: "POST" });
+      pushToast(`Task ${action} completed.`, "success");
+      await load();
+    } catch (e: any) {
+      pushToast(e.message, "error");
     }
   }
 
@@ -142,7 +333,7 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
     try {
       const res = await apiFetch<any>("/api/v1/neon/route", {
         method: "POST",
-        body: { prompt: routePrompt.trim() },
+        body: { objective: routePrompt.trim() },
       });
       setRoutePreview(res);
     } catch (err: any) {
@@ -150,7 +341,6 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
     }
   }
 
-  // Verified backend contract: POST /api/v1/approvals/{approval_id}/decide
   function requestApprovalDecision(approvalId: string, decision: "APPROVED" | "REJECTED") {
     setConfirmState({
       title: decision === "APPROVED" ? "Approve Governed Action" : "Reject Governed Action",
@@ -192,6 +382,17 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
   const pendingApprovals = approvals.filter((a) => a.status === "PENDING");
   const runningJobs = jobs.filter((j) => ["QUEUED", "RUNNING", "RETRYING"].includes(j.status));
   const dlqJobs = jobs.filter((j) => ["DEAD_LETTER", "FAILED"].includes(j.status));
+  const selectedTask = tasks.find((t) => t.task_id === selectedTaskId) || tasks[0] || null;
+
+  const filteredTasks = tasks.filter((t) => {
+    const st = String(t.lifecycle_state || t.status || "").toUpperCase();
+    if (taskFilter === "completed") return st === "COMPLETED";
+    if (taskFilter === "failed") return st === "FAILED";
+    if (taskFilter === "cancelled") return st === "CANCELLED";
+    if (taskFilter === "pending_approval") return st === "PENDING_APPROVAL";
+    if (taskFilter === "active") return !["COMPLETED", "FAILED", "CANCELLED", "PENDING_APPROVAL"].includes(st);
+    return true;
+  });
 
   return (
     <ResponsiveWorkspace subPages={mod.subPages} activeSubPage={page.id} onSelectSubPage={onSelectSubPage}>
@@ -217,25 +418,60 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
       {page.id === "overview" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div className="grid-3">
-            <MetricDisplay label="Active Tasks" value={tasks.length} sub="DAG task ledger" tone="info" />
+            <MetricDisplay label="Total Tasks" value={tasks.length} sub={`${tasks.filter((t) => t.lifecycle_state === "COMPLETED").length} completed`} tone="info" />
             <MetricDisplay label="Queued / Running Jobs" value={runningJobs.length} sub={`${jobs.length} total jobs`} tone="neutral" />
             <MetricDisplay label="Pending Approvals" value={pendingApprovals.length} sub="ApprovalGate queue" tone={pendingApprovals.length > 0 ? "warn" : "success"} />
             <MetricDisplay label="Recurring Schedules" value={schedules.length} sub="Autonomous cadence" tone="info" />
             <MetricDisplay label="Dead Letter Queue" value={dlqJobs.length} sub="Needs recovery" tone={dlqJobs.length > 0 ? "danger" : "success"} />
             <MetricDisplay label="Agent Handoffs" value={messages.length} sub="Inter-agent bus" tone="neutral" />
           </div>
+
+          {selectedTask && (
+            <ArgonTaskDagInspector
+              task={selectedTask}
+              onAction={runTaskAction}
+              onCancelRequest={(tid) =>
+                setConfirmState({
+                  title: "Cancel ARGON Task",
+                  message: `Are you sure you want to cancel task ${tid}?`,
+                  confirmLabel: "Cancel Task",
+                  destructive: true,
+                  onConfirm: () => runTaskAction(tid, "cancel"),
+                })
+              }
+            />
+          )}
+
           <div className="card">
-            <div className="card-title"><span>Latest Orchestrated Tasks</span></div>
+            <div className="card-title">
+              <span>Latest Orchestrated Tasks</span>
+              <button type="button" className="btn btn-sm" onClick={() => onSelectSubPage("orchestrate")}>
+                Open Orchestration Desk
+              </button>
+            </div>
             <DataTable
               rows={tasks.slice(0, 10)}
               rowKey={(t) => t.task_id}
               emptyTitle="No Orchestrated Tasks Yet"
               emptyDescription="Dispatch a multi-agent workflow from Task Orchestration."
               columns={[
-                { key: "title", header: "Objective", render: (t) => <strong>{t.title || t.objective?.slice(0, 64)}</strong> },
+                {
+                  key: "title",
+                  header: "Objective",
+                  render: (t) => (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ textAlign: "left", justifyContent: "flex-start" }}
+                      onClick={() => setSelectedTaskId(t.task_id)}
+                    >
+                      {t.title || t.objective?.slice(0, 58)}
+                    </button>
+                  ),
+                },
                 { key: "agent", header: "Lead Agent", mono: true, render: (t) => t.assigned_agent_id || "AGT-02" },
                 { key: "risk", header: "Risk", mono: true, render: (t) => t.risk_level || "LOW" },
-                { key: "state", header: "State", render: (t) => <StatusIndicator label={t.lifecycle_state || t.status} tone={t.lifecycle_state === "COMPLETED" ? "success" : "info"} /> },
+                { key: "state", header: "State", render: (t) => <StatusIndicator label={t.lifecycle_state || t.status} tone={lifecycleTone(t.lifecycle_state)} /> },
               ]}
             />
           </div>
@@ -246,34 +482,114 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
       {page.id === "orchestrate" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div className="card">
-            <div className="card-title"><span>Plan & Dispatch Multi-Agent DAG (ApprovalGate &gt; $50)</span></div>
+            <div className="card-title">
+              <span>Plan &amp; Dispatch Multi-Agent DAG</span>
+              {Number(amountUsd) > 50 && (
+                <StatusIndicator label="APPROVALGATE > $50 TRIGGERED" tone="warn" />
+              )}
+            </div>
             <form onSubmit={dispatchOrchestration} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="row">
-                <input className="input" style={{ flex: 2 }} value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Optional Task Title" />
-                <input className="input" style={{ width: 150 }} type="number" step="1" value={amountUsd} onChange={(e) => setAmountUsd(e.target.value)} placeholder="Cost USD" />
+              <div className="grid-3" style={{ gap: 8 }}>
+                <input
+                  className="input"
+                  value={taskTitle}
+                  onChange={(e) => setTaskTitle(e.target.value)}
+                  placeholder="Optional Task Title"
+                />
+                <select
+                  aria-label="Preferred lead agent"
+                  className="select"
+                  value={preferredAgent}
+                  onChange={(e) => setPreferredAgent(e.target.value)}
+                >
+                  <option value="">Auto-Route via NEON</option>
+                  {agents.map((a) => (
+                    <option key={a.agent_id} value={a.agent_id}>
+                      {a.agent_id} · {a.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={amountUsd}
+                  onChange={(e) => setAmountUsd(e.target.value)}
+                  placeholder="Spend USD (0 = no gate)"
+                />
               </div>
+              {Number(amountUsd) > 50 && (
+                <div className="alert-box alert-warn" style={{ fontSize: 12 }}>
+                  <ShieldAlert size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />
+                  Financial spend above $50 USD will pause in <strong>PENDING_APPROVAL</strong> until authorized in the Approval Centre.
+                </div>
+              )}
               <textarea
                 id="argon-objective-input"
                 className="textarea"
                 rows={3}
                 value={objective}
                 onChange={(e) => setObjective(e.target.value)}
-                placeholder="Describe the objective for ARGON to route, plan, and execute across specialist agents..."
+                placeholder="Describe the objective for ARGON to route, decompose into steps, and execute across specialist agents..."
               />
-              <button id="argon-dispatch-btn" type="submit" className="btn" style={{ alignSelf: "flex-start" }} disabled={!objective.trim()}>
-                <Send size={14} /> Dispatch Orchestration
+              <button id="argon-dispatch-btn" type="submit" className="btn" style={{ alignSelf: "flex-start" }} disabled={dispatching || !objective.trim()}>
+                <Send size={14} /> {dispatching ? "Planning & Dispatching..." : "Dispatch Orchestration"}
               </button>
             </form>
           </div>
-          <div className="card">
-            <div className="card-title"><span>All Tasks ({tasks.length})</span></div>
+
+          {selectedTask && (
+            <ArgonTaskDagInspector
+              task={selectedTask}
+              onAction={runTaskAction}
+              onCancelRequest={(tid) =>
+                setConfirmState({
+                  title: "Cancel ARGON Task",
+                  message: `Are you sure you want to cancel task ${tid}?`,
+                  confirmLabel: "Cancel Task",
+                  destructive: true,
+                  onConfirm: () => runTaskAction(tid, "cancel"),
+                })
+              }
+            />
+          )}
+
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="card-title"><span>Orchestrated Tasks ({filteredTasks.length})</span></div>
+            <FilterBar<ArgonTaskFilter>
+              value={taskFilter}
+              onChange={setTaskFilter}
+              options={[
+                { value: "all", label: "All", count: tasks.length },
+                { value: "active", label: "Active / Queued" },
+                { value: "pending_approval", label: "Pending Approval" },
+                { value: "completed", label: "Completed" },
+                { value: "failed", label: "Failed" },
+                { value: "cancelled", label: "Cancelled" },
+              ]}
+            />
             <DataTable
-              rows={tasks}
+              rows={filteredTasks}
               rowKey={(t) => t.task_id}
+              emptyTitle="No Matching Tasks"
+              emptyDescription="Dispatch an objective above or adjust your lifecycle filter."
               columns={[
-                { key: "title", header: "Task", render: (t) => <strong>{t.title || t.objective?.slice(0, 60)}</strong> },
+                {
+                  key: "title",
+                  header: "Task (Click to Inspect DAG)",
+                  render: (t) => (
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${t.task_id === selectedTask?.task_id ? "" : "btn-secondary"}`}
+                      onClick={() => setSelectedTaskId(t.task_id)}
+                    >
+                      {t.title || t.objective?.slice(0, 54)}
+                    </button>
+                  ),
+                },
                 { key: "steps", header: "Agent Steps", mono: true, render: (t) => (t.steps || []).map((s: any) => s.agent_id).join(" → ") || t.assigned_agent_id },
-                { key: "state", header: "Lifecycle", render: (t) => <StatusIndicator label={t.lifecycle_state || t.status} tone={t.lifecycle_state === "COMPLETED" ? "success" : "info"} /> },
+                { key: "state", header: "Lifecycle", render: (t) => <StatusIndicator label={t.lifecycle_state || t.status} tone={lifecycleTone(t.lifecycle_state)} /> },
               ]}
             />
           </div>
@@ -284,7 +600,7 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
       {page.id === "running-jobs" && (
         <div className="card">
           <div className="card-title">
-            <span>Running & Queued Jobs ({runningJobs.length})</span>
+            <span>Running &amp; Queued Jobs ({runningJobs.length})</span>
             <button type="button" className="btn btn-sm" onClick={processJobs}><Play size={13} /> Process Queue</button>
           </div>
           <DataTable
@@ -337,7 +653,7 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
               { key: "id", header: "Job ID", mono: true, render: (j) => j.job_id.slice(0, 14) },
               { key: "type", header: "Job Type", render: (j) => j.job_type },
               { key: "attempts", header: "Attempts", mono: true, render: (j) => `${j.attempts ?? 0}/${j.max_attempts ?? 3}` },
-              { key: "status", header: "Status", render: (j) => <StatusIndicator label={j.status} tone={j.status === "COMPLETED" ? "success" : j.status === "FAILED" ? "danger" : "neutral"} /> },
+              { key: "status", header: "Status", render: (j) => <StatusIndicator label={j.status} tone={lifecycleTone(j.status)} /> },
             ]}
           />
         </div>
@@ -379,11 +695,11 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
       {/* 22. WORKFLOW BUILDER */}
       {page.id === "workflow-builder" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div className="card-title"><span>NEON Route & Reasoning Tier Preview (/api/v1/neon/route)</span></div>
-          <form onSubmit={previewRoute} className="row">
+          <div className="card-title"><span>NEON Route &amp; Reasoning Tier Preview (/api/v1/neon/route)</span></div>
+          <form onSubmit={previewRoute} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
             <input
               className="input"
-              style={{ flex: 1 }}
+              style={{ flex: 1, minWidth: 200 }}
               value={routePrompt}
               onChange={(e) => setRoutePrompt(e.target.value)}
               placeholder="Test how NEON routes an objective across the 60 agents..."
@@ -391,7 +707,21 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
             <button type="submit" className="btn">Preview Route</button>
           </form>
           {routePreview && (
-            <ReadableSummary title="NEON Route Selection" data={routePreview} diagnosticsTitle="Technical Diagnostics — Route Payload" />
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <ReadableSummary title="NEON Route Selection" data={routePreview} diagnosticsTitle="Technical Diagnostics — Route Payload" />
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ alignSelf: "flex-start" }}
+                onClick={() => {
+                  setObjective(routePrompt);
+                  setPreferredAgent(routePreview.selected_agent_id || "");
+                  onSelectSubPage("orchestrate");
+                }}
+              >
+                <Send size={13} /> Open in Task Orchestration
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -463,9 +793,17 @@ export default function ArgonModulePage({ subPage, onSelectSubPage }: ModulePage
           <div className="card">
             <div className="card-title"><span>Dispatch Inter-Agent Handoff</span></div>
             <form onSubmit={sendAgentMsg} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="row">
-                <input className="input" style={{ flex: 1 }} value={fromAgent} onChange={(e) => setFromAgent(e.target.value.toUpperCase())} placeholder="From (AGT-01)" />
-                <input className="input" style={{ flex: 1 }} value={toAgent} onChange={(e) => setToAgent(e.target.value.toUpperCase())} placeholder="To (AGT-02)" />
+              <div className="grid-2" style={{ gap: 8 }}>
+                <select aria-label="From agent" className="select" value={fromAgent} onChange={(e) => setFromAgent(e.target.value)}>
+                  {agents.map((a) => (
+                    <option key={a.agent_id} value={a.agent_id}>{a.agent_id} · {a.name}</option>
+                  ))}
+                </select>
+                <select aria-label="To agent" className="select" value={toAgent} onChange={(e) => setToAgent(e.target.value)}>
+                  {agents.map((a) => (
+                    <option key={a.agent_id} value={a.agent_id}>{a.agent_id} · {a.name}</option>
+                  ))}
+                </select>
               </div>
               <input className="input" value={msgSubject} onChange={(e) => setMsgSubject(e.target.value)} placeholder="Handoff subject / task directive..." />
               <button type="submit" className="btn">Send Message</button>
