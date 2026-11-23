@@ -45,6 +45,7 @@ export function ModuleIcon({ id, size = 16 }: { id: ModuleId; size?: number }) {
     case "security": return <Shield size={size} />;
     case "devices": return <HardDrive size={size} />;
     case "finance": return <Wallet size={size} />;
+    case "caravan": return <Compass size={size} />;
     case "settings": return <Settings size={size} />;
   }
 }

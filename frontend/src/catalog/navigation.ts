@@ -12,6 +12,7 @@ export type ModuleId =
   | "security"
   | "devices"
   | "finance"
+  | "caravan"
   | "settings";
 
 export interface PageDef {
@@ -259,6 +260,23 @@ export const MODULES: ModuleDef[] = [
     defaultSubPage: "summary",
     subPages: [
       { id: "summary", number: 112, module: "finance", label: "Financial Command", description: "Transactions, budgets, investments, reserves, payment methods, and forecast telemetry.", keywords: ["finance", "treasury", "budgets"] },
+    ],
+  },
+  {
+    id: "caravan",
+    label: "Caravan Funding",
+    shortLabel: "Caravan",
+    group: "Operations & System",
+    description: "First-party funding intelligence, verified grant/loan discovery, NEON eligibility, and application tracking.",
+    defaultSubPage: "overview",
+    subPages: [
+      { id: "overview", number: 113, module: "caravan", label: "Caravan Overview", description: "Verified funding counts, personalized recommendations, applications, and governance.", keywords: ["caravan", "funding", "grants"] },
+      { id: "discover", number: 114, module: "caravan", label: "Discover Funding", description: "Search grants, loans, scholarships, accelerators, competitions, and investments.", keywords: ["discover", "grants", "loans"] },
+      { id: "eligibility", number: 115, module: "caravan", label: "NEON Eligibility", description: "NEON-powered eligibility scoring, gap analysis, and recommendations.", keywords: ["eligibility", "neon", "score"] },
+      { id: "applications", number: 116, module: "caravan", label: "My Applications", description: "Track draft, preparing, approval-gated, and submitted funding applications.", keywords: ["applications", "tracking"] },
+      { id: "saved", number: 117, module: "caravan", label: "Saved Opportunities", description: "Bookmarked funding opportunities shortlist.", keywords: ["saved", "bookmarks"] },
+      { id: "account", number: 118, module: "caravan", label: "Account & Subscription", description: "Customer onboarding profile, plan entitlements, support tickets, and alerts.", keywords: ["account", "subscription", "support"] },
+      { id: "admin", number: 119, module: "caravan", label: "Admin & Verification", description: "Register real funding sources/opportunities and verify with supporting evidence.", keywords: ["admin", "verification", "sources"] },
     ],
   },
   {

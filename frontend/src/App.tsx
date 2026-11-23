@@ -34,6 +34,7 @@ const PulseModulePage = lazyWithRecovery(() => import("./pages/PulseModulePage")
 const SecurityModulePage = lazyWithRecovery(() => import("./pages/SecurityModulePage"), "Security Centre");
 const DevicesModulePage = lazyWithRecovery(() => import("./pages/DevicesModulePage"), "Device Management");
 const FinanceModulePage = lazyWithRecovery(() => import("./pages/FinanceModulePage"), "Finance Centre");
+const CaravanModulePage = lazyWithRecovery(() => import("./pages/CaravanModulePage"), "Caravan Funding");
 const SettingsModulePage = lazyWithRecovery(() => import("./pages/SettingsModulePage"), "Settings");
 
 const VALID_MODULE_IDS = new Set<string>(MODULES.map((m) => m.id));
@@ -498,6 +499,7 @@ export default function App() {
       case "security": return <SecurityModulePage {...sharedProps} />;
       case "devices": return <DevicesModulePage {...sharedProps} />;
       case "finance": return <FinanceModulePage {...sharedProps} />;
+      case "caravan": return <CaravanModulePage {...sharedProps} />;
       case "settings": return <SettingsModulePage {...sharedProps} />;
     }
   }

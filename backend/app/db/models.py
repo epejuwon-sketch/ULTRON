@@ -1121,4 +1121,155 @@ class ConnectorScopeGrantRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class CaravanFundingSourceRecord(Base):
+    __tablename__ = "caravan_funding_sources"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="PUBLIC_PORTAL")
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    connector_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verification_policy: Mapped[str] = mapped_column(String(64), nullable=False, default="MANUAL_REVIEW")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanFundingOpportunityRecord(Base):
+    __tablename__ = "caravan_funding_opportunities"
+
+    opportunity_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    provider_org: Mapped[str] = mapped_column(String(180), nullable=False)
+    funding_type: Mapped[str] = mapped_column(String(32), nullable=False, default="GRANT")
+    source_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    amount_display: Mapped[str] = mapped_column(String(120), nullable=False, default="Not specified by source")
+    currency: Mapped[str] = mapped_column(String(16), nullable=False, default="USD")
+    eligibility_requirements: Mapped[str] = mapped_column(Text, nullable=False)
+    geographic_restrictions: Mapped[str] = mapped_column(String(240), nullable=False, default="Global / See source")
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_status: Mapped[str] = mapped_column(String(24), nullable=False, default="UNVERIFIED", index=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    supporting_evidence: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tags_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanCustomerAccountRecord(Base):
+    __tablename__ = "caravan_customer_accounts"
+
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    organization_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="STARTUP")
+    country: Mapped[str] = mapped_column(String(80), nullable=False, default="Nigeria")
+    sector: Mapped[str] = mapped_column(String(80), nullable=False, default="Technology")
+    stage: Mapped[str] = mapped_column(String(64), nullable=False, default="SEED")
+    annual_revenue_band: Mapped[str] = mapped_column(String(64), nullable=False, default="PRE_REVENUE")
+    profile_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanEligibilityAssessmentRecord(Base):
+    __tablename__ = "caravan_eligibility_assessments"
+
+    assessment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    opportunity_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False, default="INSUFFICIENT_DATA")
+    matched_criteria_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    gaps_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    recommendations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    neon_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="DETERMINISTIC")
+    assessed_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CaravanApplicationRecord(Base):
+    __tablename__ = "caravan_applications"
+
+    application_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    opportunity_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT", index=True)
+    progress_pct: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    checklist_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanSavedOpportunityRecord(Base):
+    __tablename__ = "caravan_saved_opportunities"
+
+    saved_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    opportunity_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CaravanSubscriptionRecord(Base):
+    __tablename__ = "caravan_subscriptions"
+
+    subscription_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    plan_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="FREE")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    live_payments_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    entitlements_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanSupportTicketRecord(Base):
+    __tablename__ = "caravan_support_tickets"
+
+    ticket_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="GENERAL")
+    priority: Mapped[str] = mapped_column(String(24), nullable=False, default="NORMAL")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="OPEN")
+    messages_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    assigned_to: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class CaravanNotificationRecord(Base):
+    __tablename__ = "caravan_notifications"
+
+    notification_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="OPPORTUNITY")
+    read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+
 
