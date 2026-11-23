@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import httpx
-from fastapi.testclient import TestClient
-
 from app.core.config import Settings
 from app.core.permissions import Principal, Role
 from app.db.session import get_session_factory
@@ -12,10 +10,12 @@ from app.integrations.antigravity import inspect_antigravity_environment
 from app.services.integration_manager import (
     complete_oauth_callback,
     disconnect_connection,
+    list_connections,
     refresh_connection_token,
     start_oauth_flow,
     verify_provider_live,
 )
+from fastapi.testclient import TestClient
 
 
 def test_integration_manager_api_key_encrypt_list_and_disconnect(client: TestClient, auth_headers: dict) -> None:
@@ -84,6 +84,8 @@ def test_oauth2_pkce_full_lifecycle_exchange_refresh_verify_and_revoke(client: T
                 return httpx.Response(200, json={"access_token": "ya29_refreshed_token", "expires_in": 3600})
         if "oauth2.googleapis.com/revoke" in str(req.url):
             return httpx.Response(200, json={})
+        if "googleapis.com/oauth2/v2/userinfo" in str(req.url):
+            return httpx.Response(200, json={"email": "owner@ultron.ai"})
         if "googleapis.com/drive/v3/about" in str(req.url):
             return httpx.Response(200, json={"user": {"displayName": "ULTRON Owner"}})
         return httpx.Response(404)
@@ -103,8 +105,13 @@ def test_oauth2_pkce_full_lifecycle_exchange_refresh_verify_and_revoke(client: T
             settings=cfg,
             http_client=http,
         )
-        assert connected["auth_type"] == "OAUTH2"
-        assert connected["status"] == "IMPLEMENTED_NOT_LIVE"
+        assert connected["live_verified"] is True
+        assert connected["capability_state"] == "AVAILABLE"
+
+        listed = list_connections(db, tenant_id=principal.tenant_id, settings=cfg)
+        gd_entry = next(c for c in listed["connections"] if c["provider"] == "google_drive")
+        assert gd_entry["account_label"] == "owner@ultron.ai"
+        assert gd_entry["oauth_client_configured"] is True
 
         verified = verify_provider_live(db, principal=principal, provider="google_drive", settings=cfg, http_client=http)
         assert verified["live_verified"] is True

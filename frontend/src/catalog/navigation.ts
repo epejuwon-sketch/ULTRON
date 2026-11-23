@@ -51,6 +51,7 @@ export const MODULES: ModuleDef[] = [
       { id: "quick-actions", number: 6, module: "command", label: "Quick Actions", description: "Direct operational launchers for NEON, ARGON, AEGIS scans, TURBO benchmarks, and File Hub.", keywords: ["actions", "shortcuts", "launch"] },
       { id: "system-health", number: 7, module: "command", label: "System Health", description: "Live liveness/readiness probes, PostgreSQL pooler diagnostics, and Prometheus metrics.", keywords: ["health", "ready", "database", "prometheus"] },
       { id: "command-history", number: 8, module: "command", label: "Command History", description: "Auditable history of dispatched NEON sessions and ARGON orchestration runs.", keywords: ["history", "log", "commands"] },
+      { id: "integrations", number: 120, module: "command", label: "Universal Integration Hub", description: "Discover, configure, authorize via OAuth 2.0 + PKCE, connect MCP/webhooks, and verify integrations.", keywords: ["integrations", "oauth", "hub", "configure"] },
     ],
   },
   {

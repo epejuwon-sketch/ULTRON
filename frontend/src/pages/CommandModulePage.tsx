@@ -36,6 +36,7 @@ import {
   useToast,
 } from "../components/ui/DesignSystem";
 import { ReadableSummary } from "../components/ui/HumanPresentation";
+import { UniversalIntegrationHub } from "../components/integrations/UniversalIntegrationHub";
 
 export type { ModulePageProps };
 
@@ -750,6 +751,9 @@ export default function CommandModulePage({
           />
         </div>
       )}
+
+      {/* 120. UNIVERSAL INTEGRATION HUB */}
+      {page.id === "integrations" && <UniversalIntegrationHub />}
 
       <ConfirmationDialog
         open={Boolean(confirmCancelId)}

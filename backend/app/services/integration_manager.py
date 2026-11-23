@@ -294,16 +294,65 @@ def complete_oauth_callback(
         "refresh_token": token_data.get("refresh_token", ""),
         "token_type": token_data.get("token_type", "Bearer"),
     }
-    return connect_with_credentials(
+    account_label = _fetch_oauth_account_identity(
+        provider=p,
+        access_token=creds["access_token"],
+        http_client=http_client,
+    )
+    saved = connect_with_credentials(
         db,
         principal=principal,
         provider=p,
         credentials=creds,
         auth_type="OAUTH2",
         scopes=granted_scopes,
+        account_label=account_label,
         expires_in_seconds=int(token_data.get("expires_in", 3600)) if token_data.get("expires_in") else None,
         settings=settings,
     )
+    try:
+        verified = verify_provider_live(
+            db,
+            principal=principal,
+            provider=p,
+            settings=settings,
+            http_client=http_client,
+        )
+        return verified
+    except Exception:
+        return saved
+
+
+def _fetch_oauth_account_identity(
+    *,
+    provider: str,
+    access_token: str,
+    http_client: httpx.Client | None = None,
+) -> str:
+    """Best-effort retrieval of authorized account email/username; never fails OAuth callback."""
+    spec = OAUTH_PROVIDERS.get(provider)
+    if spec is None or not access_token:
+        return ""
+    close_client = http_client is None
+    client = http_client or httpx.Client(timeout=6.0)
+    try:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        if spec.family == "google":
+            resp = client.get("https://www.googleapis.com/oauth2/v2/userinfo", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                return str(data.get("email") or data.get("name") or "")[:200]
+        elif spec.family == "github":
+            resp = client.get("https://api.github.com/user", headers={**headers, "Accept": "application/vnd.github+json"})
+            if resp.status_code == 200:
+                data = resp.json()
+                return str(data.get("login") or data.get("email") or "")[:200]
+    except Exception:
+        return ""
+    finally:
+        if close_client:
+            client.close()
+    return ""
 
 
 def refresh_connection_token(
@@ -534,12 +583,32 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
     ).scalars().all()
     by_provider = {r.provider: serialize_connection(r) for r in rows}
 
+    google_oauth_ready = bool(
+        settings.google_oauth_client_id
+        and settings.google_oauth_client_secret
+        and settings.google_oauth_client_secret.get_secret_value()
+    )
+    github_oauth_ready = bool(
+        settings.github_oauth_client_id
+        and settings.github_oauth_client_secret
+        and settings.github_oauth_client_secret.get_secret_value()
+    )
+
     catalog: list[dict[str, Any]] = []
     for provider, meta in SUPPORTED_MANAGED_PROVIDERS.items():
         stored = by_provider.get(provider)
         env_tok = resolve_provider_token(db, tenant_id=tenant_id, provider=provider, settings=settings)
+        oauth_spec = OAUTH_PROVIDERS.get(provider)
+        oauth_ready = (
+            google_oauth_ready
+            if (oauth_spec and oauth_spec.family == "google")
+            else github_oauth_ready
+            if (oauth_spec and oauth_spec.family == "github")
+            else False
+        )
         if stored is not None:
             stored["configured_via_env"] = bool(env_tok)
+            stored["oauth_client_configured"] = oauth_ready
             if stored.get("lifecycle_stage") == "SUPPORTED" and env_tok:
                 stored["lifecycle_stage"] = "CONFIGURED"
             catalog.append(stored)
@@ -555,6 +624,7 @@ def list_connections(db: Session, *, tenant_id: str, settings: Settings) -> dict
                     "status": "IMPLEMENTED_NOT_LIVE" if env_tok else "REQUIRES_CONFIGURATION",
                     "lifecycle_stage": "CONFIGURED" if env_tok else "SUPPORTED",
                     "configured_via_env": bool(env_tok),
+                    "oauth_client_configured": oauth_ready,
                     "token_expired": False,
                     "last_verified_at": None,
                     "last_error": None,
