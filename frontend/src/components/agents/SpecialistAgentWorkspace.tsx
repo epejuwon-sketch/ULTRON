@@ -26,6 +26,7 @@ import {
   useToast,
 } from "../ui/DesignSystem";
 import { ProvenanceBar, TechnicalDiagnostics } from "../ui/HumanPresentation";
+import { CodingAgentWorkspace } from "./CodingAgentWorkspace";
 
 export type SpecialistArchetype =
   | "executive"
@@ -245,7 +246,28 @@ function renderFormattedOutput(text: string, onCopyCode: (code: string) => void)
   });
 }
 
-export function SpecialistAgentWorkspace({
+export function SpecialistAgentWorkspace(props: {
+  agent: any;
+  manifest: any;
+  allAgents: any[];
+  onNavigate?: (moduleId: ModuleId, subPageId?: string) => void;
+  onExecutionComplete?: () => void;
+}) {
+  const agentId = String(props.agent?.agent_id || props.manifest?.agent_id || "AGT-01");
+  if (agentId === "AGT-03") {
+    return (
+      <CodingAgentWorkspace
+        agent={props.agent}
+        manifest={props.manifest}
+        onNavigate={props.onNavigate}
+        onExecutionComplete={props.onExecutionComplete}
+      />
+    );
+  }
+  return <DefaultSpecialistWorkspace {...props} />;
+}
+
+function DefaultSpecialistWorkspace({
   agent,
   manifest,
   allAgents,
