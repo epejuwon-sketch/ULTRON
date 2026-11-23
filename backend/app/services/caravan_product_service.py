@@ -949,3 +949,64 @@ def _serialize_notification(r: CaravanNotificationRecord) -> dict[str, Any]:
         "read": r.read,
         "created_at": r.created_at.isoformat(),
     }
+
+
+def verify_funding_source_via_argon(
+    db: Session,
+    *,
+    principal: Principal,
+    source_id: str,
+    http_client: Any = None,
+) -> dict[str, Any]:
+    """ARGON-controlled SSRF-hardened reachability verification for a registered funding source."""
+    import httpx
+
+    src = db.execute(
+        select(CaravanFundingSourceRecord).where(
+            CaravanFundingSourceRecord.tenant_id == principal.tenant_id,
+            CaravanFundingSourceRecord.source_id == source_id,
+        )
+    ).scalar_one_or_none()
+    if src is None:
+        raise NotFoundError(f"Funding source '{source_id}' not found.")
+
+    clean_url = validate_public_https_url(src.base_url)
+    now = _utcnow()
+    reachable = False
+    http_status: int | None = None
+    detail = ""
+    try:
+        if http_client is not None:
+            resp = http_client.get(clean_url, timeout=8.0, follow_redirects=True)
+        else:
+            with httpx.Client(timeout=8.0, follow_redirects=True) as client:
+                resp = client.get(clean_url)
+        http_status = resp.status_code
+        reachable = 200 <= resp.status_code < 400
+        detail = f"HTTP {resp.status_code}" if reachable else f"HTTP {resp.status_code} (unhealthy)"
+    except Exception as exc:
+        detail = f"Network error: {type(exc).__name__}"
+
+    src.last_checked_at = now
+    src.status = "ACTIVE" if reachable else "DEGRADED"
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="CARAVAN_ARGON_SOURCE_CHECK",
+        resource=src.source_id,
+        outcome=f"reachable={reachable}|status={http_status}|{detail}",
+    )
+    db.commit()
+    return {
+        "source_id": src.source_id,
+        "name": src.name,
+        "base_url": clean_url,
+        "reachable": reachable,
+        "http_status": http_status,
+        "status": src.status,
+        "last_checked_at": now.isoformat(),
+        "argon_workflow": "SSRF_GUARDED_SOURCE_PROBE",
+        "detail": detail,
+    }
+

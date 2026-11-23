@@ -504,3 +504,13 @@ def api_read_caravan_notification(
     return mark_notification_read(db, principal=principal, notification_id=notification_id)
 
 
+@router.post("/sources/{source_id}/verify")
+def api_verify_caravan_source_live(
+    source_id: str,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.caravan_product_service import verify_funding_source_via_argon
+
+    return verify_funding_source_via_argon(db, principal=principal, source_id=source_id)
+

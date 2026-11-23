@@ -69,6 +69,9 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
   const [stage, setStage] = useState("SEED");
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketMessage, setTicketMessage] = useState("");
+  const [sourceName, setSourceName] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceType, setSourceType] = useState("PUBLIC_PORTAL");
 
   async function loadAll() {
     try {
@@ -433,8 +436,16 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <strong>Subscription &amp; Entitlements (Live Payments Disabled)</strong>
             <div className="muted" style={{ fontSize: 12 }}>
-              Current Tier: <strong>{overview?.subscription?.plan_tier ?? "FREE"}</strong> · Live Payments Enabled: <strong>{String(overview?.subscription?.live_payments_enabled ?? false)}</strong>
+              Current Tier: <strong>{overview?.subscription?.plan_tier ?? "FREE"}</strong> · Live Payments Enabled:{" "}
+              <strong>{String(overview?.subscription?.live_payments_enabled ?? false)}</strong>
             </div>
+            {overview?.subscription?.entitlements && (
+              <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                <span className="pill mono">Max Saved: {overview.subscription.entitlements.max_saved_opportunities}</span>
+                <span className="pill mono">NEON/mo: {overview.subscription.entitlements.neon_assessments_per_month}</span>
+                <span className="pill mono">ARGON Runs: {overview.subscription.entitlements.argon_research_runs}</span>
+              </div>
+            )}
             <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
               {["FREE", "PRO", "INSTITUTIONAL"].map((tier) => (
                 <button
@@ -457,7 +468,37 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
           </div>
 
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <strong>Customer Support ({tickets.length}) &amp; Alerts ({notifications.length})</strong>
+            <strong>Alerts &amp; Notifications ({notifications.length})</strong>
+            {notifications.length === 0 ? (
+              <div className="muted" style={{ fontSize: 12 }}>No notifications yet.</div>
+            ) : (
+              notifications.slice(0, 8).map((n) => (
+                <div key={n.notification_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <strong>{n.title}</strong>
+                    <div className="muted" style={{ fontSize: 11 }}>{n.body}</div>
+                  </div>
+                  {!n.read ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={async () => {
+                        await apiFetch(`/api/v1/caravan/notifications/${n.notification_id}/read`, { method: "POST" });
+                        await loadAll();
+                      }}
+                    >
+                      Mark Read
+                    </button>
+                  ) : (
+                    <span className="pill mono">READ</span>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <strong>Customer Support ({tickets.length})</strong>
             <input className="input" placeholder="Support Subject" value={ticketSubject} onChange={(e) => setTicketSubject(e.target.value)} />
             <input className="input" placeholder="Describe your question..." value={ticketMessage} onChange={(e) => setTicketMessage(e.target.value)} />
             <button
@@ -477,6 +518,12 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
             >
               Submit Ticket
             </button>
+            {tickets.slice(0, 5).map((t) => (
+              <div key={t.ticket_id} className="list-item row-between" style={{ gap: 8 }}>
+                <span>{t.subject}</span>
+                <span className="pill mono">{t.status}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -537,7 +584,63 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
           </div>
 
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <strong><ShieldCheck size={14} /> Registered Sources ({sources.length}) &amp; Verification Queue</strong>
+            <strong><ShieldCheck size={14} /> Registered Sources ({sources.length}) &amp; ARGON Verification</strong>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <input className="input" style={{ flex: 1 }} placeholder="Source Name (e.g. Tony Elumelu Foundation)" value={sourceName} onChange={(e) => setSourceName(e.target.value)} />
+              <select className="select" value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
+                {["PUBLIC_PORTAL", "RSS_FEED", "PARTNER_API", "OFFICIAL_REGISTRY"].map((st) => (
+                  <option key={st} value={st}>{st}</option>
+                ))}
+              </select>
+              <input className="input" style={{ flex: 1 }} placeholder="https://..." value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  try {
+                    await apiFetch("/api/v1/caravan/sources", {
+                      method: "POST",
+                      body: { name: sourceName.trim(), source_type: sourceType, base_url: sourceUrl.trim() },
+                    });
+                    setSourceName("");
+                    setSourceUrl("");
+                    pushToast("Funding source registered.", "success");
+                    await loadAll();
+                  } catch (err: any) {
+                    pushToast(err.message, "error");
+                  }
+                }}
+              >
+                Add Source
+              </button>
+            </div>
+            {sources.map((s) => (
+              <div key={s.source_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+                <div>
+                  <strong>{s.name}</strong>
+                  <div className="muted mono" style={{ fontSize: 11 }}>{s.base_url} · {s.status}</div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={async () => {
+                    try {
+                      const res = await apiFetch<any>(`/api/v1/caravan/sources/${s.source_id}/verify`, { method: "POST" });
+                      pushToast(`ARGON Probe: ${res.detail}`, res.reachable ? "success" : "info");
+                      await loadAll();
+                    } catch (err: any) {
+                      pushToast(err.message, "error");
+                    }
+                  }}
+                >
+                  ARGON Live Probe
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <strong><ShieldCheck size={14} /> Opportunity Verification Queue</strong>
             <input className="input" placeholder="Verification supporting evidence (required to mark VERIFIED)" value={verifyEvidence} onChange={(e) => setVerifyEvidence(e.target.value)} />
             {opportunities.slice(0, 10).map((o) => (
               <div key={o.opportunity_id} className="list-item row-between" style={{ gap: 8, flexWrap: "wrap" }}>

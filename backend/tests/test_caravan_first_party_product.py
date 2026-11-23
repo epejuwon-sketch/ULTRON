@@ -223,3 +223,45 @@ def test_caravan_tenant_isolation(client, auth_headers):
     )
     headers_b = {"Authorization": f"Bearer {login2.json()['access_token']}"}
     assert client.get(f"/api/v1/caravan/opportunities/{opp_id}", headers=headers_b).status_code == 404
+
+
+def test_caravan_argon_source_verification_probe(client, auth_headers, monkeypatch):
+    import httpx
+
+    src = client.post(
+        "/api/v1/caravan/sources",
+        headers=auth_headers["owner"],
+        json={
+            "name": "Nigeria Startup Portal",
+            "source_type": "PUBLIC_PORTAL",
+            "base_url": "https://startupbill.ng/",
+        },
+    )
+    assert src.status_code == 201, src.text
+    src_id = src.json()["source_id"]
+
+    class _FakeResp:
+        status_code = 200
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, **kwargs):
+            return _FakeResp()
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    probe = client.post(f"/api/v1/caravan/sources/{src_id}/verify", headers=auth_headers["owner"])
+    assert probe.status_code == 200, probe.text
+    body = probe.json()
+    assert body["reachable"] is True
+    assert body["http_status"] == 200
+    assert body["status"] == "ACTIVE"
+    assert body["argon_workflow"] == "SSRF_GUARDED_SOURCE_PROBE"
+
