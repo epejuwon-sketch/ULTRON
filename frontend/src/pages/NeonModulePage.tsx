@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { apiFetch, resolveGeminiProviderStatus, streamNeon } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
-import { getClientDeviceContext, parseUniversalAppLaunchCommand } from "../components/devices/OrbitAppPermissionsSection";
+import { getClientDeviceContext, monitorOrbitHandoff, parseUniversalAppLaunchCommand } from "../components/devices/OrbitAppPermissionsSection";
 import type { AttachedFileRef, ModulePageProps } from "../types/module";
 import {
   DataTable,
@@ -991,13 +991,20 @@ export default function NeonModulePage({
                     <span className="pill">Handoff: {orbitAppPrompt.handoff_tapped || orbitAppPrompt.handoff_attempted ? "Attempted" : "Awaiting Tap"}</span>
                     <span className="pill">OS Confirmed: {orbitAppPrompt.os_confirmed ? "Yes" : "Unconfirmed"}</span>
                   </div>
+                  {orbitAppPrompt.handoff_note && (
+                    <div className="muted" style={{ fontSize: 12, fontWeight: 600 }}>{orbitAppPrompt.handoff_note}</div>
+                  )}
                   <div className="muted" style={{ fontSize: 12 }}>{orbitAppPrompt.platform_limitation_note}</div>
                   <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
                     {orbitAppPrompt.launch_url && (
                       <a
                         href={orbitAppPrompt.launch_url}
                         className="btn btn-sm"
-                        onClick={() => setOrbitAppPrompt((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
+                        onClick={() =>
+                          monitorOrbitHandoff(orbitAppPrompt.app_id, orbitAppPrompt.devCtx.deviceId, false, (patch) =>
+                            setOrbitAppPrompt((prev: any) => (prev ? { ...prev, ...patch } : prev))
+                          )
+                        }
                       >
                         Open {orbitAppPrompt.app_name} App
                       </a>
@@ -1008,7 +1015,11 @@ export default function NeonModulePage({
                         target={orbitAppPrompt.web_fallback_url.startsWith("http") ? "_blank" : undefined}
                         rel="noopener noreferrer"
                         className="btn btn-secondary btn-sm"
-                        onClick={() => setOrbitAppPrompt((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
+                        onClick={() =>
+                          monitorOrbitHandoff(orbitAppPrompt.app_id, orbitAppPrompt.devCtx.deviceId, true, (patch) =>
+                            setOrbitAppPrompt((prev: any) => (prev ? { ...prev, ...patch } : prev))
+                          )
+                        }
                       >
                         Open Web Fallback
                       </a>

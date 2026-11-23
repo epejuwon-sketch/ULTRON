@@ -85,6 +85,64 @@ export function parseAppLaunchCommand(text: string): { appId: string; targetUri?
   return { appId: parsed.appId, targetUri: parsed.targetUri };
 }
 
+export function monitorOrbitHandoff(
+  appId: string,
+  deviceId: string,
+  isFallback: boolean,
+  onUpdate: (patch: { handoff_tapped: boolean; handoff_note: string }) => void
+): void {
+  const report = (outcome: string, detail = "") => {
+    apiFetch("/api/v1/devices/apps/handoff-report", {
+      method: "POST",
+      body: { app_id: appId, device_id: deviceId, outcome, detail },
+    }).catch(() => {
+      // best-effort telemetry
+    });
+  };
+
+  if (isFallback) {
+    onUpdate({
+      handoff_tapped: true,
+      handoff_note: "Opened Web Fallback in browser.",
+    });
+    report("WEB_FALLBACK_OPENED");
+    return;
+  }
+
+  onUpdate({
+    handoff_tapped: true,
+    handoff_note: "Handoff attempted — waiting to see if the OS switches out of Safari/PWA...",
+  });
+  report("HANDOFF_TAPPED");
+
+  let settled = false;
+  const onVis = () => {
+    if (document.hidden && !settled) {
+      settled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      onUpdate({
+        handoff_tapped: true,
+        handoff_note: "Browser switched away after tap — OS may have opened the app (PWA cannot independently confirm).",
+      });
+      report("HANDOFF_PAGE_HIDDEN");
+    }
+  };
+  document.addEventListener("visibilitychange", onVis);
+
+  window.setTimeout(() => {
+    document.removeEventListener("visibilitychange", onVis);
+    if (!settled && !document.hidden) {
+      settled = true;
+      onUpdate({
+        handoff_tapped: true,
+        handoff_note:
+          "No app switch detected — the app may not be installed, or iOS blocked/declined the handoff. Use Web Fallback below if available.",
+      });
+      report("HANDOFF_NO_APP_SWITCH_TIMEOUT", "No visibilitychange within 1600ms");
+    }
+  }, 1600);
+}
+
 export function OrbitAppPermissionsSection() {
   const { pushToast } = useToast();
   const ctx = getClientDeviceContext();
@@ -96,6 +154,7 @@ export function OrbitAppPermissionsSection() {
   const [quickLaunchInput, setQuickLaunchInput] = useState("");
   const [pendingApproval, setPendingApproval] = useState<any>(null);
   const [launchResult, setLaunchResult] = useState<any>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const [showRegisterForm, setShowRegisterForm] = useState(false);
 
   // Manual registration state
@@ -139,6 +198,7 @@ export function OrbitAppPermissionsSection() {
 
   async function requestLaunch(appIdOrName: string, allowOnce = false, targetUri?: string, preferredMethod?: string) {
     setLaunchResult(null);
+    setLaunchError(null);
     try {
       const res = await apiFetch<any>("/api/v1/devices/apps/launch", {
         method: "POST",
@@ -156,15 +216,21 @@ export function OrbitAppPermissionsSection() {
         setPendingApproval({ ...res, target_uri: targetUri, preferred_method: preferredMethod });
       } else if (res.status === "DENIED") {
         setPendingApproval(null);
+        setLaunchError(res.message || "Launch denied by device policy.");
         pushToast(res.message || "Launch denied by device policy.", "error");
       } else if (res.status === "READY_TO_LAUNCH") {
         setPendingApproval(null);
-        setLaunchResult({ ...res, handoff_tapped: false });
+        setLaunchResult({ ...res, handoff_tapped: false, handoff_note: null });
         pushToast(`${res.app_name} launch prepared (${res.permission_mode}).`, "success");
         await load();
       }
     } catch (err: any) {
-      pushToast(err.message, "error");
+      const msg =
+        err?.message && !/failed to fetch|network/i.test(err.message)
+          ? err.message
+          : "Network failure while contacting ORBIT launch resolver. Check your connection and retry.";
+      setLaunchError(msg);
+      pushToast(msg, "error");
     }
   }
 
@@ -372,6 +438,12 @@ export function OrbitAppPermissionsSection() {
           </div>
         )}
 
+        {launchError && (
+          <div className="alert-box" data-testid="orbit-app-launch-error" style={{ fontSize: 12 }}>
+            <strong>Launch Error:</strong> {launchError}
+          </div>
+        )}
+
         {/* Honest Launch Status & Handoff Card */}
         {launchResult && (
           <div className="list-item" data-testid="orbit-app-launch-result" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -385,13 +457,20 @@ export function OrbitAppPermissionsSection() {
               <span className="pill">Handoff Attempted: {launchResult.handoff_tapped || launchResult.handoff_attempted ? "Yes" : "Awaiting Tap"}</span>
               <span className="pill">OS Confirmed: {launchResult.os_confirmed ? "Confirmed" : "Unconfirmed (PWA/OS limit)"}</span>
             </div>
+            {launchResult.handoff_note && (
+              <div className="alert-box" style={{ fontSize: 12, padding: "8px 10px" }}>{launchResult.handoff_note}</div>
+            )}
             <div className="muted" style={{ fontSize: 12 }}>{launchResult.platform_limitation_note}</div>
             <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
               {launchResult.launch_url && (
                 <a
                   href={launchResult.launch_url}
                   className="btn btn-sm"
-                  onClick={() => setLaunchResult((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
+                  onClick={() =>
+                    monitorOrbitHandoff(launchResult.app_id, ctx.deviceId, false, (patch) =>
+                      setLaunchResult((prev: any) => (prev ? { ...prev, ...patch } : prev))
+                    )
+                  }
                 >
                   <ExternalLink size={12} /> Open {launchResult.app_name} App
                 </a>
@@ -402,7 +481,11 @@ export function OrbitAppPermissionsSection() {
                   target={launchResult.web_fallback_url.startsWith("http") ? "_blank" : undefined}
                   rel="noopener noreferrer"
                   className="btn btn-secondary btn-sm"
-                  onClick={() => setLaunchResult((prev: any) => (prev ? { ...prev, handoff_tapped: true } : prev))}
+                  onClick={() =>
+                    monitorOrbitHandoff(launchResult.app_id, ctx.deviceId, true, (patch) =>
+                      setLaunchResult((prev: any) => (prev ? { ...prev, ...patch } : prev))
+                    )
+                  }
                 >
                   <ExternalLink size={12} /> Open Web Fallback
                 </a>

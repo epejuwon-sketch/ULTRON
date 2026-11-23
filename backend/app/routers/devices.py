@@ -32,6 +32,7 @@ from app.services.orbit_app_service import (
     list_app_permissions,
     list_orbit_app_library,
     prepare_or_dispatch_app_launch,
+    record_handoff_outcome,
     register_custom_app,
     resolve_universal_app,
     revoke_app_permission,
@@ -522,3 +523,27 @@ def api_launch_orbit_app(
         allow_once=body.allow_once,
         preferred_method=body.preferred_method,
     )
+
+
+class HandoffReportRequest(BaseModel):
+    app_id: str = Field(min_length=1, max_length=120)
+    device_id: str = Field(default="this_device", max_length=64)
+    outcome: str = Field(min_length=4, max_length=48)
+    detail: str = Field(default="", max_length=500)
+
+
+@router.post("/apps/handoff-report")
+def api_report_orbit_handoff(
+    body: HandoffReportRequest,
+    principal: Principal = Depends(require_perm("devices:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return record_handoff_outcome(
+        db,
+        principal=principal,
+        app_id=body.app_id,
+        device_id=body.device_id,
+        outcome=body.outcome,
+        detail=body.detail,
+    )
+

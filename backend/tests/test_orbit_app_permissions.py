@@ -221,3 +221,96 @@ def test_orbit_custom_app_registration_security_and_library(client: TestClient, 
     deleted = client.delete("/api/v1/devices/apps/register/monzo", headers=auth_headers["owner"])
     assert deleted.status_code == 200
     assert deleted.json()["status"] == "DELETED"
+
+
+def test_orbit_21_eight_apps_spotify_find_handoff_and_isolation(client: TestClient, auth_headers: dict) -> None:
+    # Approve device-wide ORBIT_APPLICATION_LAUNCH on iphone_15_pro
+    dp = client.post(
+        "/api/v1/devices/apps/device-permission",
+        headers=auth_headers["owner"],
+        json={"device_id": "iphone_15_pro", "device_label": "iPhone 15 Pro", "decision": "ALWAYS_ALLOW"},
+    )
+    assert dp.status_code == 200
+
+    # Verify all 8 target iOS apps resolve accurately with os_confirmed=False
+    expected_eight = [
+        ("YouTube", "youtube", "youtube://", "https://www.youtube.com"),
+        ("Spotify", "spotify", "spotify://", "https://open.spotify.com"),
+        ("WhatsApp", "whatsapp", "whatsapp://", "https://web.whatsapp.com"),
+        ("Instagram", "instagram", "instagram://app", "https://www.instagram.com"),
+        ("TikTok", "tiktok", "snssdk1233://", "https://www.tiktok.com"),
+        ("Google Maps", "maps", "maps://", "https://maps.google.com"),
+        ("Gmail", "gmail", "googlegmail://", "https://mail.google.com/"),
+        ("Telegram", "telegram", "tg://", "https://web.telegram.org"),
+    ]
+    for query, exp_id, exp_scheme, exp_web in expected_eight:
+        res = client.post(
+            "/api/v1/devices/apps/launch",
+            headers=auth_headers["owner"],
+            json={"app_id": query, "device_id": "iphone_15_pro", "platform": "ios"},
+        )
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["status"] == "READY_TO_LAUNCH"
+        assert data["app_id"] == exp_id
+        assert data["launch_url"] == exp_scheme
+        assert data["web_fallback_url"] == exp_web
+        assert data["os_confirmed"] is False
+
+    # Natural-language Spotify artist search
+    sp = client.post(
+        "/api/v1/devices/apps/launch",
+        headers=auth_headers["owner"],
+        json={
+            "app_id": "spotify",
+            "device_id": "iphone_15_pro",
+            "platform": "ios",
+            "target_uri": "Open Spotify and find Burna Boy.",
+        },
+    )
+    assert sp.status_code == 200
+    assert sp.json()["launch_url"] == "spotify://search/Burna%20Boy"
+    assert sp.json()["web_fallback_url"] == "https://open.spotify.com/search/Burna%20Boy"
+
+    # Explicit per-app DENIED overrides device-wide ALWAYS_ALLOW
+    deny = client.post(
+        "/api/v1/devices/apps/permissions",
+        headers=auth_headers["owner"],
+        json={"app_id": "tiktok", "device_id": "iphone_15_pro", "device_label": "iPhone 15 Pro", "decision": "DENIED"},
+    )
+    assert deny.status_code == 200
+    blocked = client.post(
+        "/api/v1/devices/apps/launch",
+        headers=auth_headers["owner"],
+        json={"app_id": "tiktok", "device_id": "iphone_15_pro", "platform": "ios"},
+    )
+    assert blocked.status_code == 200
+    assert blocked.json()["status"] == "DENIED"
+
+    # Handoff reporting persists status without ever claiming os_confirmed=True
+    for outcome in ("HANDOFF_TAPPED", "HANDOFF_NO_APP_SWITCH_TIMEOUT", "WEB_FALLBACK_OPENED"):
+        rep = client.post(
+            "/api/v1/devices/apps/handoff-report",
+            headers=auth_headers["owner"],
+            json={"app_id": "youtube", "device_id": "iphone_15_pro", "outcome": outcome},
+        )
+        assert rep.status_code == 200
+        assert rep.json()["handoff_status"] == outcome
+        assert rep.json()["os_confirmed"] is False
+
+    bad_rep = client.post(
+        "/api/v1/devices/apps/handoff-report",
+        headers=auth_headers["owner"],
+        json={"app_id": "youtube", "device_id": "iphone_15_pro", "outcome": "FAKE_OS_CONFIRMED"},
+    )
+    assert bad_rep.status_code == 422
+
+    # User isolation: operator cannot reuse owner's iphone_15_pro device-wide permission
+    op_res = client.post(
+        "/api/v1/devices/apps/launch",
+        headers=auth_headers["operator"],
+        json={"app_id": "YouTube", "device_id": "iphone_15_pro", "platform": "ios"},
+    )
+    assert op_res.status_code == 200
+    assert op_res.json()["status"] == "APPROVAL_REQUIRED"
+

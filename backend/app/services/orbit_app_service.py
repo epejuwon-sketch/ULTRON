@@ -447,9 +447,9 @@ def _resolve_spotify_targets(target_uri: str | None) -> tuple[str, str]:
         kind, oid = m_url.group(1), m_url.group(2)
         return f"spotify://{kind}/{oid}", f"https://open.spotify.com/{kind}/{oid}"
     lower = raw.lower()
-    for kind in ("playlist", "artist", "track", "album"):
-        if kind in lower:
-            q = re.sub(rf".*\b{kind}\b\s*", "", raw, flags=re.I).strip()
+    for kind in ("playlist", "artist", "track", "album", "find", "search", "play"):
+        if re.search(rf"\b{kind}\b", lower):
+            q = re.sub(rf".*\b{kind}\b\s*(?:for\s+)?", "", raw, flags=re.I).strip(" .!?")
             if q:
                 return f"spotify://search/{quote(q)}", f"https://open.spotify.com/search/{quote(q)}"
     return "spotify://", "https://open.spotify.com"
@@ -1208,3 +1208,74 @@ def _serialize_app_perm(r: DeviceAppPermissionRecord) -> dict[str, Any]:
         "last_launch_status": r.last_launch_status,
         "updated_at": r.updated_at.isoformat(),
     }
+
+
+_VALID_HANDOFF_OUTCOMES = {
+    "HANDOFF_TAPPED",
+    "HANDOFF_PAGE_HIDDEN",
+    "HANDOFF_NO_APP_SWITCH_TIMEOUT",
+    "WEB_FALLBACK_OPENED",
+    "LAUNCH_FAILED",
+}
+
+
+def record_handoff_outcome(
+    db: Session,
+    *,
+    principal: Principal,
+    app_id: str,
+    device_id: str,
+    outcome: str,
+    detail: str = "",
+) -> dict[str, Any]:
+    clean_outcome = outcome.strip().upper()
+    if clean_outcome not in _VALID_HANDOFF_OUTCOMES:
+        raise ValidationError(f"Invalid handoff outcome '{outcome}'.")
+    clean_app = _slugify_app_id(app_id)
+    clean_dev = (device_id or "this_device").strip() or "this_device"
+    now = datetime.now(timezone.utc)
+
+    for target_app in (clean_app, DEVICE_WIDE_APP_ID):
+        perm = db.execute(
+            select(DeviceAppPermissionRecord).where(
+                DeviceAppPermissionRecord.tenant_id == principal.tenant_id,
+                DeviceAppPermissionRecord.user_id == principal.user_id,
+                DeviceAppPermissionRecord.device_id == clean_dev,
+                DeviceAppPermissionRecord.app_id == target_app,
+            )
+        ).scalar_one_or_none()
+        if perm is not None:
+            perm.last_launch_at = now
+            perm.last_launch_status = clean_outcome
+            perm.updated_at = now
+
+    crec = db.execute(
+        select(OrbitRegisteredAppRecord).where(
+            OrbitRegisteredAppRecord.tenant_id == principal.tenant_id,
+            OrbitRegisteredAppRecord.user_id == principal.user_id,
+            OrbitRegisteredAppRecord.app_id == clean_app,
+        )
+    ).scalar_one_or_none()
+    if crec is not None:
+        crec.last_launch_at = now
+        crec.last_launch_status = clean_outcome
+        crec.last_launch_error = (detail or "")[:500] if clean_outcome in {"HANDOFF_NO_APP_SWITCH_TIMEOUT", "LAUNCH_FAILED"} else None
+        crec.updated_at = now
+
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="ORBIT_APP_HANDOFF_REPORTED",
+        resource=f"{clean_dev}:{clean_app}",
+        outcome=f"{clean_outcome}|{(detail or '')[:160]}",
+    )
+    db.commit()
+    return {
+        "app_id": clean_app,
+        "device_id": clean_dev,
+        "handoff_status": clean_outcome,
+        "os_confirmed": False,
+        "recorded_at": now.isoformat(),
+    }
+
