@@ -673,3 +673,99 @@ def _serialize_reserve(r: FinancialReserve) -> dict[str, Any]:
         "custodian": r.custodian,
         "updated_at": r.updated_at.isoformat(),
     }
+
+
+def get_financial_milestones_summary(db: Session, *, tenant_id: str) -> dict[str, Any]:
+    """Return private personal and commercial financial milestones tracking with real reserve calculations.
+
+    Operating rules:
+    - Track actual money separately from projections.
+    - Never count projected revenue as cash.
+    - Never count the same money in multiple categories.
+    - Business operating funds are kept separate from personal spending.
+    """
+    report = generate_financial_report(db, tenant_id=tenant_id)
+    total_reserves_usd = report["total_reserves_usd"]
+    # Nominal conversion rate for milestone tracking (configurable via environment/reserves)
+    usd_to_ngn = 1500.0
+    actual_reserves_ngn = round(total_reserves_usd * usd_to_ngn, 2)
+
+    # 1. February 2027 Protected Reserve Target (₦50,000,000)
+    target_reserve_ngn = 50_000_000.0
+    reserve_progress_pct = round(min(100.0, (actual_reserves_ngn / target_reserve_ngn) * 100.0), 2) if target_reserve_ngn > 0 else 0.0
+
+    # 2. Range Rover LWB Autobiography Milestone (2021 or newer)
+    # Required funding = Verified vehicle cost (~₦135m) + ₦300m remaining balance + taxes/fees (est ₦15m) + ₦50m business reserve = ₦500m
+    est_vehicle_cost_ngn = 135_000_000.0
+    post_purchase_balance_target_ngn = 300_000_000.0
+    est_taxes_and_fees_ngn = 15_000_000.0
+    business_operating_reserve_ngn = 50_000_000.0
+    total_range_rover_milestone_target_ngn = (
+        est_vehicle_cost_ngn
+        + post_purchase_balance_target_ngn
+        + est_taxes_and_fees_ngn
+        + business_operating_reserve_ngn
+    )
+
+    # 3. Additional Purchase Planning
+    planned_purchases = [
+        {"item": "iPhone 18 Pro Max, 2TB", "category": "Devices", "est_cost_usd": 2200, "est_cost_ngn": 3_300_000, "status": "PLANNED"},
+        {"item": "iPad, 1TB", "category": "Devices", "est_cost_usd": 1800, "est_cost_ngn": 2_700_000, "status": "PLANNED"},
+        {"item": "Razer Blade 16, RTX 5090, 2TB", "category": "Workstations", "est_cost_usd": 4500, "est_cost_ngn": 6_750_000, "status": "PLANNED"},
+        {"item": "ASUS ROG Xbox Ally X (2025)", "category": "Gaming", "est_cost_usd": 900, "est_cost_ngn": 1_350_000, "status": "PLANNED"},
+        {"item": "Two 4TB M.2 SSDs", "category": "Storage", "est_cost_usd": 700, "est_cost_ngn": 1_050_000, "status": "PLANNED"},
+        {"item": "One 8TB SSD", "category": "Storage", "est_cost_usd": 900, "est_cost_ngn": 1_350_000, "status": "PLANNED"},
+        {"item": "AirPods 2", "category": "Audio", "est_cost_usd": 200, "est_cost_ngn": 300_000, "status": "PLANNED"},
+        {"item": "Sony XM Headphones", "category": "Audio", "est_cost_usd": 400, "est_cost_ngn": 600_000, "status": "PLANNED"},
+        {"item": "AI Subscriptions (Ultra, Claude, ChatGPT)", "category": "Software", "est_cost_usd": 1200, "est_cost_ngn": 1_800_000, "status": "PLANNED"},
+        {"item": "Steam Games Budget", "category": "Entertainment", "est_cost_usd": 3000, "est_cost_ngn": 4_500_000, "status": "PLANNED"},
+        {"item": "PS5 Games Budget", "category": "Entertainment", "est_cost_usd": 3000, "est_cost_ngn": 4_500_000, "status": "PLANNED"},
+        {"item": "Clothing, Footwear & Accessories", "category": "Lifestyle", "est_cost_usd": 2667, "est_cost_ngn": 4_000_000, "status": "PLANNED"},
+        {"item": "Miscellaneous & Personal Care", "category": "Personal Care", "est_cost_usd": 2000, "est_cost_ngn": 3_000_000, "status": "PLANNED"},
+        {"item": "Rolex Land-Dweller (Ice-blue dial)", "category": "Horology", "est_cost_usd": 45000, "est_cost_ngn": 67_500_000, "status": "VERIFY_AVAILABILITY"},
+        {"item": "Amex Eligibility & Application", "category": "Credit Readiness", "est_cost_usd": 0, "est_cost_ngn": 0, "status": "READINESS_TRACKING"},
+    ]
+
+    total_planned_purchases_usd = sum(p["est_cost_usd"] for p in planned_purchases)
+    total_planned_purchases_ngn = sum(p["est_cost_ngn"] for p in planned_purchases)
+
+    return {
+        "tenant_id": tenant_id,
+        "financial_priority_order": [
+            "1. Legal obligations and taxes",
+            "2. Business operating expenses",
+            "3. Infrastructure and essential services",
+            "4. Protected business reserves",
+            "5. Approved reinvestment",
+            "6. Personal reserve targets",
+            "7. Approved personal purchases",
+        ],
+        "reserve_milestone_feb_2027": {
+            "target_amount_ngn": target_reserve_ngn,
+            "target_amount_usd": round(target_reserve_ngn / usd_to_ngn, 2),
+            "actual_reserves_ngn": actual_reserves_ngn,
+            "actual_reserves_usd": total_reserves_usd,
+            "progress_percentage": reserve_progress_pct,
+            "target_date": "2027-02-28",
+            "funded": actual_reserves_ngn >= target_reserve_ngn,
+        },
+        "range_rover_milestone": {
+            "vehicle": "Range Rover LWB Autobiography (2021+)",
+            "estimated_vehicle_cost_ngn": est_vehicle_cost_ngn,
+            "post_purchase_balance_target_ngn": post_purchase_balance_target_ngn,
+            "estimated_taxes_and_fees_ngn": est_taxes_and_fees_ngn,
+            "business_operating_reserve_ngn": business_operating_reserve_ngn,
+            "total_target_ngn": total_range_rover_milestone_target_ngn,
+            "total_target_usd": round(total_range_rover_milestone_target_ngn / usd_to_ngn, 2),
+            "current_liquid_funds_ngn": actual_reserves_ngn,
+            "ready_for_purchase": False,
+            "formula": "Verified vehicle cost + ₦300m post-purchase balance + taxes/fees + ₦50m operating reserve",
+        },
+        "planned_purchases": {
+            "total_count": len(planned_purchases),
+            "total_estimated_usd": total_planned_purchases_usd,
+            "total_estimated_ngn": total_planned_purchases_ngn,
+            "items": planned_purchases,
+        },
+        "governance_rule": "Caravan operating funds and legal reserves strictly take precedence before any personal purchases.",
+    }

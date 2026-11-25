@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Compass,
+  Globe,
   CheckCircle2,
   Database,
   Play,
@@ -723,6 +725,55 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
             </div>
           ))
         )}
+      </div>
+
+
+      {/* Global Expansion Command Center (Operation Abuja & Operation London) */}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+          <strong><Globe size={14} /> Global Expansion Command Center (Target Window: February–March 2027)</strong>
+          <span className="pill mono">Daily Preparation &amp; Intelligence</span>
+        </div>
+        <div className="muted" style={{ fontSize: 12 }}>
+          {data?.expansion_workstreams?.operating_principle || "Daily preparation & intelligence discovery; approval required before external commitment or spend."}
+        </div>
+        <div className="grid-2" style={{ gap: 12 }}>
+          <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+            <div className="row-between">
+              <strong>{data?.expansion_workstreams?.operation_abuja?.name || "Operation Abuja (FCT, Nigeria)"}</strong>
+              <StatusIndicator label={data?.expansion_workstreams?.operation_abuja?.status || "IN_PREPARATION"} tone="info" />
+            </div>
+            <div className="muted">{data?.expansion_workstreams?.operation_abuja?.focus}</div>
+            <div><strong>Verified Local Sources:</strong> {data?.expansion_workstreams?.operation_abuja?.verified_local_sources_count ?? 0} registered</div>
+            <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 4 }}>
+              <strong>Readiness Checklist:</strong>
+              {(data?.expansion_workstreams?.operation_abuja?.readiness_checklist || []).map((item: any, i: number) => (
+                <div key={i} className="row-between" style={{ fontSize: 11 }}>
+                  <span>{item.task}</span>
+                  <StatusIndicator label={item.status} tone={item.status === "VERIFIED" ? "success" : item.status === "IN_PROGRESS" ? "info" : "warn"} />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+            <div className="row-between">
+              <strong>{data?.expansion_workstreams?.operation_london?.name || "Operation London (UK & Global)"}</strong>
+              <StatusIndicator label={data?.expansion_workstreams?.operation_london?.status || "IN_PREPARATION"} tone="info" />
+            </div>
+            <div className="muted">{data?.expansion_workstreams?.operation_london?.focus}</div>
+            <div><strong>Verified International Sources:</strong> {data?.expansion_workstreams?.operation_london?.verified_local_sources_count ?? 0} registered</div>
+            <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 4 }}>
+              <strong>Readiness Checklist:</strong>
+              {(data?.expansion_workstreams?.operation_london?.readiness_checklist || []).map((item: any, i: number) => (
+                <div key={i} className="row-between" style={{ fontSize: 11 }}>
+                  <span>{item.task}</span>
+                  <StatusIndicator label={item.status} tone={item.status === "VERIFIED" ? "success" : item.status === "IN_PROGRESS" ? "info" : "warn"} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Activity Timeline */}

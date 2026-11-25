@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import time
 from typing import Any
 
@@ -24,7 +26,20 @@ class SupabaseClient:
 
     @property
     def base_url(self) -> str:
-        return self._settings.supabase_url.strip().rstrip("/")
+        explicit = self._settings.supabase_url.strip().rstrip("/")
+        if explicit:
+            return explicit
+        # Auto-derive Supabase project REST URL from PostgreSQL host if present
+        raw_db = self._settings.database_url.strip()
+        if "supabase.co" in raw_db or "supabase.com" in raw_db:
+            m = re.search(r"postgres\.([a-zA-Z0-9_-]+)[@:]", raw_db)
+            if not m:
+                m = re.search(r"db\.([a-zA-Z0-9_-]+)\.supabase\.co", raw_db)
+            if not m:
+                m = re.search(r"//([a-zA-Z0-9_-]+)\.supabase\.co", raw_db)
+            if m:
+                return f"https://{m.group(1)}.supabase.co"
+        return ""
 
     @property
     def _api_key(self) -> str:
@@ -59,9 +74,26 @@ class SupabaseClient:
 
     def status_without_network(self) -> IntegrationStatus:
         missing = self.missing_env_vars()
+        has_pg = self._settings.database_backend == "postgresql"
+        if has_pg:
+            from app.db.session import check_database_health
+            db_ok, db_detail = check_database_health(self._settings)
+            if db_ok:
+                return IntegrationStatus(
+                    provider="supabase",
+                    configured=True,
+                    capability_state=HonestCapabilityState.AVAILABLE,
+                    live_verified=False,
+                    endpoint=f"{self.base_url}/rest/v1/" if self.base_url else "postgresql://",
+                    missing_env_vars=missing,
+                    detail=f"PostgreSQL database connected ({self._settings.database_backend})." + (
+                        f" Supabase PostgREST/Storage APIs require {', '.join(missing)}." if missing else ""
+                    ),
+                )
+
         if missing:
             detail = (
-                "Supabase credentials not configured; ULTRON_DATABASE_URL (PostgreSQL) is required in deployed environments."
+                "Supabase credentials not configured; configure ULTRON_DATABASE_URL (or DATABASE_URL) with your Supabase Transaction Pooler connection string (*.pooler.supabase.com:6543) in Vercel. Ensure it is scoped to Preview and Production."
                 if self._settings.is_deployed_environment
                 else "Supabase credentials not configured; local SQLite WAL active unless ULTRON_DATABASE_URL is set."
             )
@@ -84,6 +116,35 @@ class SupabaseClient:
 
     def verify_live(self, timeout_seconds: float = 8.0) -> IntegrationStatus:
         missing = self.missing_env_vars()
+        has_pg = self._settings.database_backend == "postgresql"
+
+        # If PostgreSQL is configured, verify direct database connectivity first
+        if has_pg:
+            from app.db.session import check_database_health
+            started = time.perf_counter()
+            db_ok, db_detail = check_database_health(self._settings)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            if not db_ok:
+                return IntegrationStatus(
+                    provider="supabase",
+                    configured=True,
+                    capability_state=HonestCapabilityState.DEGRADED,
+                    live_verified=False,
+                    endpoint="postgresql://",
+                    latency_ms=latency_ms,
+                    detail=f"Database connectivity check failed: {db_detail}",
+                )
+            if missing:
+                return IntegrationStatus(
+                    provider="supabase",
+                    configured=True,
+                    capability_state=HonestCapabilityState.AVAILABLE,
+                    live_verified=True,
+                    endpoint="postgresql://",
+                    latency_ms=latency_ms,
+                    detail=f"Database ({self._settings.database_backend}) connectivity live verified. PostgREST/Storage APIs require {', '.join(missing)}.",
+                )
+
         if missing:
             return self.status_without_network()
 

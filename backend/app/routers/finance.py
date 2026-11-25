@@ -33,6 +33,7 @@ from app.services.finance_service import (
     delete_payment_method,
     generate_cashflow_forecast,
     generate_financial_report,
+    get_financial_milestones_summary,
     list_budgets,
     list_financial_audit,
     list_investments,
@@ -276,6 +277,15 @@ def api_financial_audit(
     items = list_financial_audit(db, tenant_id=principal.tenant_id)
     return {"total": len(items), "audit_entries": items}
 
+
+
+@router.get("/milestones")
+def api_get_milestones(
+    principal: Principal = Depends(require_perm("finance:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return private financial & personal milestone tracking (₦50m reserve, Range Rover, planned purchases)."""
+    return get_financial_milestones_summary(db, tenant_id=principal.tenant_id)
 
 @router.get("/cards")
 def api_list_cards(

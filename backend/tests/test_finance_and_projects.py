@@ -171,3 +171,16 @@ def test_developer_projects_ast_analysis_code_proposals_and_deployment_rollback(
     )
     assert rb.status_code == 200
     assert rb.json()["status"] == "ROLLED_BACK"
+
+
+def test_financial_milestones_tracking_endpoint(client: TestClient, auth_headers: dict) -> None:
+    res = client.get("/api/v1/finance/milestones", headers=auth_headers["owner"])
+    assert res.status_code == 200
+    data = res.json()
+    assert "reserve_milestone_feb_2027" in data
+    assert data["reserve_milestone_feb_2027"]["target_amount_ngn"] == 50_000_000.0
+    assert "range_rover_milestone" in data
+    assert data["range_rover_milestone"]["post_purchase_balance_target_ngn"] == 300_000_000.0
+    assert data["range_rover_milestone"]["ready_for_purchase"] is False
+    assert len(data["planned_purchases"]["items"]) >= 15
+    assert len(data["financial_priority_order"]) == 7

@@ -307,6 +307,38 @@ def get_caravan_command_centre(
         },
         "activity_timeline": caravan_audits[:50],
         "scheduled_discovery": _build_scheduled_discovery_status(db, tenant_id=tid, sources=sources),
+        "expansion_workstreams": {
+            "target_window": "February–March 2027",
+            "operating_principle": "Daily preparation & intelligence discovery; approval required before external commitment or spend.",
+            "operation_abuja": {
+                "name": "Operation Abuja (FCT, Nigeria)",
+                "target_date": "2027-02-15",
+                "status": "IN_PREPARATION",
+                "focus": "Nigerian public & institutional funding, BOI, SMEDAN, DBN, Abuja tech & SME ecosystem.",
+                "verified_local_sources_count": len([src for src in sources if "nigeria" in src.geography.lower() or "africa" in src.geography.lower()]),
+                "readiness_checklist": [
+                    {"task": "Nigeria funding source directory registered", "status": "VERIFIED"},
+                    {"task": "SSRF-safe ARGON automated discovery active", "status": "VERIFIED"},
+                    {"task": "Abuja commercial customer pipeline identification", "status": "IN_PROGRESS"},
+                    {"task": "Institutional partnership drafts prepared", "status": "IN_PROGRESS"},
+                    {"task": "Approved local operational budget", "status": "AWAITING_AUTHORIZATION"},
+                ],
+            },
+            "operation_london": {
+                "name": "Operation London (UK & Global)",
+                "target_date": "2027-03-15",
+                "status": "IN_PREPARATION",
+                "focus": "UK funding ecosystem, Innovate UK, British Business Bank, London accelerators & international venture funds.",
+                "verified_local_sources_count": len([src for src in sources if "uk" in src.geography.lower() or "international" in src.geography.lower() or "global" in src.geography.lower()]),
+                "readiness_checklist": [
+                    {"task": "UK funding market research & competitor taxonomy", "status": "VERIFIED"},
+                    {"task": "UK GDPR & data protection compliance plan", "status": "IN_PROGRESS"},
+                    {"task": "Cross-border payment readiness", "status": "IN_PROGRESS"},
+                    {"task": "London institutional partner candidate list", "status": "IN_PROGRESS"},
+                    {"task": "UK operations launch authorization", "status": "AWAITING_AUTHORIZATION"},
+                ],
+            },
+        },
     }
 
 

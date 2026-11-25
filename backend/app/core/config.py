@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import Any, Literal
 from urllib.parse import quote
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -285,16 +285,16 @@ class Settings(BaseSettings):
     default_tenant_id: str = Field(default="TENANT-ULTRON-01", alias="ULTRON_DEFAULT_TENANT_ID")
 
     # --- Persistence ---
-    database_url: str = Field(default="", alias="ULTRON_DATABASE_URL")
+    database_url: str = Field(default="", validation_alias=AliasChoices("ULTRON_DATABASE_URL", "DATABASE_URL", "POSTGRES_URL", "SUPABASE_DATABASE_URL", "POSTGRES_PRISMA_URL"))
     sqlite_path: str = Field(default="./data/ultron_os_2026.db", alias="ULTRON_SQLITE_PATH")
     db_pool_size: int = Field(default=10, ge=1, le=100, alias="ULTRON_DB_POOL_SIZE")
     db_max_overflow: int = Field(default=20, ge=0, le=100, alias="ULTRON_DB_MAX_OVERFLOW")
     auto_init_schema: bool = Field(default=True, alias="ULTRON_AUTO_INIT_SCHEMA")
 
     # --- Supabase ---
-    supabase_url: str = Field(default="", alias="SUPABASE_URL")
-    supabase_anon_key: SecretStr | None = Field(default=None, alias="SUPABASE_ANON_KEY")
-    supabase_service_role_key: SecretStr | None = Field(default=None, alias="SUPABASE_SERVICE_ROLE_KEY")
+    supabase_url: str = Field(default="", validation_alias=AliasChoices("SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"))
+    supabase_anon_key: SecretStr | None = Field(default=None, validation_alias=AliasChoices("SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY"))
+    supabase_service_role_key: SecretStr | None = Field(default=None, validation_alias=AliasChoices("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY"))
     supabase_storage_bucket: str = Field(default="ultron-private-files", alias="SUPABASE_STORAGE_BUCKET")
 
     # --- Multi-Model LLM Providers (Official Nov 2026 Gemini Models Primary + Optional Failover) ---
@@ -547,7 +547,7 @@ class Settings(BaseSettings):
         # Tier 5 defaults to flagship Gemini 4 Carbon (highest available reasoning) unless custom-overridden
         if self.gemini_model_reasoning.strip() and self.gemini_model_reasoning.strip() != "gemini-4-argon":
             return self.gemini_model_reasoning.strip()
-        return "gemini-4-carbon"
+        return "gemini-4-argon"
 
     def safe_summary(self) -> dict[str, Any]:
         """Return non-sensitive runtime configuration metadata safe for diagnostics."""

@@ -50,20 +50,20 @@ def test_five_reasoning_tiers_and_configurable_overrides() -> None:
     assert tiers[2]["primary_model"] == "gemini-3.8-flash"
     assert tiers[3]["primary_model"] == "gemini-3.8-flash"
     assert tiers[4]["primary_model"] == "gemini-4-hydrogen"
-    assert tiers[5]["primary_model"] == "gemini-4-carbon"
+    assert tiers[5]["primary_model"] == "gemini-4-argon"
 
     # Controlled fallback chain for Tier 5 degrades gracefully from paid Carbon/Argon to Free+Paid Hydrogen/Flash
-    t5_chain = build_gemini_tier_fallback_chain("gemini-4-carbon", cfg, reasoning_tier=5)
-    assert t5_chain[:4] == ["gemini-4-carbon", "gemini-4-argon", "gemini-4-hydrogen", "gemini-3.8-flash"]
+    t5_chain = build_gemini_tier_fallback_chain("gemini-4-argon", cfg, reasoning_tier=5)
+    assert t5_chain[:3] == ["gemini-4-argon", "gemini-4-hydrogen", "gemini-3.8-flash"]
 
     # Explicit env overrides per tier take precedence without code changes
     custom = _make_settings(
-        GEMINI_MODEL_TIER_1="gemini-2.5-flash-lite",
+        GEMINI_MODEL_TIER_1="gemini-3.5-flash-lite",
         GEMINI_MODEL_TIER_4="gemini-3.8-flash",
         GEMINI_MODEL_TIER_5="gemini-4-hydrogen",
     )
     custom_tiers = get_reasoning_tiers(custom)
-    assert custom_tiers[1]["primary_model"] == "gemini-2.5-flash-lite"
+    assert custom_tiers[1]["primary_model"] == "gemini-3.5-flash-lite"
     assert custom_tiers[4]["primary_model"] == "gemini-3.8-flash"
     assert custom_tiers[5]["primary_model"] == "gemini-4-hydrogen"
 
@@ -227,7 +227,7 @@ def test_all_60_agents_preserve_unique_contracts_via_shared_gemini(client: TestC
             captured_instructions[ag.agent_id] = ag.system_instruction
             captured_models[ag.agent_id] = res["model"]
             if res["reasoning_tier"] == 5:
-                assert res["primary_model"] == "gemini-4-carbon"
+                assert res["primary_model"] == "gemini-4-argon"
                 assert res["model"] == "gemini-4-hydrogen"
                 assert res["fallback_used"] is True
         db.commit()

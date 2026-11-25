@@ -19,7 +19,6 @@ MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
     "gemini-3.6-flash": (0.75, 3.75),
     "gemini-4-hydrogen": (1.50, 7.50),
     "gemini-4-argon": (2.00, 10.00),
-    "gemini-4-carbon": (2.00, 10.00),
     "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.5-flash": (0.30, 2.50),
     "gemini-2.5-flash-lite": (0.10, 0.40),
@@ -35,7 +34,6 @@ MODEL_CONTEXT_WINDOWS: dict[str, tuple[int, int]] = {
     "gemini-3.8-flash": (1_048_576, 65_536),
     "gemini-4-hydrogen": (1_048_576, 65_536),
     "gemini-4-argon": (1_048_576, 65_536),
-    "gemini-4-carbon": (1_048_576, 65_536),
     "gemini-2.5-flash": (1_048_576, 65_536),
     "gemini-2.5-flash-lite": (1_048_576, 65_536),
 }
@@ -364,35 +362,35 @@ def build_gemini_tier_fallback_chain(
         ordered = [
             primary_model,
             settings.resolve_gemini_tier_model(1),
-            "gemini-2.5-flash-lite",
+            "gemini-3.5-flash-lite",
             settings.resolve_gemini_tier_model(2),
-            "gemini-2.5-flash",
+            "gemini-3.8-flash",
         ]
     elif t == 2:
         ordered = [
             primary_model,
             settings.resolve_gemini_tier_model(2),
+            "gemini-3.8-flash",
             settings.resolve_gemini_tier_model(1),
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            "gemini-3.5-flash-lite",
         ]
     elif t == 3:
         ordered = [
             primary_model,
             settings.resolve_gemini_tier_model(3),
+            "gemini-3.8-flash",
             "gemini-4-hydrogen",
             settings.resolve_gemini_tier_model(1),
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            "gemini-3.5-flash-lite",
         ]
     elif t == 4:
         ordered = [
             primary_model,
             "gemini-4-hydrogen",
+            settings.resolve_gemini_tier_model(4),
             settings.resolve_gemini_tier_model(3),
-            settings.resolve_gemini_tier_model(1),
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite",
         ]
     else:
         ordered = [
@@ -400,9 +398,8 @@ def build_gemini_tier_fallback_chain(
             *(["gemini-4-argon"] if primary_model != "gemini-4-argon" else []),
             "gemini-4-hydrogen",
             settings.resolve_gemini_tier_model(3),
-            settings.resolve_gemini_tier_model(1),
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite",
         ]
 
     seen: set[str] = set()

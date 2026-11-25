@@ -523,3 +523,29 @@ def test_pulse_page_data_binding_uses_concrete_page_id(client: TestClient, auth_
     assert "{page_id}" not in page["data_bindings"][0]
 
 
+
+
+def test_database_url_aliases_and_supabase_derivation() -> None:
+    """Verify DATABASE_URL and POSTGRES_URL are loaded seamlessly and Supabase project URL is auto-derived."""
+    from app.core.config import Settings
+    from app.integrations.supabase import SupabaseClient
+
+    # 1. DATABASE_URL alias loads into database_url
+    s1 = Settings(
+        ULTRON_ENV="staging",
+        ULTRON_JWT_SECRET="x" * 40,
+        ULTRON_VAULT_MASTER_KEY="y" * 40,
+        DATABASE_URL="postgresql://postgres.myprojectref:secret@aws-0-eu-central-1.pooler.supabase.com:6543/postgres",
+    )
+    assert s1.database_url.startswith("postgresql://")
+    assert SupabaseClient(s1).base_url == "https://myprojectref.supabase.co"
+
+    # 2. POSTGRES_URL alias loads into database_url
+    s2 = Settings(
+        ULTRON_ENV="staging",
+        ULTRON_JWT_SECRET="x" * 40,
+        ULTRON_VAULT_MASTER_KEY="y" * 40,
+        POSTGRES_URL="postgresql://postgres:secret@db.directref.supabase.co:5432/postgres",
+    )
+    assert s2.database_url.startswith("postgresql://")
+    assert SupabaseClient(s2).base_url == "https://directref.supabase.co"

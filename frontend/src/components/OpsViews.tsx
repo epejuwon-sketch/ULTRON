@@ -136,6 +136,7 @@ export function FinanceView() {
   const [txs, setTxs] = useState<any[]>([]);
   const [methods, setMethods] = useState<any[]>([]);
   const [forecast, setForecast] = useState<any>(null);
+  const [milestones, setMilestones] = useState<any>(null);
   const [txType, setTxType] = useState("REVENUE");
   const [category, setCategory] = useState("saas");
   const [amount, setAmount] = useState("100");
@@ -149,16 +150,18 @@ export function FinanceView() {
   async function load() {
     try {
       const qs = scope ? `?scope=${scope}` : "";
-      const [s, t, pm, fc] = await Promise.all([
+      const [s, t, pm, fc, ms] = await Promise.all([
         apiFetch<any>(`/api/v1/finance/reports/summary${qs}`),
         apiFetch<any>(`/api/v1/finance/transactions${qs}`),
         apiFetch<any>(`/api/v1/finance/payment-methods${qs}`),
         apiFetch<any>("/api/v1/finance/forecast?months=3"),
+        apiFetch<any>("/api/v1/finance/milestones").catch(() => null),
       ]);
       setSummary(s);
       setTxs(t.transactions || []);
       setMethods(pm.payment_methods || []);
       setForecast(fc);
+      setMilestones(ms);
     } catch (e: any) {
       setError(e.message);
     }
@@ -316,6 +319,65 @@ export function FinanceView() {
           </div>
         )}
       </div>
+
+      {/* Private Milestone & Reserve Targets */}
+      {milestones && (
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="row-between">
+            <div className="card-title"><span>Financial &amp; Personal Milestone Tracking (Private)</span></div>
+            <span className="pill mono">Priority 1–7 Enforced</span>
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>{milestones.governance_rule}</div>
+
+          <div className="grid-2" style={{ gap: 12 }}>
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div className="row-between">
+                <strong>February 2027 Protected Reserve</strong>
+                <span className={`pill ${milestones.reserve_milestone_feb_2027?.funded ? "pill-cyan" : "pill-warn"}`}>
+                  {milestones.reserve_milestone_feb_2027?.funded ? "FUNDED" : `${milestones.reserve_milestone_feb_2027?.progress_percentage ?? 0}%`}
+                </span>
+              </div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Target: ₦50,000,000 (~${Number(milestones.reserve_milestone_feb_2027?.target_amount_usd || 0).toLocaleString()})
+              </div>
+              <div className="stat-value" style={{ fontSize: 18 }}>
+                ₦{Number(milestones.reserve_milestone_feb_2027?.actual_reserves_ngn || 0).toLocaleString()}
+              </div>
+            </div>
+
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div className="row-between">
+                <strong>Range Rover LWB Autobiography Milestone</strong>
+                <span className="pill pill-warn">Requires ₦300m Remaining Balance</span>
+              </div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Formula: {milestones.range_rover_milestone?.formula}
+              </div>
+              <div className="stat-value" style={{ fontSize: 18 }}>
+                Target: ₦{Number(milestones.range_rover_milestone?.total_target_ngn || 0).toLocaleString()}
+              </div>
+              <div className="muted" style={{ fontSize: 11 }}>
+                Status: {milestones.range_rover_milestone?.ready_for_purchase ? "READY" : "AWAITING FUNDING"} (Operating funds separated)
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+            <strong style={{ fontSize: 12 }}>Planned Purchases &amp; Budgets ({milestones.planned_purchases?.total_count ?? 0} Items)</strong>
+            <div className="grid-3" style={{ gap: 8, fontSize: 11 }}>
+              {(milestones.planned_purchases?.items || []).slice(0, 9).map((it: any, i: number) => (
+                <div key={i} className="list-item" style={{ padding: "6px 8px" }}>
+                  <div className="row-between">
+                    <strong>{it.item}</strong>
+                    <span className="pill mono">{it.category}</span>
+                  </div>
+                  <div className="muted">{it.est_cost_usd > 0 ? `$${it.est_cost_usd.toLocaleString()}` : "Eligibility Tracked"} {it.est_cost_ngn > 0 ? `(₦${it.est_cost_ngn.toLocaleString()})` : ""}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
