@@ -179,8 +179,16 @@ def test_financial_milestones_tracking_endpoint(client: TestClient, auth_headers
     data = res.json()
     assert "reserve_milestone_feb_2027" in data
     assert data["reserve_milestone_feb_2027"]["target_amount_ngn"] == 50_000_000.0
+    assert data["reserve_milestone_feb_2027"]["business_reserve_protected"] is True
+    assert data["reserve_milestone_feb_2027"]["personal_spending_allowed"] is False
+    assert "actual_liquid_reserves" in data
+    assert "segregation_principle" in data["actual_liquid_reserves"]
     assert "range_rover_milestone" in data
     assert data["range_rover_milestone"]["post_purchase_balance_target_ngn"] == 300_000_000.0
+    assert data["range_rover_milestone"]["pricing_verification_status"] == "UNVERIFIED_ESTIMATE"
+    assert data["range_rover_milestone"]["business_operating_reserve_ngn"] == 50_000_000.0
+    assert "business_reserve_segregation_rule" in data["range_rover_milestone"]
     assert data["range_rover_milestone"]["ready_for_purchase"] is False
     assert len(data["planned_purchases"]["items"]) >= 15
     assert len(data["financial_priority_order"]) == 7
+

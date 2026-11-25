@@ -44,7 +44,7 @@ def test_all_60_agents_unique_contracts_and_live_gemini_routing_across_all_5_tie
         sys_text = payload.get("systemInstruction", {}).get("parts", [{}])[0].get("text", "")
         assert sys_text, "Every agent MUST send its unique systemInstruction to Gemini"
         assert req.headers.get("x-goog-api-key") == "AIzaSyTestLiveRoutingAll60Agents000001"
-        if model_id != "gemini-2.5-flash":
+        if model_id != "gemini-3.8-flash":
             return httpx.Response(
                 404,
                 json={"error": {"code": 404, "status": "NOT_FOUND", "message": f"Model {model_id} not eligible"}},
@@ -90,9 +90,8 @@ def test_all_60_agents_unique_contracts_and_live_gemini_routing_across_all_5_tie
                 assert res["agent_id"] == aid
                 assert res["provider"] == "gemini"
                 assert res["execution_mode"] == "gemini_live"
-                assert res["model"] == "gemini-2.5-flash"
-                assert res["fallback_used"] is True
-                assert res["output"] == "LIVE_OK:gemini-2.5-flash"
+                assert res["model"] == "gemini-3.8-flash"
+                assert res["output"] == "LIVE_OK:gemini-3.8-flash"
                 assert res["reasoning_tier"] == expected_tier
                 assert rec.tasks_completed >= 1
                 tiers_tested.add(expected_tier)
@@ -103,9 +102,9 @@ def test_all_60_agents_unique_contracts_and_live_gemini_routing_across_all_5_tie
                 ULTRON_SQLITE_PATH=str(db_file),
                 ULTRON_DATABASE_URL="",
                 GEMINI_API_KEY="AIzaSyTestDirectPrimary000002",
-                GEMINI_MODEL_FAST="gemini-2.5-flash",
-                GEMINI_MODEL_STANDARD="gemini-2.5-flash",
-                GEMINI_MODEL_REASONING="gemini-2.5-flash",
+                GEMINI_MODEL_FAST="gemini-3.5-flash-lite",
+                GEMINI_MODEL_STANDARD="gemini-3.8-flash",
+                GEMINI_MODEL_REASONING="gemini-4-hydrogen",
             )
             direct_provider = GeminiLLMProvider(
                 direct_cfg,
@@ -132,7 +131,7 @@ def test_all_60_agents_unique_contracts_and_live_gemini_routing_across_all_5_tie
                 )
                 assert r["reasoning_tier"] == tier_num
                 assert r["execution_mode"] == "gemini_live"
-                assert r["model"] == "gemini-2.5-flash"
+                assert r["model"] == direct_cfg.resolve_gemini_tier_model(tier_num)
                 assert r["fallback_used"] is False
                 assert r["failover_errors"] == []
     finally:
@@ -162,7 +161,7 @@ def test_analyze_visual_frame_uses_valid_multimodal_parts_schema(
         ULTRON_SQLITE_PATH=str(tmp_path / "visual_test.db"),
         ULTRON_DATABASE_URL="",
         GEMINI_API_KEY="AIzaSyVisualTestKey000003",
-        GEMINI_MODEL_STANDARD="gemini-2.5-flash",
+        GEMINI_MODEL_STANDARD="gemini-3.8-flash",
     )
     reset_engine()
     init_database(live_cfg)

@@ -682,17 +682,45 @@ def get_financial_milestones_summary(db: Session, *, tenant_id: str) -> dict[str
     - Track actual money separately from projections.
     - Never count projected revenue as cash.
     - Never count the same money in multiple categories.
-    - Business operating funds are kept separate from personal spending.
+    - Business operating funds are strictly kept separate from personal spending.
+    - Vehicle pricing is unverified until backed by a dated, sourced dealer quote.
     """
     report = generate_financial_report(db, tenant_id=tenant_id)
     total_reserves_usd = report["total_reserves_usd"]
-    # Nominal conversion rate for milestone tracking (configurable via environment/reserves)
-    usd_to_ngn = 1500.0
-    actual_reserves_ngn = round(total_reserves_usd * usd_to_ngn, 2)
+
+    # Query actual ledger-recorded reserves by currency
+    actual_reserves_ngn_recorded = float(
+        db.execute(
+            select(func.coalesce(func.sum(FinancialReserve.balance_usd), 0.0)).where(
+                FinancialReserve.tenant_id == tenant_id,
+                FinancialReserve.currency == "NGN",
+            )
+        ).scalar_one()
+    )
+    actual_reserves_usd_recorded = float(
+        db.execute(
+            select(func.coalesce(func.sum(FinancialReserve.balance_usd), 0.0)).where(
+                FinancialReserve.tenant_id == tenant_id,
+                FinancialReserve.currency == "USD",
+            )
+        ).scalar_one()
+    )
+    actual_reserves_ngn = round(actual_reserves_ngn_recorded, 2)
+    actual_reserves_usd = round(
+        actual_reserves_usd_recorded if actual_reserves_usd_recorded > 0 else total_reserves_usd,
+        2,
+    )
+
+    # Reference planning exchange rate (used only for hypothetical conversion projections, NEVER for actuals)
+    planning_usd_to_ngn = 1500.0
 
     # 1. February 2027 Protected Reserve Target (₦50,000,000)
     target_reserve_ngn = 50_000_000.0
-    reserve_progress_pct = round(min(100.0, (actual_reserves_ngn / target_reserve_ngn) * 100.0), 2) if target_reserve_ngn > 0 else 0.0
+    reserve_progress_pct = (
+        round(min(100.0, (actual_reserves_ngn / target_reserve_ngn) * 100.0), 2)
+        if target_reserve_ngn > 0
+        else 0.0
+    )
 
     # 2. Range Rover LWB Autobiography Milestone (2021 or newer)
     # Required funding = Verified vehicle cost (~₦135m) + ₦300m remaining balance + taxes/fees (est ₦15m) + ₦50m business reserve = ₦500m
@@ -740,26 +768,48 @@ def get_financial_milestones_summary(db: Session, *, tenant_id: str) -> dict[str
             "6. Personal reserve targets",
             "7. Approved personal purchases",
         ],
+        "actual_liquid_reserves": {
+            "actual_reserves_ngn": actual_reserves_ngn,
+            "actual_reserves_usd": actual_reserves_usd,
+            "segregation_principle": "Actual balances recorded directly from ledger; no exchange-rate conflation.",
+        },
+        "planning_assumptions": {
+            "nominal_usd_to_ngn_rate": planning_usd_to_ngn,
+            "is_planning_assumption_only": True,
+            "note": "Hypothetical conversion rate for target modeling only; never treated as cash.",
+        },
         "reserve_milestone_feb_2027": {
             "target_amount_ngn": target_reserve_ngn,
-            "target_amount_usd": round(target_reserve_ngn / usd_to_ngn, 2),
+            "target_amount_usd": round(target_reserve_ngn / planning_usd_to_ngn, 2),
             "actual_reserves_ngn": actual_reserves_ngn,
-            "actual_reserves_usd": total_reserves_usd,
+            "actual_reserves_usd": actual_reserves_usd,
             "progress_percentage": reserve_progress_pct,
             "target_date": "2027-02-28",
             "funded": actual_reserves_ngn >= target_reserve_ngn,
+            "business_reserve_protected": True,
+            "personal_spending_allowed": False,
         },
         "range_rover_milestone": {
             "vehicle": "Range Rover LWB Autobiography (2021+)",
+            "pricing_verification_status": "UNVERIFIED_ESTIMATE",
+            "pricing_source": None,
+            "pricing_quote_date": None,
+            "pricing_requirement": "Dated, sourced dealer quote/inspection required before treating vehicle pricing as verified.",
             "estimated_vehicle_cost_ngn": est_vehicle_cost_ngn,
             "post_purchase_balance_target_ngn": post_purchase_balance_target_ngn,
             "estimated_taxes_and_fees_ngn": est_taxes_and_fees_ngn,
             "business_operating_reserve_ngn": business_operating_reserve_ngn,
+            "business_reserve_segregation_rule": "₦50,000,000 business operating reserve is strictly protected Caravan capital and CANNOT be used as personal spending funds or vehicle acquisition money.",
             "total_target_ngn": total_range_rover_milestone_target_ngn,
-            "total_target_usd": round(total_range_rover_milestone_target_ngn / usd_to_ngn, 2),
+            "total_target_usd": round(total_range_rover_milestone_target_ngn / planning_usd_to_ngn, 2),
             "current_liquid_funds_ngn": actual_reserves_ngn,
             "ready_for_purchase": False,
-            "formula": "Verified vehicle cost + ₦300m post-purchase balance + taxes/fees + ₦50m operating reserve",
+            "purchase_readiness_blockers": [
+                "Vehicle pricing quote is unverified (requires dated, sourced dealer quote)",
+                f"Actual NGN reserves (₦{actual_reserves_ngn:,.2f}) below total milestone target (₦{total_range_rover_milestone_target_ngn:,.2f})",
+                "Executive approval gate not granted",
+            ],
+            "formula": "Verified vehicle cost (~₦135m) + ₦300m post-purchase balance + taxes/fees (est ₦15m) + ₦50m business operating reserve = ₦500m total",
         },
         "planned_purchases": {
             "total_count": len(planned_purchases),

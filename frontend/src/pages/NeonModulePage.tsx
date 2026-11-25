@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  AlertCircle,
   Bot,
   Camera,
   Check,
@@ -21,6 +22,19 @@ import { apiFetch, resolveGeminiProviderStatus, streamNeon } from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
 import { getClientDeviceContext, monitorOrbitHandoff, parseUniversalAppLaunchCommand } from "../components/devices/OrbitAppPermissionsSection";
 import type { AttachedFileRef, ModulePageProps } from "../types/module";
+
+function cleanTextForSpeech(md: string): string {
+  if (!md) return "";
+  return md
+    .replace(/```[\s\S]*?```/g, "Code omitted.")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/#+\s*/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_~>]/g, "")
+    .trim();
+}
 import {
   DataTable,
   EmptyState,
@@ -151,7 +165,18 @@ export default function NeonModulePage({
   const recognitionRef = useRef<any>(null);
   const [orbitAppPrompt, setOrbitAppPrompt] = useState<any>(null);
 
-  // Models, tiers, usage, health, Gemini diagnostics, settings
+  // Full-screen mobile voice interface states
+  const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+  const [voiceState, setVoiceState] = useState<
+    "idle" | "listening" | "processing" | "speaking" | "interrupted" | "muted" | "disconnected"
+  >("idle");
+  const [voiceUserTranscript, setVoiceUserTranscript] = useState("");
+  const [voiceAssistantReply, setVoiceAssistantReply] = useState("");
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const voiceRecRef = useRef<any>(null);
+  const voiceModeOpenRef = useRef<boolean>(false);
+  const voiceMutedRef = useRef<boolean>(false);
+
   const [models, setModels] = useState<any>(null);
   const [tiers, setTiers] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
@@ -398,6 +423,234 @@ export default function NeonModulePage({
     } catch (err: any) {
       pushToast(err?.message || "Could not start microphone.", "error");
       setListening(false);
+    }
+  }
+
+  function stopVoiceRec() {
+    try {
+      if (voiceRecRef.current) {
+        voiceRecRef.current.onresult = null;
+        voiceRecRef.current.onerror = null;
+        voiceRecRef.current.onend = null;
+        voiceRecRef.current.stop();
+        voiceRecRef.current = null;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function startListeningVoice() {
+    stopVoiceRec();
+    if (typeof window === "undefined") return;
+    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRec) {
+      setVoiceState("disconnected");
+      pushToast("Web Speech Recognition not supported in this browser environment.", "error");
+      return;
+    }
+    try {
+      const rec = new SpeechRec();
+      rec.continuous = false;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+      rec.onresult = (ev: any) => {
+        let finalTranscript = "";
+        let interimTranscript = "";
+        for (let i = ev.resultIndex; i < ev.results.length; ++i) {
+          if (ev.results[i].isFinal) {
+            finalTranscript += ev.results[i][0].transcript;
+          } else {
+            interimTranscript += ev.results[i][0].transcript;
+          }
+        }
+        const currentText = (finalTranscript || interimTranscript).trim();
+        if (currentText) {
+          setVoiceUserTranscript(currentText);
+        }
+        if (finalTranscript.trim()) {
+          stopVoiceRec();
+          handleSendVoice(finalTranscript.trim());
+        }
+      };
+      rec.onerror = (ev: any) => {
+        if (ev.error === "no-speech") {
+          if (voiceModeOpenRef.current && !voiceMutedRef.current) {
+            startListeningVoice();
+          }
+        } else {
+          pushToast(`Voice input: ${ev.error || "error"}`, "error");
+          setVoiceState("disconnected");
+        }
+      };
+      rec.onend = () => {
+        if (voiceModeOpenRef.current && !voiceMutedRef.current && voiceState === "listening") {
+          try {
+            rec.start();
+          } catch {
+            // ignore
+          }
+        }
+      };
+      voiceRecRef.current = rec;
+      rec.start();
+      setVoiceState("listening");
+    } catch (err: any) {
+      setVoiceState("disconnected");
+      pushToast(err?.message || "Failed to start microphone.", "error");
+    }
+  }
+
+  function handleOpenVoiceMode() {
+    voiceModeOpenRef.current = true;
+    voiceMutedRef.current = false;
+    setVoiceMuted(false);
+    setVoiceModeOpen(true);
+    setVoiceUserTranscript("");
+    setVoiceAssistantReply("");
+    setVoiceState("idle");
+    setTimeout(() => {
+      startListeningVoice();
+    }, 150);
+  }
+
+  function handleCloseVoiceMode() {
+    voiceModeOpenRef.current = false;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    stopVoiceRec();
+    setVoiceModeOpen(false);
+    setVoiceState("idle");
+  }
+
+  function handleInterruptVoice() {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    setVoiceState("interrupted");
+    setTimeout(() => {
+      if (voiceModeOpenRef.current && !voiceMutedRef.current) {
+        setVoiceState("listening");
+        startListeningVoice();
+      } else {
+        setVoiceState("idle");
+      }
+    }, 320);
+  }
+
+  function handleToggleVoiceMute() {
+    if (voiceMuted) {
+      voiceMutedRef.current = false;
+      setVoiceMuted(false);
+      setVoiceState("listening");
+      startListeningVoice();
+    } else {
+      voiceMutedRef.current = true;
+      setVoiceMuted(true);
+      stopVoiceRec();
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      setVoiceState("muted");
+    }
+  }
+
+  function speakVoiceReply(text: string) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setVoiceState("idle");
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const clean = cleanTextForSpeech(text);
+    if (!clean) {
+      setVoiceState("idle");
+      return;
+    }
+    const utter = new SpeechSynthesisUtterance(clean);
+    utter.onstart = () => {
+      setVoiceState("speaking");
+    };
+    utter.onend = () => {
+      if (voiceModeOpenRef.current && !voiceMutedRef.current) {
+        setVoiceState("listening");
+        startListeningVoice();
+      } else {
+        setVoiceState("idle");
+      }
+    };
+    utter.onerror = () => {
+      if (voiceModeOpenRef.current && !voiceMutedRef.current) {
+        setVoiceState("listening");
+        startListeningVoice();
+      } else {
+        setVoiceState("idle");
+      }
+    };
+    window.speechSynthesis.speak(utter);
+  }
+
+  async function handleSendVoice(spokenPrompt: string) {
+    if (!spokenPrompt.trim()) return;
+    setVoiceState("processing");
+    try {
+      let cid = activeId;
+      if (!cid) {
+        const created = await apiFetch<any>("/api/v1/neon/conversations", {
+          method: "POST",
+          body: { title: spokenPrompt.slice(0, 48), agent_id: selectedAgent },
+        });
+        cid = created.conversation_id;
+        setActiveId(cid);
+        loadBase();
+      }
+
+      // Add user message to conversation history
+      const uMsgId = `u_${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { message_id: uMsgId, role: "user", content: spokenPrompt, created_at: new Date().toISOString() },
+      ]);
+
+      const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}/messages`, {
+        method: "POST",
+        body: {
+          content: spokenPrompt,
+          enable_web_research: true,
+        },
+      });
+
+      const replyContent = res.message?.content || "";
+      const aMsgId = res.message?.message_id || `a_${Date.now()}`;
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          message_id: aMsgId,
+          role: "assistant",
+          content: replyContent,
+          model: res.diagnostics?.model || res.diagnostics?.primary_model || "Gemini Tier",
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      if (res.diagnostics) {
+        setMessageExtras((prev) => ({
+          ...prev,
+          [aMsgId]: {
+            provenance: res.provenance,
+            research_sources: res.research_sources,
+            product_intelligence: res.product_intelligence,
+            diagnostics: res.diagnostics,
+          },
+        }));
+      }
+
+      setVoiceAssistantReply(replyContent);
+      speakVoiceReply(replyContent);
+    } catch (err: any) {
+      pushToast(err?.message || "Failed to process voice command.", "error");
+      setVoiceState("idle");
     }
   }
 
@@ -750,6 +1003,16 @@ export default function NeonModulePage({
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => onSelectSubPage("new-conversation")}>
                 <Plus size={13} /> New
               </button>
+              <button
+                id="neon-header-voice-btn"
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={handleOpenVoiceMode}
+                title="Launch full-screen NEON Voice Mode"
+                aria-label="Launch full-screen NEON Voice Mode"
+              >
+                <Volume2 size={13} /> Voice Mode
+              </button>
             </div>
           </div>
 
@@ -1062,6 +1325,16 @@ export default function NeonModulePage({
               aria-label={listening ? "Stop listening" : "Voice input"}
             >
               {listening ? <MicOff size={14} /> : <Mic size={14} />}
+            </button>
+            <button
+              id="neon-fullscreen-voice-btn"
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleOpenVoiceMode}
+              title="Launch full-screen NEON Voice Mode"
+              aria-label="Launch full-screen NEON Voice Mode"
+            >
+              <Volume2 size={14} />
             </button>
             <input
               id="neon-chat-input"
@@ -1380,6 +1653,176 @@ export default function NeonModulePage({
           <div className="row">
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigate("agents", "workspace")}>
               <Bot size={13} /> Open Specialist Agent Workspace
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* FULL-SCREEN DEDICATED VOICE INTERFACE */}
+      {voiceModeOpen && (
+        <div className="neon-voice-overlay" role="dialog" aria-modal="true" aria-label="NEON Voice Mode">
+          <div className="neon-voice-header">
+            <div className="row" style={{ gap: 8, alignItems: "center" }}>
+              <span className="pill pill-cyan" style={{ fontSize: 11 }}>{selectedAgent}</span>
+              <span className="neon-voice-status-badge">
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background:
+                      voiceState === "listening"
+                        ? "#00f0ff"
+                        : voiceState === "processing"
+                        ? "#f59e0b"
+                        : voiceState === "speaking"
+                        ? "#a855f7"
+                        : voiceState === "interrupted"
+                        ? "#ef4444"
+                        : voiceState === "muted"
+                        ? "#64748b"
+                        : "#38bdf8",
+                  }}
+                />
+                {voiceState === "idle"
+                  ? "Ready"
+                  : voiceState === "listening"
+                  ? "Listening..."
+                  : voiceState === "processing"
+                  ? "Processing..."
+                  : voiceState === "speaking"
+                  ? "Speaking"
+                  : voiceState === "interrupted"
+                  ? "Interrupted"
+                  : voiceState === "muted"
+                  ? "Muted"
+                  : "Disconnected"}
+              </span>
+            </div>
+            <button
+              id="neon-voice-close-btn"
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={handleCloseVoiceMode}
+              title="Close Voice Mode"
+              aria-label="Close Voice Mode"
+            >
+              <X size={16} /> Exit
+            </button>
+          </div>
+
+          <div className="neon-voice-center-stage">
+            <div
+              className="neon-voice-orb-wrapper"
+              onClick={() => {
+                if (voiceState === "speaking") {
+                  handleInterruptVoice();
+                } else if (voiceState === "muted") {
+                  handleToggleVoiceMute();
+                } else if (voiceState === "idle" || voiceState === "disconnected") {
+                  startListeningVoice();
+                }
+              }}
+              title={
+                voiceState === "speaking"
+                  ? "Tap to Interrupt"
+                  : voiceState === "muted"
+                  ? "Tap to Unmute"
+                  : "NEON Voice Orb"
+              }
+            >
+              <div className="neon-voice-orb-ring" />
+              <div className="neon-voice-orb-ring" />
+              <div className="neon-voice-orb-ring" />
+              <div className={`neon-voice-orb state-${voiceState}`}>
+                {voiceState === "muted" ? (
+                  <MicOff size={36} color="#cbd5e1" />
+                ) : voiceState === "speaking" ? (
+                  <Volume2 size={40} color="#ffffff" />
+                ) : voiceState === "processing" ? (
+                  <RefreshCw size={36} className="spin" color="#ffffff" />
+                ) : voiceState === "listening" ? (
+                  <Mic size={40} color="#ffffff" />
+                ) : voiceState === "interrupted" ? (
+                  <VolumeX size={36} color="#ffffff" />
+                ) : voiceState === "disconnected" ? (
+                  <AlertCircle size={36} color="#ffffff" />
+                ) : (
+                  <Sparkles size={38} color="#ffffff" />
+                )}
+              </div>
+            </div>
+
+            <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>
+                {voiceState === "speaking"
+                  ? "Tap Orb to Interrupt"
+                  : voiceState === "listening"
+                  ? "Listening to your voice..."
+                  : voiceState === "processing"
+                  ? "Generating response with Gemini..."
+                  : voiceState === "muted"
+                  ? "Microphone is muted"
+                  : voiceState === "disconnected"
+                  ? "Microphone disconnected"
+                  : "Tap Orb to Speak"}
+              </div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Full-duplex hands-free voice · Context saved to active conversation
+              </div>
+            </div>
+
+            <div className="neon-voice-transcript-card">
+              {voiceUserTranscript && (
+                <div className="neon-voice-prompt-bubble">
+                  <strong>You:</strong> <span>{voiceUserTranscript}</span>
+                </div>
+              )}
+              {voiceAssistantReply && (
+                <div className="neon-voice-response-bubble">
+                  <strong>NEON:</strong> <span>{cleanTextForSpeech(voiceAssistantReply)}</span>
+                </div>
+              )}
+              {!voiceUserTranscript && !voiceAssistantReply && (
+                <div className="muted" style={{ textAlign: "center", margin: "auto", fontSize: 13 }}>
+                  Speak naturally into your device. Your conversation is synchronized in real time.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="neon-voice-controls-bar">
+            <button
+              id="neon-voice-mute-toggle"
+              type="button"
+              className={`neon-voice-ctrl-btn ${voiceMuted ? "danger" : "active"}`}
+              onClick={handleToggleVoiceMute}
+              title={voiceMuted ? "Unmute microphone" : "Mute microphone"}
+              aria-label={voiceMuted ? "Unmute microphone" : "Mute microphone"}
+            >
+              {voiceMuted ? <MicOff size={22} /> : <Mic size={22} />}
+            </button>
+            <button
+              id="neon-voice-interrupt-btn"
+              type="button"
+              className="neon-voice-ctrl-btn"
+              onClick={handleInterruptVoice}
+              disabled={voiceState !== "speaking"}
+              title="Interrupt speech"
+              aria-label="Interrupt speech"
+              style={{ opacity: voiceState === "speaking" ? 1 : 0.4 }}
+            >
+              <VolumeX size={22} />
+            </button>
+            <button
+              id="neon-voice-exit-btn"
+              type="button"
+              className="neon-voice-ctrl-btn danger"
+              onClick={handleCloseVoiceMode}
+              title="Exit Voice Mode and return to text chat"
+              aria-label="Exit Voice Mode and return to text chat"
+            >
+              <X size={22} />
             </button>
           </div>
         </div>
