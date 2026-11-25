@@ -162,16 +162,16 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
   const sp = data?.standalone_platform || {
     name: "CARAVAN Standalone Platform",
     repo_url: "https://github.com/epejuwon-sketch/CARAVAN",
-    deployed_url: "https://caravan.vercel.app",
+    deployed_url: "https://caravan-platform.vercel.app",
     branch: "main",
     version: "1.0.0-production",
-    deployment_status: "READY",
-    environment: "production",
-    database_status: "HEALTHY (PostgreSQL / Supabase)",
-    backend_health: "HEALTHY",
-    bridge_status: "CONNECTED",
+    deployment_status: "PENDING_VERCEL_IMPORT",
+    environment: "staging",
+    database_status: "READY_FOR_SUPABASE",
+    backend_health: "LOCAL_VERIFIED",
+    bridge_status: "CONFIGURED",
     last_health_check: new Date().toISOString(),
-    health_latency_ms: 12.4,
+    health_latency_ms: 0.0,
   };
 
   return (

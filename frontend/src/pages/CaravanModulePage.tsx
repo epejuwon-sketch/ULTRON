@@ -259,7 +259,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
 
               <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                 <a
-                  href="https://caravan.vercel.app"
+                  href="https://caravan-platform.vercel.app"
                   target="_blank"
                   rel="noreferrer"
                   className="btn btn-sm"
