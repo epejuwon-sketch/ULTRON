@@ -9,11 +9,18 @@ from __future__ import annotations
 import signal
 import sys
 import time
+from pathlib import Path
+from typing import Any
+
+# Ensure backend directory is in sys.path when executed directly
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import get_session_factory, init_database
-from app.services.job_scheduler import run_worker_poll_once
+from app.services.job_scheduler import process_due_jobs, run_worker_poll_once
 
 _STOP = False
 
@@ -21,6 +28,18 @@ _STOP = False
 def _handle_signal(_signum: int, _frame: object) -> None:
     global _STOP
     _STOP = True
+
+
+def run_once() -> dict[str, Any]:
+    """Execute a single polling and processing cycle (used for CI and smoke checks)."""
+    settings = get_settings()
+    logger = configure_logging(settings.log_level)
+    init_database(settings)
+    session_factory = get_session_factory(settings)
+    with session_factory() as db:
+        summary = run_worker_poll_once(db, settings=settings, max_jobs=25)
+        logger.info("Worker single cycle completed: %s", summary)
+        return summary
 
 
 def run_forever(poll_interval_seconds: float = 5.0) -> None:
@@ -52,5 +71,9 @@ def run_forever(poll_interval_seconds: float = 5.0) -> None:
 
 
 if __name__ == "__main__":
-    interval = float(sys.argv[1]) if len(sys.argv) > 1 else 5.0
+    if "--once" in sys.argv:
+        run_once()
+        sys.exit(0)
+    interval = float(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] != "--once" else 5.0
     run_forever(interval)
+

@@ -420,3 +420,8 @@ def _serialize_schedule(s: ScheduledJobRecord) -> dict[str, Any]:
         "next_run_at": s.next_run_at.isoformat(),
         "created_by": s.created_by,
     }
+
+
+# Backwards-compatible alias for persistent worker polling
+run_worker_poll_once = process_due_jobs
+
