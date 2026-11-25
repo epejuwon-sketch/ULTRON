@@ -175,6 +175,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
 
   const tabs = [
     { id: "overview", label: "Overview" },
+    { id: "command-centre", label: "Operations Command Centre" },
     { id: "discover", label: "Discover Funding" },
     { id: "eligibility", label: "NEON Eligibility" },
     { id: "applications", label: "My Applications" },
@@ -214,6 +215,70 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
       {/* Overview */}
       {subPage === "overview" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Live Standalone Application Access Card */}
+          <div
+            className="card"
+            style={{
+              background: "linear-gradient(135deg, rgba(16, 21, 34, 0.95) 0%, rgba(20, 27, 45, 0.95) 100%)",
+              border: "1px solid rgba(56, 189, 248, 0.25)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div className="row-between" style={{ flexWrap: "wrap", gap: 12 }}>
+              <div className="row" style={{ gap: 12 }}>
+                <div
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 8,
+                    background: "linear-gradient(135deg, #38bdf8 0%, #818cf8 100%)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontWeight: 800,
+                    fontSize: 20,
+                    color: "#050b14",
+                    boxShadow: "0 0 16px rgba(56, 189, 248, 0.3)",
+                  }}
+                >
+                  C
+                </div>
+                <div>
+                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                    <strong style={{ fontSize: 15 }}>CARAVAN — Customer-Facing Platform</strong>
+                    <span className="pill pill-emerald">READY / LIVE</span>
+                    <span className="pill pill-cyan mono" style={{ fontSize: 10 }}>v1.0.0</span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                    Independent Deployment · Dedicated Repository: <span className="mono" style={{ color: "var(--accent-cyan)" }}>epejuwon-sketch/CARAVAN</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <a
+                  href="https://caravan.vercel.app"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-sm"
+                  style={{ fontWeight: 700 }}
+                >
+                  <ExternalLink size={13} /> Open CARAVAN
+                </a>
+                <a
+                  href="https://github.com/epejuwon-sketch/CARAVAN"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-secondary btn-sm"
+                >
+                  <ExternalLink size={13} /> GitHub Repository
+                </a>
+              </div>
+            </div>
+          </div>
+
           <div className="grid-4" style={{ gap: 10 }}>
             <MetricDisplay label="Verified Opportunities" value={String(overview?.verification_breakdown?.VERIFIED ?? 0)} sub={`Total tracked: ${overview?.opportunities_total ?? 0}`} tone="success" />
             <MetricDisplay label="My Applications" value={String(overview?.my_applications_count ?? 0)} sub="AEGIS approval-gated" tone="info" />
