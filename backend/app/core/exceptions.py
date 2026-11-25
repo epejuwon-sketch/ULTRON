@@ -93,6 +93,11 @@ class DatabaseUnavailableError(UltronError):
     code = "DATABASE_UNAVAILABLE"
 
 
+class RateLimitError(UltronError):
+    status_code = 429
+    code = "RATE_LIMIT_EXCEEDED"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Install consistent JSON error handlers on the FastAPI application."""
 

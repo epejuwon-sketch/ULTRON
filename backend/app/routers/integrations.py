@@ -507,3 +507,91 @@ def api_revoke_connector_scope(
     return revoke_connector_scope(db, principal=principal, grant_id=grant_id)
 
 
+# ---------------------------------------------------------------------------
+# Dedicated Native Google Gemini Connection Center Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/gemini/card")
+def api_gemini_connection_card(
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Return comprehensive Gemini connection card telemetry, 6-state status, and models."""
+    from app.services.gemini_connection_service import get_gemini_connection_card_data
+
+    return get_gemini_connection_card_data(db, tenant_id=principal.tenant_id, settings=settings)
+
+
+@router.post("/gemini/test-connection")
+def api_gemini_test_connection(
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Run real server-side Gemini catalog discovery & credentials verification probe."""
+    from app.services.gemini_connection_service import run_gemini_connection_test
+
+    return run_gemini_connection_test(db, principal=principal, settings=settings, test_type="CONNECTION")
+
+
+@router.post("/gemini/test-standard")
+def api_gemini_test_standard(
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Run real server-side standard Gemini inference verification (gemini-3.8-flash)."""
+    from app.services.gemini_connection_service import run_gemini_connection_test
+
+    return run_gemini_connection_test(
+        db,
+        principal=principal,
+        settings=settings,
+        test_type="STANDARD_INFERENCE",
+    )
+
+
+@router.post("/gemini/test-tier5")
+def api_gemini_test_tier5(
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Run real server-side Tier 5 reasoning verification (gemini-4-argon) when explicitly requested."""
+    from app.services.gemini_connection_service import run_gemini_connection_test
+
+    return run_gemini_connection_test(
+        db,
+        principal=principal,
+        settings=settings,
+        test_type="TIER5_REASONING",
+    )
+
+
+@router.get("/gemini/history")
+def api_gemini_verification_history(
+    limit: int = Query(default=30, ge=1, le=100),
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Retrieve persisted verification history records for this tenant."""
+    from app.services.gemini_connection_service import get_gemini_verification_history
+
+    records = get_gemini_verification_history(db, tenant_id=principal.tenant_id, limit=limit)
+    return {"total": len(records), "history": records}
+
+
+@router.get("/gemini/diagnostics")
+def api_gemini_connection_diagnostics(
+    principal: Principal = Depends(require_perm("integrations:verify")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Retrieve technical diagnostics for Gemini connection, model tiers, and provider isolation."""
+    from app.services.gemini_connection_service import get_gemini_connection_diagnostics
+
+    return get_gemini_connection_diagnostics(db, tenant_id=principal.tenant_id, settings=settings)
+
+

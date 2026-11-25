@@ -22,6 +22,7 @@ import { IntegrationCard } from "../components/integrations/IntegrationCard";
 import { IntegrationLogo } from "../components/integrations/IntegrationLogo";
 import { AdminOAuthSetupPanel } from "../components/integrations/AdminOAuthSetupPanel";
 import { UniversalConnectPanel } from "../components/integrations/UniversalConnectPanel";
+import { GeminiConnectionCard } from "../components/integrations/GeminiConnectionCard";
 import type { ModulePageProps } from "../types/module";
 import {
   ActivityFeed,
@@ -421,6 +422,9 @@ export default function ConnectionsModulePage({ subPage, onSelectSubPage }: Modu
             <MetricDisplay label="Stage 3: Authenticated" value={authenticatedCount} sub="Encrypted in VAULT, run test" tone="info" />
             <MetricDisplay label="Stage 4: Live Verified" value={liveVerifiedCount} sub="Outbound health check passed" tone={liveVerifiedCount > 0 ? "success" : "neutral"} />
           </div>
+
+          {/* Dedicated Google Gemini Connection Center Centerpiece */}
+          <GeminiConnectionCard onStatusChange={() => load()} />
 
           {/* Priority Integrations Matrix */}
           <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>

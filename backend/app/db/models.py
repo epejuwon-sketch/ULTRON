@@ -1418,3 +1418,25 @@ class WorkerHeartbeatRecord(Base):
     jobs_processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     jobs_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class ProviderVerificationRecord(Base):
+    __tablename__ = "provider_verifications"
+    __table_args__ = (Index("ix_provider_verifications_tenant_provider", "tenant_id", "provider", "created_at"),)
+
+    verification_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    test_type: Mapped[str] = mapped_column(String(64), nullable=False, default="STANDARD_INFERENCE")  # CATALOG_DISCOVERY | STANDARD_INFERENCE | TIER5_REASONING
+    result: Mapped[str] = mapped_column(String(32), nullable=False)  # VERIFIED | FAILED | DEGRADED
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_excerpt: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    environment: Mapped[str] = mapped_column(String(32), nullable=False, default="development")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
