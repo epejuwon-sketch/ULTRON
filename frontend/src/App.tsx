@@ -584,19 +584,6 @@ export default function App() {
     </div>
   ) : undefined;
 
-  if (activeModule === "command" && activeSubPage === "home") {
-    return (
-      <MasterSchematicView
-        device={device}
-        activeModule="command"
-        activeSubPage="home"
-        onNavigate={(m, s) => navigate(m, s)}
-        onDispatchToTerminal={() => navigate("terminal", "master-terminal")}
-        onOpenSettings={() => navigate("settings", "general")}
-      />
-    );
-  }
-
   return (
     <>
       <AppShell
@@ -605,9 +592,11 @@ export default function App() {
           <DesktopSidebar
             user={user}
             activeModule={activeModule}
+            activeSubPage={activeSubPage}
             collapsed={prefs.sidebarCollapsed}
             drawerOpen={drawerOpen}
             onSelectModule={(m) => navigate(m)}
+            onSelectSubPage={(m, s) => navigate(m, s)}
             onToggleCollapse={() => updatePrefs({ sidebarCollapsed: !prefs.sidebarCollapsed })}
             onCloseDrawer={() => setDrawerOpen(false)}
             onLogout={logout}
@@ -634,19 +623,39 @@ export default function App() {
         }
         rightPanel={rightPanelNode}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", marginBottom: 12, background: "rgba(15, 23, 42, 0.7)", border: "1px solid rgba(56, 189, 248, 0.25)", borderRadius: 8 }}>
-          <button
-            type="button"
-            onClick={() => navigate("command", "home")}
-            className="btn btn-sm btn-secondary"
-            style={{ color: "#38bdf8", borderColor: "rgba(56, 189, 248, 0.4)", display: "flex", alignItems: "center", gap: 6 }}
+        {!(activeModule === "command" && activeSubPage === "home") && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "8px 14px",
+              marginBottom: 16,
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+            }}
           >
-            <ChevronLeft size={14} /> MASTER SCHEMATIC (112)
-          </button>
-          <span className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
-            PAGE {currentSub.pageId} · {currentSub.label}
-          </span>
-        </div>
+            <button
+              type="button"
+              onClick={() => navigate("command", "home")}
+              className="btn btn-sm btn-secondary"
+              style={{ display: "flex", alignItems: "center", gap: 6 }}
+            >
+              <ChevronLeft size={14} /> Back to Command Centre
+            </button>
+            <div className="row">
+              <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                PAGE {currentSub.pageId} · {currentSub.label}
+              </span>
+              {currentSub.primaryAgent && (
+                <span className="pill" style={{ fontSize: 10 }}>
+                  {currentSub.primaryAgent}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
         <ErrorBoundary resetKey={`${activeModule}:${activeSubPage}`}>
           <Suspense fallback={<LoadingState label={`Loading ${currentMod.label}...`} />}>
             {renderModule()}

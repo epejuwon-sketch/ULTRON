@@ -1,12 +1,12 @@
-/* ULTRON OS 2026 Service Worker v2
+/* ULTRON OS 2026 Service Worker v3 (Grayscale Rebuild)
  * Security & Reliability Rules:
  * 1. NEVER cache /index.html or content-hashed /assets/*.js|css chunks (prevents chunk-skew on deploys).
  * 2. NEVER intercept /assets/, .js, .mjs, .css, /api/, /ws/, or /health requests.
  * 3. NEVER serve text/html (/index.html) as a fallback for JavaScript or CSS requests.
- * 4. Purge obsolete caches (including ultron-shell-2026-v1) immediately on activation.
+ * 4. Purge obsolete caches (including v1 and v2) immediately on activation.
  */
-const CACHE_NAME = "ultron-shell-2026-v2";
-const STATIC_META_ASSETS = ["/manifest.webmanifest", "/icon.svg"];
+const CACHE_NAME = "ultron-shell-2026-v3";
+const STATIC_META_ASSETS = ["/manifest.webmanifest", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

@@ -523,18 +523,20 @@ export function CommandPalette({
       p.label.toLowerCase().includes(q) ||
       p.description.toLowerCase().includes(q) ||
       p.module.toLowerCase().includes(q) ||
+      p.pageId.toLowerCase().includes(q) ||
+      (p.primaryAgent && p.primaryAgent.toLowerCase().includes(q)) ||
       p.keywords.some((k) => k.includes(q))
-  ).slice(0, 18);
+  ).slice(0, 24);
 
   return (
-    <Modal open={open} title="ULTRON Command Palette (111+ Pages)" onClose={onClose}>
+    <Modal open={open} title="ULTRON Command Palette (112 Pages)" onClose={onClose}>
       <SearchBar
         id="command-palette-search"
         value={query}
         onChange={setQuery}
-        placeholder="Jump to any page, subsystem, agent workspace, or setting..."
+        placeholder="Jump to any page (001–112), agent workspace, or setting..."
       />
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12, maxHeight: 380, overflowY: "auto" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12, maxHeight: 420, overflowY: "auto" }}>
         {matches.map((p) => (
           <button
             key={`${p.module}-${p.id}`}
@@ -546,13 +548,21 @@ export function CommandPalette({
             }}
           >
             <div className="row-between" style={{ width: "100%" }}>
-              <strong>{p.label}</strong>
-              <span className="pill mono">{p.module.toUpperCase()}</span>
+              <div className="row">
+                <span className="mono" style={{ fontSize: 11, color: "var(--text-muted)" }}>PAGE {p.pageId}</span>
+                <strong>{p.label}</strong>
+              </div>
+              <div className="row">
+                {p.primaryAgent && (
+                  <span className="pill" style={{ fontSize: 10 }}>{p.primaryAgent}</span>
+                )}
+                <span className="pill mono">{p.module.toUpperCase()}</span>
+              </div>
             </div>
             <div className="muted">{p.description}</div>
           </button>
         ))}
-        {matches.length === 0 && <div className="muted">No matching ULTRON pages found.</div>}
+        {matches.length === 0 && <div className="muted" style={{ padding: 12, textAlign: "center" }}>No matching ULTRON pages found.</div>}
       </div>
     </Modal>
   );

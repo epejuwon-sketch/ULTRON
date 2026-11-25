@@ -4,8 +4,8 @@
   "description": "Autonomous multi-agent personal operating system powered by NEON, ARGON, and AEGIS.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#05070B",
-  "theme_color": "#05070B",
+  "background_color": "#08090C",
+  "theme_color": "#08090C",
   "orientation": "any",
   "icons": [
     {

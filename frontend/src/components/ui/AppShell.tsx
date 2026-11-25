@@ -55,18 +55,22 @@ export function ModuleIcon({ id, size = 16 }: { id: ModuleId; size?: number }) {
 export function DesktopSidebar({
   user,
   activeModule,
+  activeSubPage,
   collapsed,
   drawerOpen,
   onSelectModule,
+  onSelectSubPage,
   onToggleCollapse,
   onCloseDrawer,
   onLogout,
 }: {
   user: AuthUser;
   activeModule: ModuleId;
+  activeSubPage?: string;
   collapsed: boolean;
   drawerOpen: boolean;
   onSelectModule: (m: ModuleId) => void;
+  onSelectSubPage?: (m: ModuleId, sub: string) => void;
   onToggleCollapse: () => void;
   onCloseDrawer: () => void;
   onLogout: () => void;
@@ -111,22 +115,80 @@ export function DesktopSidebar({
           {groups.map((grp) => (
             <div key={grp}>
               {(!collapsed || drawerOpen) && <div className="nav-section">{grp}</div>}
-              {MODULES.filter((m) => m.group === grp).map((m) => (
-                <button
-                  key={m.id}
-                  id={`nav-${m.id}`}
-                  type="button"
-                  title={m.label}
-                  className={`nav-btn ${activeModule === m.id ? "active" : ""}`}
-                  onClick={() => {
-                    onSelectModule(m.id);
-                    onCloseDrawer();
-                  }}
-                >
-                  <ModuleIcon id={m.id} size={16} />
-                  {(!collapsed || drawerOpen) && <span>{m.label}</span>}
-                </button>
-              ))}
+              {MODULES.filter((m) => m.group === grp).map((m) => {
+                const isCurrent = activeModule === m.id;
+                return (
+                  <div key={m.id} style={{ display: "flex", flexDirection: "column" }}>
+                    <button
+                      id={`nav-${m.id}`}
+                      type="button"
+                      title={m.label}
+                      className={`nav-btn ${isCurrent ? "active" : ""}`}
+                      onClick={() => {
+                        onSelectModule(m.id);
+                        if (collapsed) onCloseDrawer();
+                      }}
+                    >
+                      <ModuleIcon id={m.id} size={16} />
+                      {(!collapsed || drawerOpen) && (
+                        <div className="row-between" style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{m.label}</span>
+                          <span className="mono" style={{ fontSize: 10, opacity: 0.55 }}>
+                            {m.subPages.length}
+                          </span>
+                        </div>
+                      )}
+                    </button>
+
+                    {/* Expandable subpage list under active module */}
+                    {isCurrent && (!collapsed || drawerOpen) && m.subPages.length > 1 && (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 2,
+                          paddingLeft: 22,
+                          margin: "3px 0 6px",
+                          borderLeft: "1px solid var(--border)",
+                          marginLeft: 14,
+                        }}
+                      >
+                        {m.subPages.map((sub) => {
+                          const isSubCurrent = activeSubPage === sub.id;
+                          return (
+                            <button
+                              key={sub.id}
+                              id={`nav-sub-${m.id}-${sub.id}`}
+                              type="button"
+                              className={`nav-btn ${isSubCurrent ? "active" : ""}`}
+                              style={{
+                                fontSize: 11.5,
+                                padding: "4px 8px",
+                                minHeight: 28,
+                              }}
+                              onClick={() => {
+                                if (onSelectSubPage) {
+                                  onSelectSubPage(m.id, sub.id);
+                                } else {
+                                  onSelectModule(m.id);
+                                }
+                                onCloseDrawer();
+                              }}
+                            >
+                              <span className="mono" style={{ fontSize: 9.5, opacity: 0.65 }}>
+                                {sub.pageId}
+                              </span>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                                {sub.label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>
@@ -206,7 +268,7 @@ export function TopBar({
             title="Open Master Terminal (Page 112)"
           >
             <Terminal size={13} />
-            {!device.isMobile && <span className="mono" style={{ fontSize: 11, color: "#38bdf8" }}>112</span>}
+            {!device.isMobile && <span className="mono" style={{ fontSize: 11 }}>112</span>}
           </button>
         )}
 
@@ -322,15 +384,17 @@ export function AppShell({
       <div className="main-area">
         {topbar}
         <div className="workspace-split">
-          <main className="content">{children}</main>
-          {device.isDesktop && rightPanel && (
-            <aside className="context-panel" aria-label="Contextual System Panel">
+          <main className="content" id="main-content" role="main">
+            {children}
+          </main>
+          {rightPanel && device.isDesktop && (
+            <aside className="context-panel" aria-label="Live Telemetry Panel">
               {rightPanel}
             </aside>
           )}
         </div>
       </div>
-      {!device.isDesktop && mobileNav}
+      {mobileNav}
     </div>
   );
 }
