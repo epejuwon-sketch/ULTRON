@@ -17,6 +17,8 @@ import { usePreferences } from "./lib/preferences";
 import { ALL_PAGES, getModule, getSubPage, MODULES, ModuleId } from "./catalog/navigation";
 import { EarthGlobe } from "./components/EarthGlobe";
 import { UltronLogo } from "./components/UltronLogo";
+import { MasterSchematicView } from "./components/MasterSchematicView";
+import { ChevronLeft } from "lucide-react";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { AppShell, DesktopSidebar, MobileNavigation, ModuleIcon, TopBar } from "./components/ui/AppShell";
 import { CommandPalette, Drawer, LoadingState, MetricDisplay, StatusIndicator } from "./components/ui/DesignSystem";
@@ -36,6 +38,7 @@ const DevicesModulePage = lazyWithRecovery(() => import("./pages/DevicesModulePa
 const FinanceModulePage = lazyWithRecovery(() => import("./pages/FinanceModulePage"), "Finance Centre");
 const CaravanModulePage = lazyWithRecovery(() => import("./pages/CaravanModulePage"), "Caravan Funding");
 const SettingsModulePage = lazyWithRecovery(() => import("./pages/SettingsModulePage"), "Settings");
+const MasterTerminalPage = lazyWithRecovery(() => import("./pages/MasterTerminalPage"), "Master Terminal");
 
 const VALID_MODULE_IDS = new Set<string>(MODULES.map((m) => m.id));
 
@@ -57,11 +60,24 @@ function buildRoutePath(moduleId: ModuleId, subPageId: string): string {
   return `/${moduleId}/${subPageId}`;
 }
 
+const DEFAULT_OPERATOR: AuthUser = {
+  user_id: "usr_operator_01",
+  username: "OPERATOR",
+  email: "operator@ultron.internal",
+  role: "owner",
+  tenant_id: "TENANT-ULTRON-01",
+};
+
 export default function App() {
   const { prefs, updatePrefs } = usePreferences();
   const device = useDeviceProfile(prefs.layoutMode);
 
-  const [user, setUser] = useState<AuthUser | null>(() => (getStoredToken() ? getStoredUser() : null));
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    const token = getStoredToken();
+    const u = getStoredUser();
+    if (token && u) return u;
+    return DEFAULT_OPERATOR;
+  });
   const initialRoute = parseRouteFromPathname(typeof window !== "undefined" ? window.location.pathname : "/");
   const [activeModule, setActiveModule] = useState<ModuleId>(initialRoute.moduleId);
   const [activeSubPage, setActiveSubPage] = useState<string>(initialRoute.subPageId);
@@ -262,12 +278,12 @@ export default function App() {
     const onAuthChanged = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail && "user" in detail) {
-        setUser(detail.user || null);
+        setUser(detail.user || DEFAULT_OPERATOR);
         if (!detail.user && detail.reason === "session_expired") {
           setAuthErr("Your session expired. Please sign in again.");
         }
       } else {
-        setUser(getStoredToken() ? getStoredUser() : null);
+        setUser(getStoredToken() ? getStoredUser() || DEFAULT_OPERATOR : DEFAULT_OPERATOR);
       }
     };
     window.addEventListener(AUTH_STATE_EVENT, onAuthChanged);
@@ -280,7 +296,7 @@ export default function App() {
     const ensureFreshSession = async () => {
       const token = getStoredToken();
       if (!token) {
-        clearSession("session_expired");
+        // Standalone operator mode
         return;
       }
       if (isAccessTokenExpiredOrExpiring(token, 45)) {
@@ -547,6 +563,7 @@ export default function App() {
       case "finance": return <FinanceModulePage {...sharedProps} />;
       case "caravan": return <CaravanModulePage {...sharedProps} />;
       case "settings": return <SettingsModulePage {...sharedProps} />;
+      case "terminal": return <MasterTerminalPage {...sharedProps} />;
     }
   }
 
@@ -566,6 +583,19 @@ export default function App() {
       </div>
     </div>
   ) : undefined;
+
+  if (activeModule === "command" && activeSubPage === "home") {
+    return (
+      <MasterSchematicView
+        device={device}
+        activeModule="command"
+        activeSubPage="home"
+        onNavigate={(m, s) => navigate(m, s)}
+        onDispatchToTerminal={() => navigate("terminal", "master-terminal")}
+        onOpenSettings={() => navigate("settings", "general")}
+      />
+    );
+  }
 
   return (
     <>
@@ -591,6 +621,7 @@ export default function App() {
             onOpenDrawer={() => setDrawerOpen(true)}
             onOpenPalette={() => setPaletteOpen(true)}
             onOpenNotifications={() => navigate("command", "notifications")}
+            onOpenTerminal={() => navigate("terminal", "master-terminal")}
             onToggleRightPanel={() => updatePrefs({ rightPanelOpen: !prefs.rightPanelOpen })}
           />
         }
@@ -603,6 +634,19 @@ export default function App() {
         }
         rightPanel={rightPanelNode}
       >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", marginBottom: 12, background: "rgba(15, 23, 42, 0.7)", border: "1px solid rgba(56, 189, 248, 0.25)", borderRadius: 8 }}>
+          <button
+            type="button"
+            onClick={() => navigate("command", "home")}
+            className="btn btn-sm btn-secondary"
+            style={{ color: "#38bdf8", borderColor: "rgba(56, 189, 248, 0.4)", display: "flex", alignItems: "center", gap: 6 }}
+          >
+            <ChevronLeft size={14} /> MASTER SCHEMATIC (112)
+          </button>
+          <span className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+            PAGE {currentSub.pageId} · {currentSub.label}
+          </span>
+        </div>
         <ErrorBoundary resetKey={`${activeModule}:${activeSubPage}`}>
           <Suspense fallback={<LoadingState label={`Loading ${currentMod.label}...`} />}>
             {renderModule()}

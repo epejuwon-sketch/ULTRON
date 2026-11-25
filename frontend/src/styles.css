@@ -1845,6 +1845,72 @@ pre.code-block {
   color: #ffffff;
 }
 
+/* =========================================================================
+   ULTRON MOBILE INTERFACE MASTER SCHEMATIC HARDWARE CHASSIS & HUD (IMG_0782)
+   ========================================================================= */
+.ultron-hardware-chassis {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  background: #020408;
+  padding: 10px 14px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Brushed Titanium Hardware Outer Frame matching IMG_0782.jpeg */
+.ultron-titanium-bezel {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  background: radial-gradient(ellipse at 50% 20%, #090e18 0%, #03060c 100%);
+  border: 4px solid #64748b;
+  border-radius: 24px;
+  box-shadow:
+    0 0 0 2px #1e293b,
+    0 0 0 6px #94a3b8,
+    0 0 0 8px #334155,
+    0 16px 48px rgba(0, 0, 0, 0.95),
+    inset 0 1px 3px rgba(255, 255, 255, 0.4),
+    inset 0 -1px 3px rgba(0, 0, 0, 0.8);
+  padding: 14px 16px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Titanium top tab handle matching IMG_0782 */
+.ultron-titanium-bezel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 160px;
+  height: 6px;
+  background: linear-gradient(180deg, #94a3b8 0%, #475569 100%);
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+  z-index: 10;
+}
+
+/* Titanium bottom tab handle matching IMG_0782 */
+.ultron-titanium-bezel::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 160px;
+  height: 6px;
+  background: linear-gradient(0deg, #94a3b8 0%, #475569 100%);
+  border-radius: 6px 6px 0 0;
+  box-shadow: 0 -2px 4px rgba(0, 0, 0, 0.6);
+  z-index: 10;
+}
+
+
 
 
 

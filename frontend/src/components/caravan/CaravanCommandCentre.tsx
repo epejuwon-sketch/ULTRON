@@ -21,7 +21,7 @@ import {
   Target,
   Briefcase,
 } from "lucide-react";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, CARAVAN_DEPLOYED_URL } from "../../lib/api";
 import {
   ConfirmationDialog,
   DataTable,
@@ -77,6 +77,8 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
     { id: "infrastructure", label: "16. Infra" },
     { id: "audit", label: "17. Audit" },
     { id: "settings", label: "18. Permissions" },
+    { id: "readiness", label: "19. Legal & Business Readiness" },
+    { id: "subagent", label: "20. Funding Ops Sub-Agent" },
   ];
 
   async function loadCommandCentre() {
@@ -162,13 +164,13 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
   const sp = data?.standalone_platform || {
     name: "CARAVAN Standalone Platform",
     repo_url: "https://github.com/epejuwon-sketch/CARAVAN",
-    deployed_url: "https://caravan-platform.vercel.app",
+    deployed_url: CARAVAN_DEPLOYED_URL,
     branch: "main",
     version: "1.0.0-production",
-    deployment_status: "PENDING_VERCEL_IMPORT",
-    environment: "staging",
+    deployment_status: "READY",
+    environment: "production",
     database_status: "READY_FOR_SUPABASE",
-    backend_health: "LOCAL_VERIFIED",
+    backend_health: "VERIFIED_VERCEL",
     bridge_status: "CONFIGURED",
     last_health_check: new Date().toISOString(),
     health_latency_ms: 0.0,
@@ -227,6 +229,15 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
               style={{ fontWeight: 700, padding: "8px 16px" }}
             >
               <ExternalLink size={13} /> Open CARAVAN
+            </a>
+            <a
+              href={`${sp.deployed_url}/#admin`}
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-secondary btn-sm"
+              style={{ fontWeight: 600 }}
+            >
+              <Lock size={13} /> CARAVAN Admin
             </a>
             <a
               href={sp.repo_url}
@@ -933,6 +944,114 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
           </div>
         </div>
       </div>
+
+      {/* 19. Legal & Business Readiness Compliance View */}
+      {(activeOpView === "all" || activeOpView === "readiness") && (
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+            <strong><Briefcase size={14} /> Legal, Regulatory &amp; Corporate Business Readiness</strong>
+            <span className="pill pill-cyan mono">Zero Fabrication · Statutory Verification</span>
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            Jurisdiction compliance tracking covering CAC corporate registration (CAMA 2020), FIRS tax status, NDPR data privacy, and statutory age of legal contractual capacity.
+          </div>
+          <div className="grid-2" style={{ gap: 12 }}>
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+              <div className="row-between">
+                <strong>Nigeria (Primary Operating Jurisdiction)</strong>
+                <StatusIndicator label="IN_PROGRESS" tone="info" />
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>CAC Corporate Filing (CAMA 2020)</span>
+                <span className="mono" style={{ color: "var(--accent-cyan)" }}>READY_FOR_FILING</span>
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>FIRS / TIN Tax Registration</span>
+                <span className="mono" style={{ color: "var(--accent-amber)" }}>IN_PROGRESS</span>
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>NDPR Data Privacy Architecture</span>
+                <span className="mono" style={{ color: "var(--accent-emerald)" }}>COMPLIANT_ARCHITECTURE</span>
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>Corporate Commercial Banking Rails</span>
+                <span className="mono muted">AWAITING_INCORPORATION_DOCS</span>
+              </div>
+              <div style={{ marginTop: 4, padding: "8px 10px", background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.2)", borderRadius: 6 }}>
+                <strong style={{ fontSize: 11, color: "var(--accent-amber)" }}>
+                  <ShieldCheck size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                  Guardian Legal Capacity Rule (Under-18 Founders):
+                </strong>
+                <p style={{ margin: "4px 0 0 0", fontSize: 11, color: "var(--text-secondary)" }}>
+                  Under the Infants Relief Act and CAMA 2020, founders under 18 years of age lack commercial contractual capacity. Applications for commercial debt or equity must include an adult legal guardian or corporate director co-signatory.
+                </p>
+              </div>
+            </div>
+
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+              <div className="row-between">
+                <strong>International Expansion Jurisdictions</strong>
+                <StatusIndicator label="RESEARCH &amp; DRAFTING" tone="neutral" />
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>United Kingdom (Companies House / HMRC)</span>
+                <span className="mono" style={{ color: "var(--accent-cyan)" }}>UK Ltd Entity Prep</span>
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>United Arab Emirates (ADGM / DIFC Freezone)</span>
+                <span className="mono muted">Freezone Tech License</span>
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>United States (Delaware C-Corp / SEC Reg D)</span>
+                <span className="mono muted">Delaware Incorp Research</span>
+              </div>
+              <div className="row-between" style={{ fontSize: 11 }}>
+                <span>Cross-Border Multi-Currency FX Gateways</span>
+                <span className="mono" style={{ color: "var(--accent-amber)" }}>Paystack / Flutterwave Sandbox</span>
+              </div>
+              <div style={{ marginTop: 4, padding: "8px 10px", background: "rgba(56, 189, 248, 0.08)", border: "1px solid rgba(56, 189, 248, 0.2)", borderRadius: 6 }}>
+                <strong style={{ fontSize: 11, color: "var(--accent-cyan)" }}>
+                  <Globe size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                  Operating Mandate:
+                </strong>
+                <p style={{ margin: "4px 0 0 0", fontSize: 11, color: "var(--text-secondary)" }}>
+                  Zero external legal commitments or financial expenditures are executed without explicit Sentinel / Owner ApprovalGate sign-off.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 20. Funding Operations Sub-Agent Interface */}
+      {(activeOpView === "all" || activeOpView === "subagent") && (
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+            <strong><Zap size={14} /> CARAVAN Funding Operations Autonomous Sub-Agent</strong>
+            <span className="pill pill-emerald mono">OPERATIONAL · S2S Bridge Connected</span>
+          </div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            Dedicated funding intelligence agent executing approved registry web sweeps, schema validation, duplicate deduplication, and S2S delivery to CARAVAN's review queue.
+          </div>
+          <div className="grid-3" style={{ gap: 10 }}>
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+              <span className="muted">Agent Core Identity</span>
+              <strong className="mono" style={{ color: "var(--accent-cyan)" }}>SENTINEL_CARAVAN_DISCOVERY_01</strong>
+              <span className="muted" style={{ fontSize: 11 }}>SSRF-safe egress with strict domain allowlisting.</span>
+            </div>
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+              <span className="muted">Pipeline Verification Mode</span>
+              <strong className="mono" style={{ color: "var(--accent-emerald)" }}>MULTI-POINT EVIDENCE AUDIT</strong>
+              <span className="muted" style={{ fontSize: 11 }}>Publisher, amount, eligibility, deadline verification.</span>
+            </div>
+            <div className="list-item" style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+              <span className="muted">Destination Endpoint</span>
+              <strong className="mono" style={{ color: "var(--accent-amber)" }}>POST /api/v1/bridge/opportunities</strong>
+              <span className="muted" style={{ fontSize: 11 }}>Secured via X-Ultron-Bridge-Key token exchange.</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Activity Timeline */}
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>

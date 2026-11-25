@@ -41,7 +41,7 @@ import {
 } from "../components/ui/DesignSystem";
 import { ReadableSummary } from "../components/ui/HumanPresentation";
 
-const PRIORITY_IDS = ["gemini", "google_drive", "github", "supabase", "google_gmail", "google_calendar"];
+const PRIORITY_IDS = ["gemini", "google_antigravity", "google_drive", "github", "supabase", "google_gmail", "google_calendar"];
 const PENDING_OAUTH_KEY = "ultron_pending_oauth_provider";
 
 function statusTone(status: HonestConnectionStatus): "success" | "info" | "warn" | "danger" | "neutral" {
@@ -97,6 +97,28 @@ function resolveHonestStatus(
       detail: `Live verified on ${geminiDiag.live_inference.last_model || "Gemini"} (${geminiDiag.live_inference.last_latency_ms ?? "—"} ms).`,
       record,
       lastVerifiedAt: geminiDiag.live_inference.last_successful_check_at || record?.last_verified_at || null,
+    };
+  }
+
+  // Special check for Google Antigravity runtime environment
+  if (entry.id === "google_antigravity") {
+    const agEnv = statusData?.antigravity_environment;
+    if (agEnv?.runtime_detected) {
+      const connected = Object.keys(agEnv.connected_plugin_adapters || {}).join(", ");
+      return {
+        status: "Live Verified",
+        detail: `Antigravity VM active. Plugin bridges detected: ${connected || "Standard toolchain"}. Approval gates active for destructive tasks.`,
+        record: {
+          account_label: "Google Antigravity Dedicated Linux VM",
+          provider: "google_antigravity",
+          status: "AVAILABLE",
+        },
+        lastVerifiedAt: new Date().toISOString(),
+      };
+    }
+    return {
+      status: "Configured",
+      detail: "Antigravity runtime adapter ready; active when running within an Antigravity VM session.",
     };
   }
 

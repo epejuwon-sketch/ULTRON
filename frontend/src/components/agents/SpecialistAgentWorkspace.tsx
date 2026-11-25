@@ -306,6 +306,7 @@ function DefaultSpecialistWorkspace({
   const [codeScanResult, setCodeScanResult] = useState<any>(null);
   const [scanningCode, setScanningCode] = useState(false);
   const [handoffTarget, setHandoffTarget] = useState("AGT-01");
+  const [assignedPages, setAssignedPages] = useState<{ primary_pages: any[]; supporting_pages: any[] } | null>(null);
 
   useEffect(() => {
     setReasoningTier(Number(agent?.default_reasoning_tier || manifest?.default_reasoning_tier || 2));
@@ -318,6 +319,10 @@ function DefaultSpecialistWorkspace({
     apiFetch<any>("/api/v1/files")
       .then((r) => setFilesList(r.files || []))
       .catch(() => setFilesList([]));
+
+    apiFetch<any>(`/api/v1/agents/${agentId}/pages`)
+      .then((r) => setAssignedPages(r))
+      .catch(() => setAssignedPages(null));
 
     if (archetype === "finance") {
       apiFetch<any>("/api/v1/finance/summary")
@@ -529,6 +534,54 @@ function DefaultSpecialistWorkspace({
             {tools.map((t) => (
               <span key={t} className="pill mono">{t}</span>
             ))}
+          </div>
+        )}
+
+        {assignedPages && ((assignedPages.primary_pages && assignedPages.primary_pages.length > 0) || (assignedPages.supporting_pages && assignedPages.supporting_pages.length > 0)) && (
+          <div style={{ marginTop: 12, padding: "10px 12px", background: "rgba(15, 23, 42, 0.5)", borderRadius: 6, border: "1px solid rgba(148, 163, 184, 0.15)" }}>
+            <div className="row-between" style={{ marginBottom: 6 }}>
+              <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: "#38bdf8", letterSpacing: "0.06em" }}>
+                ASSIGNED OPERATIONAL INTERFACES ({assignedPages.primary_pages?.length || 0} PRIMARY · {assignedPages.supporting_pages?.length || 0} SUPPORTING)
+              </span>
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+              {assignedPages.primary_pages?.map((p: any) => (
+                <button
+                  key={p.page_id}
+                  type="button"
+                  onClick={() => onNavigate?.(p.module_id as ModuleId, p.subpage_id)}
+                  className="pill mono"
+                  style={{
+                    cursor: onNavigate ? "pointer" : "default",
+                    background: "rgba(16, 185, 129, 0.15)",
+                    color: "#34d399",
+                    border: "1px solid rgba(16, 185, 129, 0.4)",
+                    fontSize: 10,
+                  }}
+                  title={`Launch Page ${p.page_id}: ${p.name}`}
+                >
+                  ★ Page {p.page_id} · {p.name}
+                </button>
+              ))}
+              {assignedPages.supporting_pages?.map((p: any) => (
+                <button
+                  key={p.page_id}
+                  type="button"
+                  onClick={() => onNavigate?.(p.module_id as ModuleId, p.subpage_id)}
+                  className="pill mono"
+                  style={{
+                    cursor: onNavigate ? "pointer" : "default",
+                    background: "rgba(148, 163, 184, 0.1)",
+                    color: "#94a3b8",
+                    border: "1px solid rgba(148, 163, 184, 0.2)",
+                    fontSize: 10,
+                  }}
+                  title={`Support Page ${p.page_id}: ${p.name}`}
+                >
+                  Page {p.page_id} · {p.name}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>

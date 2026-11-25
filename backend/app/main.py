@@ -40,11 +40,13 @@ from app.routers import (
     monitoring,
     neon,
     notifications,
+    pages,
     projects,
     pulse,
     sentinel,
     settings as settings_router,
     tasks,
+    terminal,
     tools,
     turbo,
     vault,
@@ -196,6 +198,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(notifications.router)
     application.include_router(settings_router.router)
     application.include_router(monitoring.router)
+    application.include_router(terminal.router)
+    application.include_router(pages.router)
     application.include_router(ws.router)
 
     @application.get("/", tags=["Root"])

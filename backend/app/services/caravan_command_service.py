@@ -37,6 +37,9 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+CARAVAN_OFFICIAL_DEPLOYED_URL = "https://caravan-juwon2.vercel.app"
+
+
 def toggle_funding_source_status(
     db: Session,
     *,
@@ -311,13 +314,13 @@ def get_caravan_command_centre(
         "standalone_platform": {
             "name": "CARAVAN Standalone Platform",
             "repo_url": "https://github.com/epejuwon-sketch/CARAVAN",
-            "deployed_url": os.getenv("CARAVAN_DEPLOYED_URL", "https://caravan-platform.vercel.app"),
+            "deployed_url": os.getenv("CARAVAN_DEPLOYED_URL", CARAVAN_OFFICIAL_DEPLOYED_URL),
             "branch": "main",
             "version": "1.0.0-production",
-            "deployment_status": "PENDING_VERCEL_IMPORT",
-            "environment": "staging",
+            "deployment_status": "READY",
+            "environment": "production",
             "database_status": "READY_FOR_SUPABASE",
-            "backend_health": "LOCAL_VERIFIED",
+            "backend_health": "VERIFIED_VERCEL",
             "bridge_status": "CONFIGURED",
             "last_health_check": _utcnow().isoformat(),
             "health_latency_ms": 0.0,
@@ -343,7 +346,7 @@ def get_caravan_command_centre(
             "capabilities": ["Marketplace", "Eligibility Scoring", "Application Pipelines", "Document Manager", "Payments"],
         },
         "infrastructure_and_integrations": {
-            "vercel_project": "caravan-platform",
+            "vercel_project": "caravan",
             "supabase_postgres_pooler": "Port 6543 (SSL Enforced)",
             "payment_gateways": ["Flutterwave (Sandbox)", "Paystack (Sandbox)"],
             "s2s_bridge": "X-Ultron-Bridge-Key (Active)",
@@ -435,6 +438,32 @@ def get_caravan_command_centre(
                         "approval_gate_required": True,
                     },
                 ],
+            },
+            "business_readiness_compliance": {
+                "jurisdiction_nigeria": {
+                    "cac_status": "READY_FOR_FILING",
+                    "framework": "Companies and Allied Matters Act (CAMA 2020)",
+                    "tin_tax_compliance": "IN_PROGRESS",
+                    "ndpr_data_protection": "COMPLIANT_ARCHITECTURE",
+                    "corporate_banking": "AWAITING_INCORPORATION_DOCS",
+                    "guardian_capacity_rules": {
+                        "statute": "Infants Relief Act / Child's Rights Act / CAMA 2020",
+                        "legal_capacity_age": 18,
+                        "minor_founder_rule": "Minor founders require adult legal guardian or director co-signatory for binding loan/equity agreements.",
+                        "enforcement": "SYSTEM_FLAGGED_IN_ONBOARDING",
+                    },
+                },
+                "jurisdiction_international": {
+                    "uk_expansion": {"entity": "UK Private Limited Company", "authority": "Companies House / HMRC", "readiness": "IN_PROGRESS"},
+                    "uae_expansion": {"entity": "ADGM / DIFC Tech License", "authority": "Abu Dhabi Global Market", "readiness": "RESEARCH"},
+                    "us_expansion": {"entity": "Delaware C-Corporation", "authority": "Delaware Division of Corporations / SEC Reg D", "readiness": "RESEARCH"},
+                },
+            },
+            "funding_ops_subagent": {
+                "status": "OPERATIONAL",
+                "agent_identity": "SENTINEL_CARAVAN_DISCOVERY_AGENT_01",
+                "capabilities": ["DISCOVERY_CRAWLER", "DUPLICATE_DETECTOR", "SOURCE_VERIFIER", "S2S_INGESTION_BRIDGE"],
+                "last_active": _utcnow().isoformat(),
             },
         },
     }

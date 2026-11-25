@@ -20,6 +20,7 @@ import {
   Plug,
   Settings,
   Shield,
+  Terminal,
   Wallet,
   Workflow,
   X,
@@ -47,6 +48,7 @@ export function ModuleIcon({ id, size = 16 }: { id: ModuleId; size?: number }) {
     case "finance": return <Wallet size={size} />;
     case "caravan": return <Compass size={size} />;
     case "settings": return <Settings size={size} />;
+    case "terminal": return <Terminal size={size} />;
   }
 }
 
@@ -148,6 +150,7 @@ export function TopBar({
   onOpenPalette,
   onOpenNotifications,
   onToggleRightPanel,
+  onOpenTerminal,
 }: {
   title: string;
   device: DeviceProfile;
@@ -156,6 +159,7 @@ export function TopBar({
   onOpenPalette: () => void;
   onOpenNotifications: () => void;
   onToggleRightPanel: () => void;
+  onOpenTerminal?: () => void;
 }) {
   return (
     <header className="topbar">
@@ -191,6 +195,20 @@ export function TopBar({
           label={backendReady === false ? "DEGRADED" : backendReady === true ? "ONLINE" : "SYNCING"}
           tone={backendReady === false ? "warn" : backendReady === true ? "success" : "neutral"}
         />
+
+        {onOpenTerminal && (
+          <button
+            id="topbar-terminal"
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={onOpenTerminal}
+            aria-label="Open Master Terminal (Page 112)"
+            title="Open Master Terminal (Page 112)"
+          >
+            <Terminal size={13} />
+            {!device.isMobile && <span className="mono" style={{ fontSize: 11, color: "#38bdf8" }}>112</span>}
+          </button>
+        )}
 
         <button
           id="topbar-notifications"

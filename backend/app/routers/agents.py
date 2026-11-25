@@ -141,6 +141,33 @@ def api_list_agent_messages(
     return {"total": len(msgs), "messages": msgs}
 
 
+@router.get("/page-matrix")
+def get_page_matrix(
+    _principal: Principal = Depends(require_perm("agents:read")),
+) -> dict:
+    from app.services.page_agent_registry import PAGE_INTEGRATION_MATRIX, validate_registry_integrity
+
+    validation = validate_registry_integrity()
+    return {
+        "total_pages": len(PAGE_INTEGRATION_MATRIX),
+        "valid": validation["valid"],
+        "matrix": PAGE_INTEGRATION_MATRIX,
+    }
+
+
+@router.get("/pages/{page_id}")
+def get_page_integration(
+    page_id: str,
+    _principal: Principal = Depends(require_perm("agents:read")),
+) -> dict:
+    from app.services.page_agent_registry import get_page_spec
+
+    spec = get_page_spec(page_id)
+    if not spec:
+        raise NotFoundError(f"Page '{page_id}' not found in 112-page registry.")
+    return spec
+
+
 @router.get("/{agent_id}")
 def get_agent(
     agent_id: str,
@@ -151,6 +178,23 @@ def get_agent(
     if agent is None:
         raise NotFoundError(f"Agent '{agent_id}' not found.")
     return _serialize_agent(agent)
+
+
+@router.get("/{agent_id}/pages")
+def get_agent_pages(
+    agent_id: str,
+    _principal: Principal = Depends(require_perm("agents:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.page_agent_registry import get_pages_for_agent
+
+    agent = db.get(AgentRecord, agent_id.upper())
+    if agent is None:
+        raise NotFoundError(f"Agent '{agent_id}' not found.")
+    res = get_pages_for_agent(agent_id.upper())
+    res["agent_name"] = agent.name
+    res["tier"] = agent.tier
+    return res
 
 
 @router.get("/{agent_id}/manifest")

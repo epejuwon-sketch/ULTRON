@@ -24,6 +24,13 @@ export function IntegrationLogo({ id, size = 28 }: IntegrationLogoProps) {
       return wrap("#0B1324", (
         <path d="M16 5C16.8 11.4 20.6 15.2 27 16C20.6 16.8 16.8 20.6 16 27C15.2 20.6 11.4 16.8 5 16C11.4 15.2 15.2 11.4 16 5Z" fill="#38BDF8" />
       ));
+    case "google_antigravity":
+      return wrap("#0F172A", (
+        <>
+          <path d="M16 6L24 20H8L16 6Z" stroke="#38BDF8" strokeWidth="2" strokeLinejoin="round" />
+          <circle cx="16" cy="15" r="2.5" fill="#F59E0B" />
+        </>
+      ));
     case "openai":
       return wrap("#101720", (
         <>

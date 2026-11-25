@@ -66,6 +66,27 @@ export const INTEGRATIONS_CATALOG: IntegrationCatalogEntry[] = [
     connectFields: [{ key: "api_key", label: "Gemini API Key", placeholder: "Stored encrypted in backend VAULT", sensitive: true }],
   },
   {
+    id: "google_antigravity",
+    name: "Google Antigravity Agent Runtime",
+    category: "AI & Intelligence",
+    shortDescription: "Antigravity remote agent runtime environment, pair programming, tool-calling, and verified plugin bridge.",
+    backendProviderKey: "antigravity",
+    statusCapabilityKey: "antigravity_environment",
+    authFlow: "SERVER_ENV",
+    supportedByBackend: true,
+    requiredEnvVars: [],
+    permissions: ["agent.pair_programming", "tools.execute", "plugins.bridge"],
+    capabilities: [
+      "autonomous_subagents",
+      "tool_calling",
+      "plugin_cli_bridge",
+      "approval_gated_execution",
+      "sandbox_isolation",
+    ],
+    setupInstructions:
+      "Operational inside authorized Antigravity VM sessions. External operations and state changes require explicit ApprovalGate authorization.",
+  },
+  {
     id: "openai",
     name: "OpenAI",
     category: "AI & Intelligence",

@@ -21,6 +21,7 @@ import { apiFetch, resolveGeminiProviderStatus } from "../lib/api";
 import { getModule, getSubPage, ModuleId } from "../catalog/navigation";
 import type { ModulePageProps } from "../types/module";
 import { EarthGlobe } from "../components/EarthGlobe";
+import { MasterSchematicView } from "../components/MasterSchematicView";
 import {
   ActivityFeed,
   ConfirmationDialog,
@@ -80,6 +81,7 @@ export default function CommandModulePage({
   // Quick command dispatch on Home
   const [cmd, setCmd] = useState("");
   const [cmdMode, setCmdMode] = useState<"neon" | "argon">("neon");
+  const [viewMode, setViewMode] = useState<"schematic" | "globe">("schematic");
   const [dispatching, setDispatching] = useState(false);
   const [dispatchResult, setDispatchResult] = useState<{ title: string; detail: string; meta: string } | null>(null);
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
@@ -258,10 +260,46 @@ export default function CommandModulePage({
 
       {error && <ErrorState message={error} onRetry={refresh} />}
 
-      {/* 1. HOME / COMMAND CENTER — Central Operational Headquarters */}
+      {/* 1. HOME / COMMAND CENTER — Central Operational Headquarters & 112 Master Schematic */}
       {page.id === "home" && (
         <div className="command-stage">
-          <section className="orbital-hero">
+          <div className="row-between mb-3" style={{ flexWrap: "wrap", gap: 8 }}>
+            <div className="segmented">
+              <button
+                type="button"
+                className={`seg-btn ${viewMode === "schematic" ? "active" : ""}`}
+                onClick={() => setViewMode("schematic")}
+              >
+                112-PAGE MASTER SCHEMATIC
+              </button>
+              <button
+                type="button"
+                className={`seg-btn ${viewMode === "globe" ? "active" : ""}`}
+                onClick={() => setViewMode("globe")}
+              >
+                ORBITAL EARTH COMMAND
+              </button>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => onNavigate("terminal", "master-terminal")}
+              style={{ color: "#38bdf8", borderColor: "rgba(56,189,248,0.4)" }}
+            >
+              <Sparkles size={13} /> Launch Master Terminal (112)
+            </button>
+          </div>
+
+          {viewMode === "schematic" ? (
+            <MasterSchematicView
+              device={device}
+              activeModule="command"
+              activeSubPage={subPage}
+              onNavigate={onNavigate}
+              onDispatchToTerminal={() => onNavigate("terminal", "master-terminal")}
+            />
+          ) : (
+            <section className="orbital-hero">
             <div className="orbital-header">
               <div>
                 <div className="eyebrow-mono">OPERATIONAL HEADQUARTERS · {user.username.toUpperCase()}</div>
@@ -388,6 +426,7 @@ export default function CommandModulePage({
               </div>
             )}
           </section>
+          )}
 
           {/* Operational Headquarters Panels (Live Backend State Only) */}
           <section className="grid-3">

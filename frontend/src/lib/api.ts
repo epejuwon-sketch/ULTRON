@@ -6,6 +6,9 @@ const EXPIRES_AT_KEY = "ultron_access_expires_at";
 const USER_KEY = "ultron_user_profile";
 export const AUTH_STATE_EVENT = "ultron:auth-state-changed";
 
+/** Centralized production URL for the standalone CARAVAN application. */
+export const CARAVAN_DEPLOYED_URL = "https://caravan-juwon2.vercel.app";
+
 export interface AuthUser {
   user_id: string;
   username: string;

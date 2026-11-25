@@ -12,7 +12,7 @@ import {
   Sparkles,
   UserCheck,
 } from "lucide-react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, CARAVAN_DEPLOYED_URL } from "../lib/api";
 import { CaravanCommandCentre } from "../components/caravan/CaravanCommandCentre";
 import { DataTable, Drawer, MetricDisplay, StatusIndicator, useToast } from "../components/ui/DesignSystem";
 
@@ -259,7 +259,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
 
               <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                 <a
-                  href="https://caravan-platform.vercel.app"
+                  href={CARAVAN_DEPLOYED_URL}
                   target="_blank"
                   rel="noreferrer"
                   className="btn btn-sm"
