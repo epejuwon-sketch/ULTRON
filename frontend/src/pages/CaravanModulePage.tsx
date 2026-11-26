@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { apiFetch, CARAVAN_DEPLOYED_URL } from "../lib/api";
 import { CaravanCommandCentre } from "../components/caravan/CaravanCommandCentre";
+import { LegalComplianceDashboard } from "../components/caravan/LegalComplianceDashboard";
 import { DataTable, Drawer, MetricDisplay, StatusIndicator, useToast } from "../components/ui/DesignSystem";
 
 interface ModulePageProps {
@@ -176,6 +177,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
   const tabs = [
     { id: "overview", label: "Overview" },
     { id: "command-centre", label: "Operations Command Centre" },
+    { id: "legal", label: "Legal & Compliance" },
     { id: "discover", label: "Discover Funding" },
     { id: "eligibility", label: "NEON Eligibility" },
     { id: "applications", label: "My Applications" },
@@ -1130,6 +1132,7 @@ export default function CaravanModulePage({ subPage, onSelectSubPage }: ModulePa
       )}
 
       {subPage === "command-centre" && <CaravanCommandCentre onNavigateSubPage={onSelectSubPage} />}
+      {subPage === "legal" && <LegalComplianceDashboard onNavigateTab={onSelectSubPage} />}
 
       {/* Opportunity Details Drawer */}
       <Drawer open={Boolean(selectedOpp)} title={selectedOpp ? selectedOpp.title : ""} onClose={() => setSelectedOpp(null)}>

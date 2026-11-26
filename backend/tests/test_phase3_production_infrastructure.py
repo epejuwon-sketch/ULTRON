@@ -42,6 +42,7 @@ def test_supabase_migrations_001_to_004_match_all_53_orm_models_and_rls() -> Non
         "012_caravan_phase6_growth_revenue.sql",
         "013_caravan_phase7_production_readiness.sql",
         "014_provider_verifications.sql",
+        "015_legal_compliance_operations.sql",
     ]
     sql = "\n".join(p.read_text(encoding="utf-8") for p in files)
 
@@ -59,7 +60,7 @@ def test_supabase_migrations_001_to_004_match_all_53_orm_models_and_rls() -> Non
     for m in re.finditer(r"ALTER TABLE\s+(\w+)\s+ADD COLUMN IF NOT EXISTS\s+(\w+)", sql, re.I):
         tables_sql.setdefault(m.group(1), set()).add(m.group(2))
 
-    assert len(Base.metadata.tables) == 80
+    assert len(Base.metadata.tables) == 86
     for tname, table in Base.metadata.tables.items():
         assert tname in tables_sql, f"ORM table '{tname}' missing from Supabase SQL migrations"
         orm_cols = {c.name for c in table.columns}

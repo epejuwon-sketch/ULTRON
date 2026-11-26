@@ -1440,3 +1440,132 @@ class ProviderVerificationRecord(Base):
     trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
     environment: Mapped[str] = mapped_column(String(32), nullable=False, default="development")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# -----------------------------------------------------------------------------
+# Legal & Compliance Operations Models
+# -----------------------------------------------------------------------------
+
+class LegalEntityDraftRecord(Base):
+    __tablename__ = "legal_entity_drafts"
+
+    draft_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    company_name: Mapped[str] = mapped_column(String(200), nullable=False, default="CARAVAN FUNDING INTELLIGENCE LTD")
+    alternative_names_json: Mapped[str] = mapped_column(Text, nullable=False, default='["CARAVAN VENTURES AFRICA LTD", "AURELIA FUNDING INTELLIGENCE LTD"]')
+    entity_type: Mapped[str] = mapped_column(String(48), nullable=False, default="PRIVATE_COMPANY_LIMITED_BY_SHARES")
+    nominal_share_capital: Mapped[float] = mapped_column(Float, nullable=False, default=1000000.0)
+    share_nominal_value: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="NGN")
+    objects_clause_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    registered_office_address: Mapped[str] = mapped_column(String(300), nullable=False, default="12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria")
+    head_office_address: Mapped[str] = mapped_column(String(300), nullable=False, default="12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT", index=True)
+    cac_availability_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cac_registration_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tax_identification_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LegalOfficerRecord(Base):
+    __tablename__ = "legal_officers"
+
+    officer_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    draft_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    officer_type: Mapped[str] = mapped_column(String(32), nullable=False, default="DIRECTOR", index=True)
+    full_legal_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    date_of_birth: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_under_18: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    guardian_officer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    nationality: Mapped[str] = mapped_column(String(64), nullable=False, default="Nigerian")
+    residential_address: Mapped[str] = mapped_column(String(300), nullable=False)
+    email: Mapped[str] = mapped_column(String(120), nullable=False)
+    phone: Mapped[str] = mapped_column(String(32), nullable=False)
+    identity_type: Mapped[str] = mapped_column(String(32), nullable=False, default="NIN")
+    identity_number_masked: Mapped[str] = mapped_column(String(32), nullable=False)
+    identity_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    shares_allocated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    equity_percentage: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    voting_percentage: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    has_significant_control: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    professional_accreditation_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LegalStatutoryPolicyRecord(Base):
+    __tablename__ = "legal_statutory_policies"
+
+    policy_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    policy_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0.0")
+    content_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    statutory_references_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT", index=True)
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LegalComplianceCalendarEventRecord(Base):
+    __tablename__ = "legal_compliance_calendar_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    authority: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    statutory_deadline: Mapped[str] = mapped_column(String(64), nullable=False)
+    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recurrence: Mapped[str] = mapped_column(String(32), nullable=False, default="ANNUAL")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="UPCOMING", index=True)
+    filing_fee_ngn: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    penalty_risk_description: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LegalFilingWorkflowRecord(Base):
+    __tablename__ = "legal_filing_workflows"
+
+    workflow_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    filing_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_authority: Mapped[str] = mapped_column(String(32), nullable=False, default="CAC")
+    status: Mapped[str] = mapped_column(String(48), nullable=False, default="DRAFT", index=True)
+    requires_professional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    professional_category: Mapped[str] = mapped_column(String(64), nullable=False, default="NONE")
+    professional_status: Mapped[str] = mapped_column(String(32), nullable=False, default="NOT_REQUIRED")
+    government_reference: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    remita_rrr: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    payment_status: Mapped[str] = mapped_column(String(32), nullable=False, default="UNPAID")
+    payment_amount_ngn: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    queries_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class LegalArchivedDocumentRecord(Base):
+    __tablename__ = "legal_archived_documents"
+
+    archive_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    workflow_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    document_category: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    authority_issued: Mapped[str] = mapped_column(String(32), nullable=False, default="CAC")
+    file_path: Mapped[str] = mapped_column(String(300), nullable=False)
+    sha256_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_verified_authentic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    uploaded_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+

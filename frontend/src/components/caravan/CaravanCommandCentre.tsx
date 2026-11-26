@@ -976,7 +976,16 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
             <strong><Briefcase size={14} /> Legal, Regulatory &amp; Corporate Business Readiness</strong>
-            <span className="pill pill-cyan mono">Zero Fabrication · Statutory Verification</span>
+            <div className="row" style={{ gap: 8 }}>
+              <span className="pill pill-cyan mono">Zero Fabrication · Statutory Verification</span>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => onNavigateSubPage?.("legal")}
+              >
+                Launch Legal &amp; Compliance Operations &rarr;
+              </button>
+            </div>
           </div>
           <div className="muted" style={{ fontSize: 12 }}>
             Jurisdiction compliance tracking covering CAC corporate registration (CAMA 2020), FIRS tax status, NDPR data privacy, and statutory age of legal contractual capacity.

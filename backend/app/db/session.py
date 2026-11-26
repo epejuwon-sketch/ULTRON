@@ -38,6 +38,7 @@ MIGRATION_REGISTRY: list[tuple[str, str]] = [
     ("012", "012_caravan_phase6_growth_revenue.sql"),
     ("013", "013_caravan_phase7_production_readiness.sql"),
     ("014", "014_provider_verifications.sql"),
+    ("015", "015_legal_compliance_operations.sql"),
 ]
 
 

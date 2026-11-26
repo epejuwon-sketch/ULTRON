@@ -36,6 +36,7 @@ from app.routers import (
     google,
     health,
     integrations,
+    legal_compliance,
     memory,
     monitoring,
     neon,
@@ -193,6 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(bridge.router)
     application.include_router(pulse.router)
     application.include_router(caravan.router)
+    application.include_router(legal_compliance.router)
     application.include_router(turbo.router)
     application.include_router(projects.router)
     application.include_router(notifications.router)
