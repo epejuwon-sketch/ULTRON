@@ -17,7 +17,13 @@ import {
   Sparkles,
   Workflow,
 } from "lucide-react";
-import { apiFetch, resolveGeminiProviderStatus } from "../lib/api";
+import {
+  apiFetch,
+  clearSession,
+  getStoredToken,
+  resolveGeminiProviderStatus,
+  waitForSessionRestoration,
+} from "../lib/api";
 import { getModule, getSubPage, ModuleId } from "../catalog/navigation";
 import type { ModulePageProps } from "../types/module";
 import { EarthGlobe } from "../components/EarthGlobe";
@@ -88,40 +94,70 @@ export default function CommandModulePage({
   const [dispatchResult, setDispatchResult] = useState<{ title: string; detail: string; meta: string } | null>(null);
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
 
+  const [tokenPresent, setTokenPresent] = useState(() => Boolean(getStoredToken()));
+
   async function refresh() {
     setError("");
+    setLoading(true);
+
+    try {
+      await waitForSessionRestoration();
+    } catch {
+      // session restoration resolved
+    }
+
+    const token = getStoredToken();
+    setTokenPresent(Boolean(token));
+
+    if (!token) {
+      setLoading(false);
+      setAuditLogs([]);
+      return;
+    }
+
     const authErrors: string[] = [];
     const trackErr = <T,>(fallback: T) => (err: any): T => {
       if (err?.message) authErrors.push(String(err.message));
       return fallback;
     };
+
     try {
-      const [h, r, gd, ov, ag, tk, ap, conn, notif, aud, conv] = await Promise.all([
-        apiFetch<any>("/health").catch(() => null),
-        apiFetch<any>("/health/ready").catch(() => null),
-        apiFetch<any>("/api/v1/neon/gemini/diagnostics?discover=false").catch(trackErr(null)),
-        apiFetch<any>("/api/v1/monitoring/overview").catch(trackErr(null)),
-        apiFetch<any>("/api/v1/agents").catch(trackErr({ agents: [] })),
-        apiFetch<any>("/api/v1/tasks").catch(trackErr({ tasks: [] })),
-        apiFetch<any>("/api/v1/approvals").catch(trackErr({ approvals: [] })),
-        apiFetch<any>("/api/v1/integrations/connections").catch(trackErr({ connections: [] })),
-        apiFetch<any>("/api/v1/notifications").catch(trackErr({ notifications: [] })),
-        apiFetch<any>("/api/v1/audit/logs?limit=25").catch(trackErr({ logs: [] })),
-        apiFetch<any>("/api/v1/neon/conversations").catch(trackErr({ conversations: [] })),
-      ]);
-      setHealth(h);
-      setReady(r);
-      setGeminiDiag(gd);
-      setOverview(ov);
-      setAgents(ag.agents || []);
-      setTasks(tk.tasks || []);
-      setApprovals(ap.approvals || []);
-      setConnections(conn.connections || conn.integrations || []);
-      setNotifications(notif.notifications || []);
-      setAuditLogs(aud.logs || []);
-      setConversations(conv.conversations || []);
-      if (authErrors.length >= 3) {
-        setError(authErrors[0]);
+      if (page.id === "activity") {
+        try {
+          const aud = await apiFetch<any>("/api/v1/audit/logs?limit=25");
+          setAuditLogs(aud.logs || []);
+        } catch (err: any) {
+          setError(err.message || "Failed to load audit activity.");
+          setAuditLogs([]);
+        }
+      } else {
+        const [h, r, gd, ov, ag, tk, ap, conn, notif, aud, conv] = await Promise.all([
+          apiFetch<any>("/health").catch(() => null),
+          apiFetch<any>("/health/ready").catch(() => null),
+          apiFetch<any>("/api/v1/neon/gemini/diagnostics?discover=false").catch(trackErr(null)),
+          apiFetch<any>("/api/v1/monitoring/overview").catch(trackErr(null)),
+          apiFetch<any>("/api/v1/agents").catch(trackErr({ agents: [] })),
+          apiFetch<any>("/api/v1/tasks").catch(trackErr({ tasks: [] })),
+          apiFetch<any>("/api/v1/approvals").catch(trackErr({ approvals: [] })),
+          apiFetch<any>("/api/v1/integrations/connections").catch(trackErr({ connections: [] })),
+          apiFetch<any>("/api/v1/notifications").catch(trackErr({ notifications: [] })),
+          apiFetch<any>("/api/v1/audit/logs?limit=25").catch(trackErr({ logs: [] })),
+          apiFetch<any>("/api/v1/neon/conversations").catch(trackErr({ conversations: [] })),
+        ]);
+        setHealth(h);
+        setReady(r);
+        setGeminiDiag(gd);
+        setOverview(ov);
+        setAgents(ag.agents || []);
+        setTasks(tk.tasks || []);
+        setApprovals(ap.approvals || []);
+        setConnections(conn.connections || conn.integrations || []);
+        setNotifications(notif.notifications || []);
+        setAuditLogs(aud.logs || []);
+        setConversations(conv.conversations || []);
+        if (authErrors.length >= 3) {
+          setError(authErrors[0]);
+        }
       }
     } catch (e: any) {
       setError(e.message || "Failed to load Command Centre telemetry.");
@@ -260,7 +296,7 @@ export default function CommandModulePage({
         }
       />
 
-      {error && <ErrorState message={error} onRetry={refresh} />}
+      {error && page.id !== "activity" && <ErrorState message={error} onRetry={refresh} />}
 
       {/* 1. HOME / COMMAND CENTER — Central Command Interface with Realistic Earth */}
       {page.id === "home" && (
@@ -308,15 +344,51 @@ export default function CommandModulePage({
 
       {/* 3. LIVE ACTIVITY */}
       {page.id === "activity" && (
-        loading ? <LoadingState /> : (
+        loading ? (
+          <LoadingState label="Synchronizing live activity feed..." />
+        ) : !tokenPresent && !getStoredToken() ? (
+          <div className="card">
+            <div className="card-title"><span>Live System &amp; Audit Activity</span></div>
+            <EmptyState
+              title="Authentication Required"
+              description="Live Activity Feed requires an authenticated session. Please sign in to view authorized system audit logs."
+              action={
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => clearSession("reauth_required")}
+                >
+                  Sign In
+                </button>
+              }
+            />
+          </div>
+        ) : error ? (
+          <div className="card">
+            <div className="card-title"><span>Live System &amp; Audit Activity</span></div>
+            <ErrorState
+              title="Backend Request Failed"
+              message={error}
+              onRetry={refresh}
+            />
+          </div>
+        ) : auditLogs.length === 0 ? (
+          <div className="card">
+            <div className="card-title"><span>Live System &amp; Audit Activity (0)</span></div>
+            <EmptyState
+              title="No Activity"
+              description="No recorded activity events yet."
+            />
+          </div>
+        ) : (
           <div className="card">
             <div className="card-title"><span>Live System &amp; Audit Activity ({auditLogs.length})</span></div>
             <ActivityFeed
               items={auditLogs.map((l: any, i: number) => ({
-                id: l.audit_id || String(i),
+                id: l.event_id || l.audit_id || String(l.seq ?? i),
                 title: l.action || l.event_type || "Audit Event",
-                actor: l.actor_user_id || l.user_id || "system",
-                status: l.status || l.outcome || "RECORDED",
+                actor: l.actor || l.actor_user_id || l.user_id || "system",
+                status: l.outcome || l.status || "RECORDED",
                 timestamp: l.created_at,
                 detail: l.resource || l.detail || undefined,
               }))}

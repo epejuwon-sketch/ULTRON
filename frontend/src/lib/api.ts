@@ -144,6 +144,64 @@ export function isAccessTokenExpiredOrExpiring(token: string | null, skewSeconds
 }
 
 let inflightRefreshPromise: Promise<string | null> | null = null;
+let sessionRestorationPromise: Promise<AuthUser | null> | null = null;
+
+export function isSessionRestoring(): boolean {
+  return sessionRestorationPromise !== null;
+}
+
+export async function waitForSessionRestoration(): Promise<AuthUser | null> {
+  if (sessionRestorationPromise) {
+    return sessionRestorationPromise;
+  }
+  const token = getStoredToken();
+  return token ? getStoredUser() : null;
+}
+
+/**
+ * Coordinate asynchronous session restoration and token rotation on startup or foreground resume.
+ * Ensures concurrent requests await valid token resolution rather than firing with stale or missing credentials.
+ */
+export async function restoreSession(): Promise<AuthUser | null> {
+  if (sessionRestorationPromise) {
+    return sessionRestorationPromise;
+  }
+
+  const token = getStoredToken();
+  const refreshToken = getStoredRefreshToken();
+  const user = getStoredUser();
+
+  if (!token && !refreshToken) {
+    return null;
+  }
+
+  // If token is missing or expired, attempt refresh if refresh token exists
+  if (!token || isAccessTokenExpiredOrExpiring(token, 45)) {
+    if (refreshToken) {
+      sessionRestorationPromise = (async () => {
+        try {
+          const refreshedToken = await refreshAccessTokenSingleFlight();
+          if (refreshedToken) {
+            return getStoredUser();
+          }
+          clearSession("session_expired");
+          return null;
+        } catch {
+          clearSession("session_expired");
+          return null;
+        } finally {
+          sessionRestorationPromise = null;
+        }
+      })();
+      return sessionRestorationPromise;
+    } else {
+      clearSession("session_expired");
+      return null;
+    }
+  }
+
+  return user;
+}
 
 /**
  * Single-flight refresh token rotation via `POST /api/v1/auth/refresh`.
@@ -208,14 +266,27 @@ async function fetchWithAutoRefresh(
   customHeaders: Record<string, string> = {}
 ): Promise<Response> {
   const publicEndpoint = isAuthPublicEndpoint(path);
+
+  // If session restoration is in flight, wait for it before dispatching protected requests
+  if (!publicEndpoint && sessionRestorationPromise) {
+    await sessionRestorationPromise;
+  }
+
   let token = getStoredToken();
 
-  // Proactive refresh before dispatching if access token is already expired and we have a refresh token
-  if (!publicEndpoint && token && isAccessTokenExpiredOrExpiring(token, 20) && getStoredRefreshToken()) {
+  // Proactive refresh before dispatching if access token is missing/expired and we have a refresh token
+  if (!publicEndpoint && (!token || isAccessTokenExpiredOrExpiring(token, 20)) && getStoredRefreshToken()) {
     const refreshed = await refreshAccessTokenSingleFlight();
     if (refreshed) {
       token = refreshed;
     }
+  }
+
+  // Guard: if signed out and attempting protected request without token or refresh capability,
+  // do not dispatch repeated unauthenticated requests over the wire.
+  if (!publicEndpoint && !token && !getStoredRefreshToken()) {
+    clearSession("signed_out");
+    throw new Error("Missing Authorization Bearer token.");
   }
 
   const buildHeaders = (bearer: string | null): Record<string, string> => {

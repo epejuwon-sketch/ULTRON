@@ -9,6 +9,7 @@ import {
   getStoredUser,
   isAccessTokenExpiredOrExpiring,
   refreshAccessTokenSingleFlight,
+  restoreSession,
   saveSession,
 } from "./lib/api";
 import { useDeviceProfile } from "./lib/device";
@@ -60,23 +61,16 @@ function buildRoutePath(moduleId: ModuleId, subPageId: string): string {
   return `/${moduleId}/${subPageId}`;
 }
 
-const DEFAULT_OPERATOR: AuthUser = {
-  user_id: "usr_operator_01",
-  username: "OPERATOR",
-  email: "operator@ultron.internal",
-  role: "owner",
-  tenant_id: "TENANT-ULTRON-01",
-};
-
 export default function App() {
   const { prefs, updatePrefs } = usePreferences();
   const device = useDeviceProfile(prefs.layoutMode);
 
+  const [sessionRestoring, setSessionRestoring] = useState(() => Boolean(getStoredToken() || getStoredRefreshToken()));
   const [user, setUser] = useState<AuthUser | null>(() => {
     const token = getStoredToken();
     const u = getStoredUser();
     if (token && u) return u;
-    return DEFAULT_OPERATOR;
+    return null;
   });
   const initialRoute = parseRouteFromPathname(typeof window !== "undefined" ? window.location.pathname : "/");
   const [activeModule, setActiveModule] = useState<ModuleId>(initialRoute.moduleId);
@@ -273,45 +267,59 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [user, navigate]);
 
+  // Initial asynchronous session restoration on app boot
+  useEffect(() => {
+    let mounted = true;
+    restoreSession()
+      .then((restored) => {
+        if (mounted) {
+          setUser(restored);
+          setSessionRestoring(false);
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setUser(null);
+          setSessionRestoring(false);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   // Keep React auth state synchronized with shared API client token refreshes and session expirations
   useEffect(() => {
     const onAuthChanged = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail && "user" in detail) {
-        setUser(detail.user || DEFAULT_OPERATOR);
+        setUser(detail.user || null);
         if (!detail.user && detail.reason === "session_expired") {
           setAuthErr("Your session expired. Please sign in again.");
         }
       } else {
-        setUser(getStoredToken() ? getStoredUser() || DEFAULT_OPERATOR : DEFAULT_OPERATOR);
+        setUser(getStoredToken() ? getStoredUser() : null);
       }
+      setSessionRestoring(false);
     };
     window.addEventListener(AUTH_STATE_EVENT, onAuthChanged);
     return () => window.removeEventListener(AUTH_STATE_EVENT, onAuthChanged);
   }, []);
 
-  // Validate or refresh session on initial boot and whenever the installed iOS PWA returns to foreground
+  // Validate or refresh session on foreground resume
   useEffect(() => {
     if (!user) return;
     const ensureFreshSession = async () => {
       const token = getStoredToken();
       if (!token) {
-        // Standalone operator mode
+        setUser(null);
         return;
       }
-      if (isAccessTokenExpiredOrExpiring(token, 45)) {
-        if (getStoredRefreshToken()) {
-          const refreshed = await refreshAccessTokenSingleFlight();
-          if (!refreshed) {
-            clearSession("session_expired");
-          }
-        } else {
-          // Legacy session stored before refresh_token persistence whose JWT is already expired
-          clearSession("session_expired");
-        }
+      const refreshed = await restoreSession();
+      if (!refreshed) {
+        setUser(null);
       }
     };
-    ensureFreshSession();
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         ensureFreshSession();
@@ -367,6 +375,14 @@ export default function App() {
     apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
     clearSession("logged_out");
     setUser(null);
+  }
+
+  if (sessionRestoring && (getStoredToken() || getStoredRefreshToken())) {
+    return (
+      <div className="auth-wrap">
+        <LoadingState label="Restoring secure operator session..." />
+      </div>
+    );
   }
 
   if (!user) {
