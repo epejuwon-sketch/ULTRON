@@ -346,12 +346,12 @@ export default function CommandModulePage({
       {page.id === "activity" && (
         loading ? (
           <LoadingState label="Synchronizing live activity feed..." />
-        ) : !tokenPresent && !getStoredToken() ? (
+        ) : (!tokenPresent && !getStoredToken()) || /authorization|token|unauthorized|401|session expired/i.test(error) ? (
           <div className="card">
             <div className="card-title"><span>Live System &amp; Audit Activity</span></div>
             <EmptyState
               title="Authentication Required"
-              description="Live Activity Feed requires an authenticated session. Please sign in to view authorized system audit logs."
+              description="Live Activity Feed requires an active authenticated session. Please sign in to view authorized audit logs."
               action={
                 <button
                   type="button"

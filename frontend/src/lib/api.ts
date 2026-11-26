@@ -226,22 +226,24 @@ export async function refreshAccessTokenSingleFlight(): Promise<string | null> {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!resp.ok) {
+        clearSession("session_expired");
         return null;
       }
       const data = await resp.json();
       if (!data?.access_token) {
+        clearSession("session_expired");
         return null;
       }
-      const updatedUser: AuthUser = data.user || getStoredUser() || {
-        user_id: "unknown",
-        username: "operator",
-        email: "",
-        role: "OWNER",
-        tenant_id: "TENANT-ULTRON-01",
-      };
+      const existingUser = getStoredUser();
+      const updatedUser: AuthUser | null = data.user || existingUser;
+      if (!updatedUser) {
+        clearSession("session_expired");
+        return null;
+      }
       saveSession(data.access_token, updatedUser, data.refresh_token || refreshToken, data.expires_at || null);
       return data.access_token as string;
     } catch {
+      clearSession("session_expired");
       return null;
     } finally {
       inflightRefreshPromise = null;
@@ -256,6 +258,9 @@ function isAuthPublicEndpoint(path: string): boolean {
     path.startsWith("/api/v1/auth/login") ||
     path.startsWith("/api/v1/auth/bootstrap-owner") ||
     path.startsWith("/api/v1/auth/refresh") ||
+    path.startsWith("/api/v1/auth/register") ||
+    path.startsWith("/api/v1/auth/verify-email") ||
+    path.startsWith("/api/v1/auth/password-reset") ||
     path.startsWith("/health")
   );
 }
@@ -267,24 +272,31 @@ async function fetchWithAutoRefresh(
 ): Promise<Response> {
   const publicEndpoint = isAuthPublicEndpoint(path);
 
-  // If session restoration is in flight, wait for it before dispatching protected requests
-  if (!publicEndpoint && sessionRestorationPromise) {
-    await sessionRestorationPromise;
+  // If session restoration is needed or in flight, wait for it before dispatching protected requests
+  if (!publicEndpoint) {
+    await restoreSession();
   }
 
   let token = getStoredToken();
 
   // Proactive refresh before dispatching if access token is missing/expired and we have a refresh token
-  if (!publicEndpoint && (!token || isAccessTokenExpiredOrExpiring(token, 20)) && getStoredRefreshToken()) {
-    const refreshed = await refreshAccessTokenSingleFlight();
-    if (refreshed) {
-      token = refreshed;
+  if (!publicEndpoint && (!token || isAccessTokenExpiredOrExpiring(token, 30))) {
+    const refreshToken = getStoredRefreshToken();
+    if (refreshToken) {
+      const refreshed = await refreshAccessTokenSingleFlight();
+      if (refreshed) {
+        token = refreshed;
+      } else {
+        token = null;
+      }
+    } else {
+      token = null;
     }
   }
 
-  // Guard: if signed out and attempting protected request without token or refresh capability,
-  // do not dispatch repeated unauthenticated requests over the wire.
-  if (!publicEndpoint && !token && !getStoredRefreshToken()) {
+  // Guard: if signed out and attempting protected request without valid access token,
+  // do not dispatch unauthenticated request over wire with missing Authorization header.
+  if (!publicEndpoint && !token) {
     clearSession("signed_out");
     throw new Error("Missing Authorization Bearer token.");
   }

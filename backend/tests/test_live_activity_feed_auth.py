@@ -239,3 +239,58 @@ def test_11_layout_and_frontend_contracts(client: TestClient, auth_headers: dict
         assert l.get("actor")
         assert l.get("outcome")
         assert l.get("created_at")
+
+
+def test_12_protected_endpoints_matrix_enforces_bearer_token(client: TestClient, auth_headers: dict) -> None:
+    """Requirement 10: Regression test that all core protected endpoints strictly require valid Bearer token."""
+    protected_paths = [
+        "/api/v1/audit/logs?limit=10",
+        "/api/v1/tasks",
+        "/api/v1/monitoring/overview",
+        "/api/v1/approvals",
+        "/api/v1/caravan/overview",
+    ]
+
+    for path in protected_paths:
+        # A. Missing Authorization header returns 401
+        res_missing = client.get(path)
+        assert res_missing.status_code == 401, f"{path} should reject missing auth"
+        err_msg = _get_err(res_missing)
+        assert "Missing Authorization Bearer token." in err_msg or "Invalid Authorization header" in err_msg
+
+        # B. Malformed Authorization returns 401
+        res_malformed = client.get(path, headers={"Authorization": "Bearer not-a-valid-token"})
+        assert res_malformed.status_code == 401, f"{path} should reject malformed token"
+
+        # C. Valid Authorization succeeds
+        res_valid = client.get(path, headers=auth_headers["owner"])
+        assert res_valid.status_code == 200, f"{path} should succeed with valid auth header"
+
+
+def test_13_logout_revokes_session_and_public_endpoints_accessible(client: TestClient, auth_headers: dict) -> None:
+    """Requirement 10: Logout revokes session preventing reuse, while public endpoints remain accessible."""
+    # 1. Public endpoints must not require Bearer token
+    assert client.get("/health").status_code == 200
+    assert client.get("/health/ready").status_code == 200
+    assert client.get("/health/live").status_code == 200
+
+    # 2. Login a dedicated user to test revocation lifecycle
+    login_resp = client.post("/api/v1/auth/login", json={"username": "owner_admin", "password": "StrongOwnerPassword!2026"})
+    assert login_resp.status_code == 200
+    access_tok = login_resp.json()["access_token"]
+    user_headers = {"Authorization": f"Bearer {access_tok}"}
+
+    # Query before logout succeeds
+    assert client.get("/api/v1/audit/logs?limit=5", headers=user_headers).status_code == 200
+
+    # Logout revokes session
+    logout_resp = client.post("/api/v1/auth/logout", headers=user_headers)
+    assert logout_resp.status_code == 200
+    assert logout_resp.json()["status"] == "revoked"
+
+    # Query after logout is rejected with 401 Session revoked
+    revoked_resp = client.get("/api/v1/audit/logs?limit=5", headers=user_headers)
+    assert revoked_resp.status_code == 401
+    err_msg = _get_err(revoked_resp)
+    assert "revoked" in err_msg.lower() or "not exist" in err_msg.lower()
+
