@@ -155,6 +155,10 @@ export async function waitForSessionRestoration(): Promise<AuthUser | null> {
     return sessionRestorationPromise;
   }
   const token = getStoredToken();
+  const refreshToken = getStoredRefreshToken();
+  if ((!token || isAccessTokenExpiredOrExpiring(token, 45)) && refreshToken) {
+    return restoreSession();
+  }
   return token ? getStoredUser() : null;
 }
 
@@ -410,53 +414,123 @@ export async function fetchAuthBlobUrl(path: string): Promise<string> {
   return URL.createObjectURL(blob);
 }
 
+export interface StreamNeonOptions {
+  prompt: string;
+  agentId: string;
+  conversationId?: string | null;
+  fileIds?: string[];
+  reasoningTier?: number;
+  onDelta: (chunk: string) => void;
+  onMeta?: (meta: any) => void;
+  onDone?: (summary: any) => void;
+  onError?: (err: Error) => void;
+  signal?: AbortSignal;
+}
+
 export async function streamNeon(
-  prompt: string,
-  agentId: string,
-  onDelta: (chunk: string) => void,
-  onMeta?: (meta: any) => void,
-  fileIds?: string[]
+  promptOrOptions: string | StreamNeonOptions,
+  agentIdArg?: string,
+  onDeltaArg?: (chunk: string) => void,
+  onMetaArg?: (meta: any) => void,
+  fileIdsArg?: string[]
 ): Promise<void> {
-  const resp = await fetchWithAutoRefresh(
-    "/api/v1/neon/stream",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        prompt,
-        agent_id: agentId,
-        file_ids: fileIds && fileIds.length > 0 ? fileIds : undefined,
-        enable_web_research: true,
-      }),
-    },
-    { "Content-Type": "application/json" }
-  );
-  if (!resp.ok || !resp.body) {
-    throw new Error(`Stream failed (HTTP ${resp.status})`);
+  const opts: StreamNeonOptions =
+    typeof promptOrOptions === "object"
+      ? promptOrOptions
+      : {
+          prompt: promptOrOptions,
+          agentId: agentIdArg || "AGT-01",
+          onDelta: onDeltaArg || (() => {}),
+          onMeta: onMetaArg,
+          fileIds: fileIdsArg,
+        };
+
+  const {
+    prompt,
+    agentId,
+    conversationId,
+    fileIds,
+    reasoningTier,
+    onDelta,
+    onMeta,
+    onDone,
+    onError,
+    signal,
+  } = opts;
+
+  // 30-second timeout controller combined with caller's signal
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    timeoutController.abort(new Error("NEON streaming request timed out after 30 seconds."));
+  }, 30000);
+
+  const abortListener = () =>
+    timeoutController.abort(signal?.reason || new Error("Streaming aborted by user."));
+  if (signal) {
+    if (signal.aborted) {
+      clearTimeout(timeoutId);
+      throw signal.reason || new Error("Streaming aborted.");
+    }
+    signal.addEventListener("abort", abortListener);
   }
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let currentEvent = "message";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        currentEvent = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        const raw = line.slice(5).trim();
-        if (!raw) continue;
-        try {
-          const parsed = JSON.parse(raw);
-          if (currentEvent === "delta" && parsed.text) onDelta(parsed.text);
-          if (currentEvent === "metadata" && onMeta) onMeta(parsed);
-        } catch {
-          // ignore malformed keepalives
+
+  try {
+    const resp = await fetchWithAutoRefresh(
+      "/api/v1/neon/stream",
+      {
+        method: "POST",
+        signal: timeoutController.signal,
+        body: JSON.stringify({
+          prompt,
+          agent_id: agentId,
+          conversation_id: conversationId || undefined,
+          file_ids: fileIds && fileIds.length > 0 ? fileIds : undefined,
+          reasoning_tier: reasoningTier,
+          enable_web_research: true,
+        }),
+      },
+      { "Content-Type": "application/json" }
+    );
+    if (!resp.ok || !resp.body) {
+      const errText = await resp.text().catch(() => "");
+      throw new Error(`Stream failed (HTTP ${resp.status}): ${errText || resp.statusText}`);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent = "message";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          currentEvent = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+          try {
+            const parsed = JSON.parse(raw);
+            if (currentEvent === "delta" && parsed.text) onDelta(parsed.text);
+            if (currentEvent === "metadata" && onMeta) onMeta(parsed);
+            if (currentEvent === "done" && onDone) onDone(parsed);
+          } catch {
+            // ignore malformed keepalives
+          }
         }
       }
+    }
+  } catch (err: any) {
+    if (onError) {
+      onError(err);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+    if (signal) {
+      signal.removeEventListener("abort", abortListener);
     }
   }
 }

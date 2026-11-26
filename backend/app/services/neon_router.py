@@ -6,7 +6,7 @@ import json
 import time
 import uuid
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -895,6 +895,8 @@ def stream_live_neon_events(
     max_output_tokens: int = 1024,
     tenant_id: str | None = None,
     actor: str = "SYSTEM",
+    conversation_id: str | None = None,
+    principal: Principal | None = None,
     gemini_client: GeminiClient | None = None,
 ) -> Generator[str, None, None]:
     """Stream live SSE frames via Gemini `streamGenerateContent?alt=sse` when available, falling back cleanly."""
@@ -902,6 +904,46 @@ def stream_live_neon_events(
     agent = db.get(AgentRecord, agent_id)
     if agent is None:
         raise NotFoundError(f"Agent '{agent_id}' not found in catalog.")
+
+    conv: ConversationRecord | None = None
+    if conversation_id and tenant_id:
+        conv = db.execute(
+            select(ConversationRecord).where(
+                ConversationRecord.conversation_id == conversation_id,
+                ConversationRecord.tenant_id == tenant_id,
+            )
+        ).scalar_one_or_none()
+        if conv is None:
+            raise NotFoundError(f"Conversation '{conversation_id}' not found.")
+
+        # Persist user message
+        clean_user_content = sanitize_prompt_input(prompt, reject_injection=True)
+        user_msg = ConversationMessageRecord(
+            message_id=f"cmsg_{uuid.uuid4().hex[:16]}",
+            conversation_id=conversation_id,
+            role="user",
+            content=clean_user_content,
+            token_count=max(1, len(clean_user_content.split())),
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(user_msg)
+        db.flush()
+
+        # Augment context with previous conversation history if not already provided
+        if not context or "conversation_history" not in context:
+            history_rows = db.execute(
+                select(ConversationMessageRecord)
+                .where(ConversationMessageRecord.conversation_id == conversation_id)
+                .order_by(ConversationMessageRecord.created_at.desc())
+                .limit(12)
+            ).scalars().all()
+            history = [
+                {"role": m.role, "content": m.content}
+                for m in reversed(history_rows)
+                if m.message_id != user_msg.message_id
+            ]
+            if history:
+                context = {**(context or {}), "conversation_history": history}
 
     tier = max(1, min(5, int(reasoning_tier or agent.default_reasoning_tier)))
     primary_model = get_reasoning_tiers(settings)[tier]["primary_model"]
@@ -911,7 +953,7 @@ def stream_live_neon_events(
         interception = intercept_and_redact_secrets(
             clean_prompt,
             db=db if tenant_id else None,
-            principal=None,
+            principal=principal,
             settings=settings,
             source_context=f"neon_stream:{agent_id}",
             auto_vault=False,
@@ -970,11 +1012,54 @@ def stream_live_neon_events(
                         usage=usage,
                         latency_ms=latency_ms,
                     )
-                    db.commit()
+                if conv:
+                    full_asst_text = "".join(collected)
+                    asst_msg = ConversationMessageRecord(
+                        message_id=f"cmsg_{uuid.uuid4().hex[:16]}",
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=full_asst_text,
+                        model=target_model,
+                        token_count=est_comp,
+                        created_at=datetime.now(timezone.utc) + timedelta(milliseconds=50),
+                    )
+                    db.add(asst_msg)
+                    conv.updated_at = datetime.now(timezone.utc)
+                    try:
+                        conv_meta = json.loads(conv.metadata_json or "{}")
+                    except Exception:
+                        conv_meta = {}
+                    msg_extras = conv_meta.get("message_extras")
+                    if not isinstance(msg_extras, dict):
+                        msg_extras = {}
+                    msg_extras[asst_msg.message_id] = {
+                        "execution_id": f"exec_{uuid.uuid4().hex[:12]}",
+                        "provider": "gemini",
+                        "model": target_model,
+                        "primary_model": primary_model,
+                        "execution_mode": "gemini_live",
+                        "reasoning_tier": tier,
+                        "fallback_used": target_model != primary_model,
+                    }
+                    conv.metadata_json = json.dumps(conv_meta)
+                db.commit()
                 yield f"event: done\ndata: {json.dumps({'usage': usage, 'latency_ms': latency_ms, 'estimated_cost_usd': cost, 'fallback_used': target_model != primary_model})}\n\n"
                 return
             except Exception:
                 if collected:
+                    if conv:
+                        full_asst_text = "".join(collected)
+                        asst_msg = ConversationMessageRecord(
+                            message_id=f"cmsg_{uuid.uuid4().hex[:16]}",
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=full_asst_text,
+                            model=target_model,
+                            token_count=max(1, len(full_asst_text.split())),
+                        )
+                        db.add(asst_msg)
+                        conv.updated_at = datetime.now(timezone.utc)
+                        db.commit()
                     # Already emitted live deltas; close stream cleanly
                     yield f"event: done\ndata: {json.dumps({'interrupted': True})}\n\n"
                     return
@@ -995,6 +1080,38 @@ def stream_live_neon_events(
         actor=actor,
         gemini_client=gemini_client,
     )
+    if conv:
+        asst_text = (result.get("output") or "").strip()
+        asst_msg = ConversationMessageRecord(
+            message_id=f"cmsg_{uuid.uuid4().hex[:16]}",
+            conversation_id=conversation_id,
+            role="assistant",
+            content=asst_text,
+            model=result.get("model") or primary_model,
+            token_count=int(result.get("usage", {}).get("completion_tokens", 0)),
+            created_at=datetime.now(timezone.utc) + timedelta(milliseconds=50),
+        )
+        db.add(asst_msg)
+        conv.updated_at = datetime.now(timezone.utc)
+        try:
+            conv_meta = json.loads(conv.metadata_json or "{}")
+        except Exception:
+            conv_meta = {}
+        msg_extras = conv_meta.get("message_extras")
+        if not isinstance(msg_extras, dict):
+            msg_extras = {}
+        msg_extras[asst_msg.message_id] = {
+            "execution_id": result.get("execution_id"),
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+            "primary_model": result.get("primary_model"),
+            "execution_mode": result.get("execution_mode"),
+            "reasoning_tier": tier,
+            "fallback_used": result.get("fallback_used", False),
+            "provenance": result.get("provenance"),
+            "research_sources": result.get("research_sources", []),
+        }
+        conv.metadata_json = json.dumps(conv_meta)
     db.commit()
     yield from stream_neon_events(result)
 

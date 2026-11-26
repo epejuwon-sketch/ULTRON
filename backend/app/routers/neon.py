@@ -153,6 +153,10 @@ def api_neon_stream(
     routing = route_objective(body.prompt, settings=settings, preferred_agent_id=body.agent_id)
     target_agent = body.agent_id or routing["selected_agent_id"]
     tier = body.reasoning_tier or routing["reasoning_tier"]
+
+    if body.conversation_id:
+        get_conversation(db, principal=principal, conversation_id=body.conversation_id)
+
     return StreamingResponse(
         stream_live_neon_events(
             db,
@@ -166,6 +170,8 @@ def api_neon_stream(
             max_output_tokens=body.max_output_tokens,
             tenant_id=principal.tenant_id,
             actor=principal.username,
+            conversation_id=body.conversation_id,
+            principal=principal,
         ),
         media_type="text/event-stream",
     )

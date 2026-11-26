@@ -18,7 +18,14 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import { apiFetch, resolveGeminiProviderStatus, streamNeon } from "../lib/api";
+import {
+  apiFetch,
+  clearSession,
+  getStoredToken,
+  resolveGeminiProviderStatus,
+  streamNeon,
+  waitForSessionRestoration,
+} from "../lib/api";
 import { getModule, getSubPage } from "../catalog/navigation";
 import { getClientDeviceContext, monitorOrbitHandoff, parseUniversalAppLaunchCommand } from "../components/devices/OrbitAppPermissionsSection";
 import type { AttachedFileRef, ModulePageProps } from "../types/module";
@@ -192,22 +199,57 @@ export default function NeonModulePage({
   const [mmResult, setMmResult] = useState<any>(null);
   const [copiedFlag, setCopiedFlag] = useState(false);
 
+  const [tokenPresent, setTokenPresent] = useState(() => Boolean(getStoredToken()));
+  const [loading, setLoading] = useState(false);
+  const streamAbortControllerRef = useRef<AbortController | null>(null);
+
   async function loadBase(discoverLive = false) {
     setError("");
     if (discoverLive) setDiscoveringModels(true);
+    setLoading(true);
+
+    try {
+      await waitForSessionRestoration();
+    } catch {
+      // session restoration finished or resolved
+    }
+
+    const token = getStoredToken();
+    setTokenPresent(Boolean(token));
+
+    // Public health can always be fetched
+    try {
+      const hRes = await apiFetch<any>("/health").catch(() => null);
+      setHealth(hRes);
+    } catch {
+      // ignore
+    }
+
+    // Guard: if unauthenticated, do not dispatch protected requests or surface raw Bearer token errors
+    if (!token) {
+      setConversations([]);
+      setAgents([]);
+      setModels(null);
+      setTiers(null);
+      setUsage(null);
+      setGeminiDiag(null);
+      setLoading(false);
+      if (discoverLive) setDiscoveringModels(false);
+      return;
+    }
+
     const authErrors: string[] = [];
     const trackErr = <T,>(fallback: T) => (err: any): T => {
       if (err?.message) authErrors.push(String(err.message));
       return fallback;
     };
     try {
-      const [cRes, aRes, mRes, tRes, uRes, hRes, gRes] = await Promise.all([
+      const [cRes, aRes, mRes, tRes, uRes, gRes] = await Promise.all([
         apiFetch<any>("/api/v1/neon/conversations").catch(trackErr({ conversations: [] })),
         apiFetch<any>("/api/v1/agents").catch(trackErr({ agents: [] })),
         apiFetch<any>("/api/v1/neon/models").catch(trackErr(null)),
         apiFetch<any>("/api/v1/neon/tiers").catch(trackErr(null)),
         apiFetch<any>("/api/v1/neon/usage").catch(trackErr(null)),
-        apiFetch<any>("/health").catch(() => null),
         apiFetch<any>(`/api/v1/neon/gemini/diagnostics?discover=${discoverLive ? "true" : "false"}`).catch(trackErr(null)),
       ]);
       const list = cRes.conversations || [];
@@ -217,7 +259,6 @@ export default function NeonModulePage({
       setModels(mRes);
       setTiers(tRes);
       setUsage(uRes);
-      setHealth(hRes);
       setGeminiDiag(gRes);
       if (authErrors.length >= 3) {
         setError(authErrors[0]);
@@ -228,6 +269,7 @@ export default function NeonModulePage({
     } catch (e: any) {
       setError(e.message);
     } finally {
+      setLoading(false);
       if (discoverLive) setDiscoveringModels(false);
     }
   }
@@ -235,6 +277,11 @@ export default function NeonModulePage({
   async function loadMessages(cid: string) {
     if (!cid) return;
     try {
+      await waitForSessionRestoration();
+      if (!getStoredToken()) {
+        setMessages([]);
+        return;
+      }
       const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}`);
       const loadedMsgs: any[] = res.messages || [];
       setMessages(loadedMsgs);
@@ -501,7 +548,12 @@ export default function NeonModulePage({
     }
   }
 
-  function handleOpenVoiceMode() {
+  async function handleOpenVoiceMode() {
+    await waitForSessionRestoration();
+    if (!getStoredToken()) {
+      pushToast("Authentication required for Voice Mode. Please sign in.", "error");
+      return;
+    }
     voiceModeOpenRef.current = true;
     voiceMutedRef.current = false;
     setVoiceMuted(false);
@@ -592,6 +644,12 @@ export default function NeonModulePage({
 
   async function handleSendVoice(spokenPrompt: string) {
     if (!spokenPrompt.trim()) return;
+    await waitForSessionRestoration();
+    if (!getStoredToken()) {
+      pushToast("Authentication required to send voice messages. Please sign in.", "error");
+      setVoiceState("idle");
+      return;
+    }
     setVoiceState("processing");
     try {
       let cid = activeId;
@@ -659,6 +717,12 @@ export default function NeonModulePage({
     e.target.value = "";
     if (fileList.length === 0) return;
 
+    await waitForSessionRestoration();
+    if (!getStoredToken()) {
+      pushToast("Authentication required to attach files. Please sign in.", "error");
+      return;
+    }
+
     const MAX_BYTES = 10 * 1024 * 1024;
     setUploadingFiles(true);
     const uploaded: AttachedFileRef[] = [];
@@ -701,6 +765,13 @@ export default function NeonModulePage({
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() && attachedFiles.length === 0) return;
+
+    await waitForSessionRestoration();
+    if (!getStoredToken()) {
+      setError("Active authenticated session required. Please sign in.");
+      return;
+    }
+
     setSending(true);
     setError("");
     setWarning("");
@@ -733,32 +804,54 @@ export default function NeonModulePage({
             : `ORBIT recognised **${res.app_name}** (${res.permission_mode}). ${res.launch_url_resolved ? "Launch target resolved — tap Open below to attempt OS handoff (PWAs cannot independently confirm whether the OS opened the app)." : "No launch URL is registered yet; register its URL scheme or Universal Link in the ORBIT App Library."}`;
         setMessages((prev) => [
           ...prev,
-          { message_id: `u_${Date.now()}`, role: "user", content: promptText },
-          { message_id: `a_${Date.now() + 1}`, role: "assistant", content: summary, model: "ORBIT 2.0 Resolver" },
+          { message_id: `u_${Date.now()}`, role: "user", content: promptText, created_at: new Date().toISOString() },
+          { message_id: `a_${Date.now() + 1}`, role: "assistant", content: summary, model: "ORBIT 2.0 Resolver", created_at: new Date().toISOString() },
         ]);
         setInput("");
         setSending(false);
         return;
       }
+
+      // Ensure active conversation ID exists for both streaming and persisted
+      let cid = activeId;
+      if (!cid) {
+        const created = await apiFetch<any>("/api/v1/neon/conversations", {
+          method: "POST",
+          body: { title: promptText.slice(0, 48), agent_id: selectedAgent },
+        });
+        cid = created.conversation_id;
+        setActiveId(cid);
+        loadBase();
+      }
+
       if (useStream) {
         const uId = `u_${Date.now()}`;
         const aId = `a_${Date.now() + 1}`;
         setMessages((prev) => [
           ...prev,
-          { message_id: uId, role: "user", content: promptText },
-          { message_id: aId, role: "assistant", content: "", model: "streaming..." },
+          { message_id: uId, role: "user", content: promptText, created_at: new Date().toISOString() },
+          { message_id: aId, role: "assistant", content: "", model: "streaming...", created_at: new Date().toISOString() },
         ]);
+        setInput("");
+        setAttachedFiles([]);
+
+        const abortCtrl = new AbortController();
+        streamAbortControllerRef.current = abortCtrl;
         let streamedText = "";
-        await streamNeon(
-          promptText,
-          selectedAgent,
-          (delta) => {
+
+        await streamNeon({
+          prompt: promptText,
+          agentId: selectedAgent,
+          conversationId: cid,
+          fileIds: fileIds.length > 0 ? fileIds : undefined,
+          signal: abortCtrl.signal,
+          onDelta: (delta) => {
             streamedText += delta;
             setMessages((prev) =>
               prev.map((m) => (m.message_id === aId ? { ...m, content: (m.content || "") + delta } : m))
             );
           },
-          (meta) => {
+          onMeta: (meta) => {
             setMessages((prev) =>
               prev.map((m) =>
                 m.message_id === aId ? { ...m, model: `${meta.model} (${meta.execution_mode})` } : m
@@ -775,8 +868,13 @@ export default function NeonModulePage({
               },
             }));
           },
-          fileIds
-        );
+          onDone: () => {
+            if (cid) {
+              loadMessages(cid);
+            }
+          },
+        });
+
         if (!streamedText.trim()) {
           setMessages((prev) =>
             prev.map((m) =>
@@ -791,16 +889,6 @@ export default function NeonModulePage({
           );
         }
       } else {
-        let cid = activeId;
-        if (!cid) {
-          const created = await apiFetch<any>("/api/v1/neon/conversations", {
-            method: "POST",
-            body: { title: promptText.slice(0, 48), agent_id: selectedAgent },
-          });
-          cid = created.conversation_id;
-          setActiveId(cid);
-          await loadBase();
-        }
         const res = await apiFetch<any>(`/api/v1/neon/conversations/${cid}/messages`, {
           method: "POST",
           body: {
@@ -859,15 +947,25 @@ export default function NeonModulePage({
       setInput("");
       setAttachedFiles([]);
     } catch (err: any) {
-      setError(err.message);
-      pushToast(err.message, "error");
+      if (err?.name === "AbortError" || err?.message?.includes("aborted")) {
+        pushToast("NEON streaming cancelled.", "info");
+      } else {
+        setError(err.message);
+        pushToast(err.message, "error");
+      }
     } finally {
       setSending(false);
+      streamAbortControllerRef.current = null;
     }
   }
 
   async function createConversation(e: React.FormEvent) {
     e.preventDefault();
+    await waitForSessionRestoration();
+    if (!getStoredToken()) {
+      pushToast("Authentication required to create a new conversation.", "error");
+      return;
+    }
     try {
       const created = await apiFetch<any>("/api/v1/neon/conversations", {
         method: "POST",
@@ -903,6 +1001,11 @@ export default function NeonModulePage({
   async function handleMultimodalUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    await waitForSessionRestoration();
+    if (!getStoredToken()) {
+      pushToast("Authentication required for multimodal analysis. Please sign in.", "error");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = async () => {
       const b64 = String(reader.result || "").split(",")[1] || "";
@@ -949,11 +1052,32 @@ export default function NeonModulePage({
         }
       />
 
-      {error && <ErrorState message={error} onRetry={() => loadBase(false)} />}
+      {error && !/authorization|token|unauthorized|401|session expired/i.test(error) && (
+        <ErrorState message={error} onRetry={() => loadBase(false)} />
+      )}
       {warning && <div className="alert-box alert-warn">{warning}</div>}
 
-      {/* 9. NEON CHAT */}
-      {page.id === "chat" && (
+      {(!tokenPresent && !getStoredToken()) || /authorization|token|unauthorized|401|session expired/i.test(error) ? (
+        <div className="card">
+          <div className="card-title"><span>NEON Intelligence // {page.label}</span></div>
+          <EmptyState
+            title="Authentication Required"
+            description="The NEON Chat Console requires an active authenticated session. Please sign in to converse with specialist agents and access reasoning streams."
+            action={
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => clearSession("reauth_required")}
+              >
+                Sign In
+              </button>
+            }
+          />
+        </div>
+      ) : (
+        <>
+          {/* 9. NEON CHAT */}
+          {page.id === "chat" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="row-between">
             <div className="row">
@@ -1656,6 +1780,8 @@ export default function NeonModulePage({
             </button>
           </div>
         </div>
+      )}
+        </>
       )}
 
       {/* FULL-SCREEN DEDICATED VOICE INTERFACE */}
