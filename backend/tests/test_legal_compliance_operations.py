@@ -141,13 +141,13 @@ def test_api_officer_registration_and_under_18_safeguard(
     client: TestClient,
     auth_headers: dict[str, dict[str, str]],
 ):
-    """Capability 4: Register adult guardian, then minor founder with strict legal capacity enforcement."""
+    """Capability 4: Register adult guardian, then minor shareholder and adult directors with CAMA 2020 §20(1)(a) enforcement."""
     headers = auth_headers["owner"]
     incorp = client.get("/api/v1/legal/incorporation", headers=headers).json()
     draft_id = incorp["draft_id"]
 
-    # 1. Attempt minor director registration WITHOUT adult guardian -> MUST FAIL (422)
-    bad_minor = client.post(
+    # 1. Attempt minor DIRECTOR registration -> MUST FAIL (422) under CAMA 2020 §20(1)(a)
+    bad_minor_director = client.post(
         "/api/v1/legal/officers",
         headers=headers,
         json={
@@ -161,14 +161,36 @@ def test_api_officer_registration_and_under_18_safeguard(
             "nin": "91827364501",
             "shares_allocated": 700000,
             "equity_percentage": 70.0,
+            "guardian_officer_id": None,
+        },
+    )
+    assert bad_minor_director.status_code == 422
+    err_body = bad_minor_director.json()
+    assert "CAMA_2020_SECTION_20_1_A" in str(err_body)
+    assert "INFANT_DIRECTORSHIP_DISQUALIFICATION" in str(err_body)
+
+    # 2. Attempt minor SHAREHOLDER registration WITHOUT adult guardian -> MUST FAIL (422)
+    bad_minor_shareholder = client.post(
+        "/api/v1/legal/officers",
+        headers=headers,
+        json={
+            "draft_id": draft_id,
+            "officer_type": "SHAREHOLDER",
+            "full_legal_name": "Epejuwon Junior",
+            "date_of_birth": "2010-06-12",  # 16 years old
+            "residential_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+            "email": "junior@caravan.africa",
+            "phone": "+2348021112233",
+            "nin": "91827364501",
+            "shares_allocated": 700000,
+            "equity_percentage": 70.0,
             "guardian_officer_id": None,  # Missing guardian!
         },
     )
-    assert bad_minor.status_code == 422
-    err_body = bad_minor.json()
-    assert "INFANT_CONTRACTUAL_INCAPACITY" in str(err_body)
+    assert bad_minor_shareholder.status_code == 422
+    assert "INFANT_EQUITY_TRUST_CAPACITY" in str(bad_minor_shareholder.json())
 
-    # 2. Register Adult Legal Guardian first
+    # 3. Register Adult Legal Guardian first
     guardian_resp = client.post(
         "/api/v1/legal/officers",
         headers=headers,
@@ -189,13 +211,13 @@ def test_api_officer_registration_and_under_18_safeguard(
     guardian_id = guardian_resp.json()["officer_id"]
     assert guardian_resp.json()["is_under_18"] is False
 
-    # 3. Now register minor founder WITH verified guardian -> MUST SUCCEED (201)
+    # 4. Register minor founder as SHAREHOLDER / BENEFICIAL_OWNER WITH verified guardian -> MUST SUCCEED (201)
     minor_resp = client.post(
         "/api/v1/legal/officers",
         headers=headers,
         json={
             "draft_id": draft_id,
-            "officer_type": "DIRECTOR",
+            "officer_type": "SHAREHOLDER",
             "full_legal_name": "Epejuwon Junior",
             "date_of_birth": "2010-06-12",  # 16 years old
             "residential_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
@@ -212,6 +234,26 @@ def test_api_officer_registration_and_under_18_safeguard(
     assert minor_data["is_under_18"] is True
     assert minor_data["guardian_officer_id"] == guardian_id
     assert minor_data["has_significant_control"] is True  # 70% equity >= 5% PSC threshold
+
+    # 5. Register Adult Director to satisfy CAMA §271 governance
+    adult_director = client.post(
+        "/api/v1/legal/officers",
+        headers=headers,
+        json={
+            "draft_id": draft_id,
+            "officer_type": "DIRECTOR",
+            "full_legal_name": "Babatunde Epejuwon",
+            "date_of_birth": "1980-11-15",  # Adult (45 years old)
+            "residential_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+            "email": "director@caravan.africa",
+            "phone": "+2348099887766",
+            "nin": "71829304152",
+            "shares_allocated": 200000,
+            "equity_percentage": 20.0,
+        },
+    )
+    assert adult_director.status_code == 201
+    assert adult_director.json()["is_under_18"] is False
 
 
 def test_api_statutory_policies_generation(

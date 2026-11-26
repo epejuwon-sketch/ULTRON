@@ -47,8 +47,8 @@ STATUTORY_FRAMEWORK_SOURCES = {
         "authority": "Corporate Affairs Commission (CAC), Nigeria",
         "official_portal": "https://pre.cac.gov.ng",
         "key_sections": [
-            {"section": "§18 - §27", "topic": "Incorporation Requirements & Memorandum of Association", "details": "Minimum authorized share capital (N100,000 for private companies), model Articles of Association, and electronic filing provisions."},
-            {"section": "§20(1)(a)", "topic": "Disqualification of Infant Directors", "details": "An infant (under the age of 18 years) lacks commercial legal capacity to serve as sole corporate director without adult guardian/co-director representation."},
+            {"section": "§18 - §27", "topic": "Incorporation Requirements & Memorandum of Association", "details": "Minimum issued share capital (N100,000 for private companies under CAMA 2020 §27(2); authorized share capital abolished), model Articles of Association, and electronic filing provisions."},
+            {"section": "§20(1)(a)", "topic": "Disqualification of Infant Directors", "details": "An infant (under the age of 18 years) is strictly disqualified by law from appointment as a director of a company. Under §20(2) and §105, an infant may participate as a Shareholder and Beneficial Owner (PSC) through an adult legal guardian/trustee holding shares in trust until majority."},
             {"section": "§119 - §123", "topic": "Register of Persons with Significant Control (PSC)", "details": "Mandatory disclosure and maintenance of statutory register for any individual holding >=5% shares, voting rights, or significant control."},
             {"section": "§375", "topic": "Statutory Duty to Keep Accounting Records", "details": "Accounting and corporate transaction records must be retained for at least 6 years from the date on which they are made."},
             {"section": "§417 - §425", "topic": "Annual Returns Statutory Filings", "details": "First annual return due within 18 months of incorporation; subsequent returns due within 42 days of Annual General Meeting (AGM)."},
@@ -59,7 +59,7 @@ STATUTORY_FRAMEWORK_SOURCES = {
         "authority": "Nigeria Data Protection Commission (NDPC)",
         "official_portal": "https://ndpc.gov.ng",
         "key_sections": [
-            {"section": "§24", "topic": "Principles of Personal Data Processing", "details": "Fairness, transparency, purpose limitation, data minimization, storage limitation, and cryptographic security."},
+            {"section": "§24", "topic": "Principles of Personal Data Processing", "details": "Fairness, transparency, purpose limitation, data minimization vs CAMA audit retention, storage limitation, and cryptographic security."},
             {"section": "§29 - §33", "topic": "Data Protection Impact Assessment (DPIA)", "details": "Mandatory prior DPIA for automated decision-making, eligibility scoring, cross-border transfers, and systematic monitoring of funding applicants."},
             {"section": "§40", "topic": "Mandatory Breach Notification", "details": "Data controller must notify NDPC within 72 hours of becoming aware of a personal data breach impacting rights of data subjects."},
             {"section": "§44 - §48", "topic": "Data Controllers & Processors of Major Importance (DPMI)", "details": "Requirement to register with NDPC, appoint a Data Protection Officer (DPO), and file annual compliance audit returns by March 15."},
@@ -72,7 +72,7 @@ STATUTORY_FRAMEWORK_SOURCES = {
         "key_sections": [
             {"section": "CITA §55", "topic": "Annual Companies Income Tax Filing", "details": "Filing of audited financial statements and CIT returns due within 6 months of accounting year-end (e.g. June 30)."},
             {"section": "VAT Act §15", "topic": "Monthly VAT Returns", "details": "Monthly VAT returns and remittance due on or before the 21st day of the month following the transaction."},
-            {"section": "Stamp Duties Act", "topic": "Stamp Duty on Share Capital", "details": "Ad valorem stamp duty payable to FIRS on authorized share capital upon incorporation or capital increase."},
+            {"section": "Stamp Duties Act", "topic": "Stamp Duty on Share Capital", "details": "Ad valorem stamp duty payable to FIRS on issued share capital upon incorporation or capital increase."},
         ],
     },
     "LEGAL_CAPACITY_SAFEGUARDS": {
@@ -80,7 +80,7 @@ STATUTORY_FRAMEWORK_SOURCES = {
         "authority": "Nigerian Commercial Law Jurisprudence",
         "key_sections": [
             {"section": "Infants Relief Act 1874 §1", "topic": "Void Contracts of Infants", "details": "Contracts entered into by infants for the repayment of money lent or to be lent, or for goods supplied other than necessaries, are absolutely void."},
-            {"section": "Corporate Governance Rule", "topic": "Founder Age Safeguard Protocol", "details": "Founders under 18 years cannot execute binding commercial debts, venture equity agreements, or directorship declarations without an authorized adult legal guardian or co-director."},
+            {"section": "CAMA 2020 §20(1)(a) & §20(2)", "topic": "Founder Age Safeguard Protocol", "details": "An infant is strictly disqualified from appointment as a company director under CAMA 2020 §20(1)(a). Under §20(2), a minor founder may hold equity and beneficial ownership as a Shareholder / PSC via an adult legal guardian trustee."},
         ],
     },
 }
@@ -436,26 +436,37 @@ def register_officer_with_safeguards(
     age = _calculate_age(date_of_birth)
     is_under_18 = age < 18
 
-    # Enforce Infants Relief Act 1874 and CAMA 2020 §20(1) capacity safeguard
+    # Enforce Infants Relief Act 1874 and CAMA 2020 §20(1)(a) / §20(2) capacity safeguard
     if is_under_18:
-        if officer_type in {"DIRECTOR", "SOLE_SUBSCRIBER"}:
-            if not guardian_officer_id:
-                raise ValidationError(
-                    f"Under CAMA 2020 §20(1)(a) and the Infants Relief Act, an individual aged {age} lacks legal capacity to act as sole director or execute binding equity contracts without a verified adult legal guardian co-signatory.",
-                    details={
-                        "age": age,
-                        "officer_type": officer_type,
-                        "legal_safeguard": "INFANT_CONTRACTUAL_INCAPACITY",
-                        "requirement": "Adult legal guardian (>=18 years) must be linked via guardian_officer_id.",
-                    },
-                )
-            
-            # Verify guardian exists and is >= 18
-            guardian = db.get(LegalOfficerRecord, guardian_officer_id)
-            if not guardian or guardian.tenant_id != principal.tenant_id:
-                raise ValidationError("Specified adult legal guardian record not found.", details={"guardian_id": guardian_officer_id})
-            if guardian.is_under_18:
-                raise ValidationError("Specified legal guardian cannot be a minor.", details={"guardian_age": guardian.date_of_birth})
+        if officer_type == "DIRECTOR":
+            raise ValidationError(
+                f"Under CAMA 2020 §20(1)(a), an individual aged {age} is strictly disqualified by law from appointment as a director of a company. An infant cannot serve as a corporate director even with guardian consent.",
+                details={
+                    "age": age,
+                    "officer_type": officer_type,
+                    "statutory_prohibition": "CAMA_2020_SECTION_20_1_A",
+                    "legal_safeguard": "INFANT_DIRECTORSHIP_DISQUALIFICATION",
+                    "guidance": "Under CAMA 2020 §20(2) and §105, a minor may participate as a Shareholder and Beneficial Owner (PSC) through an adult legal guardian / trustee holding shares in trust, while adult directors (>=18 years) must be appointed for corporate management.",
+                },
+            )
+
+        if not guardian_officer_id:
+            raise ValidationError(
+                f"Under CAMA 2020 §20(2) and the Infants Relief Act 1874, an individual aged {age} holding equity or beneficial ownership must have a verified adult legal guardian / trustee co-signatory to hold shares in trust until majority.",
+                details={
+                    "age": age,
+                    "officer_type": officer_type,
+                    "legal_safeguard": "INFANT_EQUITY_TRUST_CAPACITY",
+                    "requirement": "Adult legal guardian (>=18 years) must be linked via guardian_officer_id.",
+                },
+            )
+
+        # Verify guardian exists and is >= 18
+        guardian = db.get(LegalOfficerRecord, guardian_officer_id)
+        if not guardian or guardian.tenant_id != principal.tenant_id:
+            raise ValidationError("Specified adult legal guardian record not found.", details={"guardian_id": guardian_officer_id})
+        if guardian.is_under_18:
+            raise ValidationError("Specified legal guardian cannot be a minor.", details={"guardian_age": guardian.date_of_birth})
 
     has_significant_control = (equity_percentage >= 5.0) or (shares_allocated >= 50000)
 
