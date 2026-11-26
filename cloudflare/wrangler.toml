@@ -1,0 +1,13 @@
+name = "ultron-os-2026-edge-gateway"
+main = "worker.ts"
+compatibility_date = "2026-11-01"
+
+[vars]
+RATE_LIMIT_PER_MIN = "120"
+# Set ULTRON_ORIGIN_URL via `wrangler secret put ULTRON_ORIGIN_URL` or Cloudflare Dashboard
+# Example: https://ultron-os-2026.vercel.app
+
+# Optional Workers KV binding for distributed edge rate limiting:
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT_KV"
+# id = "<CLOUDFLARE_KV_NAMESPACE_ID>"
