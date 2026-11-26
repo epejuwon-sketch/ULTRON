@@ -84,19 +84,29 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
   async function loadCommandCentre() {
     setLoading(true);
     setError("");
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 10000);
+
     try {
       const [res, biRes, drRes, repRes] = await Promise.all([
-        apiFetch<any>(`/api/v1/caravan/command-centre?days=${days}`),
-        apiFetch<any>(`/api/v1/caravan/business-intelligence?period=${biPeriod}`).catch(() => null),
-        apiFetch<any>("/api/v1/caravan/growth/drafts").catch(() => ({ drafts: [] })),
-        apiFetch<any>("/api/v1/caravan/opportunities/reports").catch(() => ({ reports: [] })),
+        apiFetch<any>(`/api/v1/caravan/command-centre?days=${days}`, { signal: controller.signal }),
+        apiFetch<any>(`/api/v1/caravan/business-intelligence?period=${biPeriod}`, { signal: controller.signal }).catch(() => null),
+        apiFetch<any>("/api/v1/caravan/growth/drafts", { signal: controller.signal }).catch(() => ({ drafts: [] })),
+        apiFetch<any>("/api/v1/caravan/opportunities/reports", { signal: controller.signal }).catch(() => ({ reports: [] })),
       ]);
+      clearTimeout(timeoutId);
       setData(res);
       setBi(biRes);
       setDrafts(drRes?.drafts || []);
       setReports(repRes?.reports || []);
     } catch (err: any) {
-      const msg = err?.message || "Failed to load Caravan Command Centre.";
+      clearTimeout(timeoutId);
+      const isAbort = err?.name === "AbortError" || err?.message?.includes("aborted");
+      const msg = isAbort
+        ? "Telemetry request timed out after 10 seconds. Verify connection to the Caravan backend."
+        : err?.message || "Failed to load Caravan Command Centre telemetry.";
       setError(msg);
       pushToast(msg, "error");
     } finally {
@@ -141,22 +151,38 @@ export function CaravanCommandCentre({ onNavigateSubPage }: CaravanCommandCentre
 
   if (loading && !data) {
     return (
-      <div className="card muted" style={{ fontSize: 13 }}>
-        Loading Caravan Command Centre telemetry...
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 18 }}>
+        <div className="row" style={{ gap: 10, color: "var(--text-secondary)", fontSize: 13 }}>
+          <RefreshCw size={14} className="spin" style={{ color: "#38bdf8" }} />
+          <span>Loading Caravan Command Centre telemetry...</span>
+        </div>
+        <div className="muted" style={{ fontSize: 11 }}>
+          Connecting to CARAVAN bridge &amp; synthesizing operational metrics. If this takes longer than expected, you can retry below.
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={loadCommandCentre}>
+            <RefreshCw size={12} /> Retry Now
+          </button>
+        </div>
       </div>
     );
   }
 
   if (error && !data) {
     return (
-      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ color: "#f87171", fontSize: 13 }}>
-          <AlertTriangle size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
-          {error}
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 18 }}>
+        <div style={{ color: "#f87171", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+          <span>{error}</span>
         </div>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={loadCommandCentre}>
-          <RefreshCw size={12} /> Retry
-        </button>
+        <div className="muted" style={{ fontSize: 11 }}>
+          Caravan Command Centre telemetry could not be retrieved from the operational bridge.
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={loadCommandCentre}>
+            <RefreshCw size={12} /> Retry
+          </button>
+        </div>
       </div>
     );
   }

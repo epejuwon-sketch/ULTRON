@@ -264,6 +264,7 @@ export async function apiFetch<T = any>(
     body?: any;
     isFormData?: boolean;
     headers?: Record<string, string>;
+    signal?: AbortSignal;
   } = {}
 ): Promise<T> {
   const headers: Record<string, string> = { ...(options.headers || {}) };
@@ -282,6 +283,7 @@ export async function apiFetch<T = any>(
     {
       method: options.method || "GET",
       body: payload,
+      signal: options.signal,
     },
     headers
   );
