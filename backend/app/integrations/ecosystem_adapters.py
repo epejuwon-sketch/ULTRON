@@ -206,7 +206,37 @@ def verify_ecosystem_provider(
             return IntegrationStatus(provider=provider, configured=False, capability_state=HonestCapabilityState.DEFINED_NOT_INSTALLED, live_verified=False, detail="Spotify OAuth token not configured.")
         return _probe_http(provider=provider, method="GET", url="https://api.spotify.com/v1/me", headers={"Authorization": f"Bearer {tok}"}, http_client=http_client)
 
-    if provider in {"postgresql", "uba_verve", "caravan", "image_gen", "webhooks", "rest_apis", "mcp"}:
+    if provider == "caravan":
+        caravan_url = (creds.get("base_url") or getattr(settings, "caravan_deployed_url", None) or "https://caravan-juwon2.vercel.app").rstrip("/")
+        bridge_secret = None
+        if hasattr(settings, "caravan_bridge_key") and settings.caravan_bridge_key:
+            bridge_secret = settings.caravan_bridge_key.get_secret_value()
+        bridge_key = (tok or creds.get("bridge_key") or bridge_secret or "").strip()
+        headers = {}
+        if bridge_key:
+            headers["X-Ultron-Bridge-Key"] = bridge_key
+
+        probe = _probe_http(
+            provider=provider,
+            method="GET",
+            url=f"{caravan_url}/health",
+            headers=headers,
+            http_client=http_client,
+        )
+        if probe.live_verified:
+            auth_suffix = " · S2S Bridge Key Active" if bridge_key else " · Standalone Health Verified"
+            return IntegrationStatus(
+                provider=provider,
+                configured=True,
+                capability_state=HonestCapabilityState.AVAILABLE,
+                live_verified=True,
+                endpoint=f"{caravan_url}/health",
+                latency_ms=probe.latency_ms,
+                detail=f"CARAVAN live production healthy ({caravan_url}){auth_suffix}.",
+            )
+        return probe
+
+    if provider in {"postgresql", "uba_verve", "image_gen", "webhooks", "rest_apis", "mcp"}:
         return IntegrationStatus(provider=provider, configured=True, capability_state=HonestCapabilityState.AVAILABLE, live_verified=True, detail=f"{provider} managed by ULTRON core subsystem.")
 
     return IntegrationStatus(provider=provider, configured=False, capability_state=HonestCapabilityState.DEFINED_NOT_INSTALLED, live_verified=False, detail=f"No live verifier registered for '{provider}'.")

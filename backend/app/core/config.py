@@ -347,6 +347,16 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field(default="", alias="OLLAMA_BASE_URL")
     ollama_model_local: str = Field(default="llama3.2", alias="OLLAMA_MODEL_LOCAL")
 
+    # --- CARAVAN Standalone Platform S2S Bridge ---
+    caravan_deployed_url: str = Field(
+        default="https://caravan-juwon2.vercel.app",
+        validation_alias=AliasChoices("CARAVAN_DEPLOYED_URL", "CARAVAN_BASE_URL"),
+    )
+    caravan_bridge_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CARAVAN_BRIDGE_KEY", "ULTRON_BRIDGE_SECRET", "ULTRON_BRIDGE_API_KEY"),
+    )
+
     # --- OAuth 2.0 Client Configuration ---
     google_oauth_client_id: str = Field(default="", alias="GOOGLE_OAUTH_CLIENT_ID")
     google_oauth_client_secret: SecretStr | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_SECRET")

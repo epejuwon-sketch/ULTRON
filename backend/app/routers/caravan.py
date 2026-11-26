@@ -1030,3 +1030,37 @@ def api_list_caravan_notification_deliveries(
     return {"total": len(items), "deliveries": items}
 
 
+@router.get("/live-status")
+def api_caravan_live_status(
+    _principal: Principal = Depends(require_perm("caravan:read")),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Execute live probe against the deployed CARAVAN production instance."""
+    from app.services.caravan_command_service import probe_caravan_live
+
+    return probe_caravan_live(settings)
+
+
+@router.post("/remote/sweep")
+def api_caravan_remote_sweep(
+    principal: Principal = Depends(require_perm("caravan:write")),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Trigger remote opportunity expiration sweep on CARAVAN via authenticated S2S bridge."""
+    from app.services.caravan_command_service import execute_remote_caravan_sweep
+
+    return execute_remote_caravan_sweep(settings, principal=principal)
+
+
+@router.post("/remote/discovery")
+def api_caravan_remote_discovery(
+    principal: Principal = Depends(require_perm("caravan:write")),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Trigger remote daily funding discovery cycle on CARAVAN via cron or admin trigger."""
+    from app.services.caravan_command_service import execute_remote_caravan_discovery
+
+    return execute_remote_caravan_discovery(settings, principal=principal)
+
+
+

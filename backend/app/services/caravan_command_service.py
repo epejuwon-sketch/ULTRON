@@ -311,20 +311,7 @@ def get_caravan_command_centre(
         },
         "activity_timeline": caravan_audits[:50],
         "scheduled_discovery": _build_scheduled_discovery_status(db, tenant_id=tid, sources=sources),
-        "standalone_platform": {
-            "name": "CARAVAN Standalone Platform",
-            "repo_url": "https://github.com/epejuwon-sketch/CARAVAN",
-            "deployed_url": os.getenv("CARAVAN_DEPLOYED_URL", CARAVAN_OFFICIAL_DEPLOYED_URL),
-            "branch": "main",
-            "version": "1.0.0-production",
-            "deployment_status": "READY",
-            "environment": "production",
-            "database_status": "READY_FOR_SUPABASE",
-            "backend_health": "VERIFIED_VERCEL",
-            "bridge_status": "CONFIGURED",
-            "last_health_check": _utcnow().isoformat(),
-            "health_latency_ms": 0.0,
-        },
+        "standalone_platform": probe_caravan_live(settings),
         "marketing_and_campaigns": {
             "active_campaigns_count": 0,
             "campaign_drafts": [],
@@ -610,4 +597,149 @@ def trigger_caravan_discovery_now(
     )
     db.commit()
     return job
+
+
+def probe_caravan_live(
+    settings: Settings,
+    *,
+    http_client: Any = None,
+    timeout: float = 6.0,
+) -> dict[str, Any]:
+    """Execute real-time live probe against the deployed CARAVAN production instance."""
+    import time
+    import httpx
+
+    caravan_url = (getattr(settings, "caravan_deployed_url", None) or os.getenv("CARAVAN_DEPLOYED_URL") or CARAVAN_OFFICIAL_DEPLOYED_URL).rstrip("/")
+    bridge_secret = None
+    if hasattr(settings, "caravan_bridge_key") and settings.caravan_bridge_key:
+        bridge_secret = settings.caravan_bridge_key.get_secret_value()
+    bridge_key = (bridge_secret or os.getenv("CARAVAN_BRIDGE_KEY") or os.getenv("ULTRON_BRIDGE_SECRET") or "").strip()
+
+    now_iso = _utcnow().isoformat()
+    result = {
+        "name": "CARAVAN Standalone Platform",
+        "repo_url": "https://github.com/epejuwon-sketch/CARAVAN",
+        "deployed_url": caravan_url,
+        "branch": "main",
+        "version": "1.0.0-production",
+        "deployment_status": "UNREACHABLE",
+        "environment": "unknown",
+        "database_status": "UNKNOWN",
+        "backend_health": "PROBE_FAILED",
+        "bridge_status": "NOT_CONFIGURED" if not bridge_key else "KEY_CONFIGURED",
+        "last_health_check": now_iso,
+        "health_latency_ms": 0.0,
+        "live_telemetry": None,
+    }
+
+    headers = {}
+    if bridge_key:
+        headers["X-Ultron-Bridge-Key"] = bridge_key
+
+    try:
+        t0 = time.perf_counter()
+        if http_client is not None:
+            resp = http_client.get(f"{caravan_url}/health", timeout=timeout)
+        else:
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.get(f"{caravan_url}/health")
+        latency = round((time.perf_counter() - t0) * 1000, 2)
+        result["health_latency_ms"] = latency
+
+        if resp.status_code == 200:
+            hdata = resp.json()
+            result["deployment_status"] = "READY"
+            result["environment"] = hdata.get("environment", "production")
+            result["database_status"] = "CONNECTED" if hdata.get("database") == "connected" else hdata.get("database", "UNKNOWN")
+            result["backend_health"] = "VERIFIED_LIVE"
+            result["version"] = hdata.get("version", "1.0.0-production")
+        else:
+            result["backend_health"] = f"HTTP_{resp.status_code}"
+
+        # If bridge key configured, fetch real S2S telemetry
+        if bridge_key:
+            try:
+                if http_client is not None:
+                    bresp = http_client.get(f"{caravan_url}/api/v1/bridge/telemetry", headers=headers, timeout=timeout)
+                else:
+                    with httpx.Client(timeout=timeout) as client:
+                        bresp = client.get(f"{caravan_url}/api/v1/bridge/telemetry", headers=headers)
+                if bresp.status_code == 200:
+                    result["bridge_status"] = "AUTHENTICATED_AND_ACTIVE"
+                    result["live_telemetry"] = bresp.json()
+                elif bresp.status_code == 401:
+                    result["bridge_status"] = "AUTHENTICATION_FAILED_KEY_MISMATCH"
+                else:
+                    result["bridge_status"] = f"BRIDGE_HTTP_{bresp.status_code}"
+            except Exception as b_err:
+                result["bridge_status"] = f"BRIDGE_ERROR_{type(b_err).__name__}"
+
+    except Exception as exc:
+        result["backend_health"] = f"NETWORK_ERROR_{type(exc).__name__}"
+
+    return result
+
+
+def execute_remote_caravan_sweep(
+    settings: Settings,
+    *,
+    principal: Principal,
+    http_client: Any = None,
+) -> dict[str, Any]:
+    """Trigger remote opportunity expiration sweep on CARAVAN via authenticated S2S bridge."""
+    import httpx
+
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN may trigger remote CARAVAN operations.")
+
+    caravan_url = (getattr(settings, "caravan_deployed_url", None) or CARAVAN_OFFICIAL_DEPLOYED_URL).rstrip("/")
+    bridge_secret = None
+    if hasattr(settings, "caravan_bridge_key") and settings.caravan_bridge_key:
+        bridge_secret = settings.caravan_bridge_key.get_secret_value()
+    bridge_key = (bridge_secret or os.getenv("CARAVAN_BRIDGE_KEY") or os.getenv("ULTRON_BRIDGE_SECRET") or "").strip()
+
+    headers = {}
+    if bridge_key:
+        headers["X-Ultron-Bridge-Key"] = bridge_key
+
+    try:
+        if http_client is not None:
+            resp = http_client.post(f"{caravan_url}/api/v1/bridge/sweep-expired", headers=headers, timeout=10.0)
+        else:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.post(f"{caravan_url}/api/v1/bridge/sweep-expired", headers=headers)
+
+        if resp.status_code != 200:
+            raise ConflictError(f"Remote CARAVAN sweep failed: HTTP {resp.status_code} - {resp.text}")
+        return resp.json()
+    except httpx.HTTPError as exc:
+        raise ConflictError(f"Remote CARAVAN communication failure: {type(exc).__name__}")
+
+
+def execute_remote_caravan_discovery(
+    settings: Settings,
+    *,
+    principal: Principal,
+    http_client: Any = None,
+) -> dict[str, Any]:
+    """Trigger remote daily funding discovery cycle on CARAVAN via cron or admin trigger."""
+    import httpx
+
+    if principal.role not in {Role.OWNER, Role.ADMIN}:
+        raise AuthorizationError("Only OWNER or ADMIN may trigger remote CARAVAN discovery.")
+
+    caravan_url = (getattr(settings, "caravan_deployed_url", None) or CARAVAN_OFFICIAL_DEPLOYED_URL).rstrip("/")
+    try:
+        if http_client is not None:
+            resp = http_client.post(f"{caravan_url}/api/v1/cron/discovery", timeout=15.0)
+        else:
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.post(f"{caravan_url}/api/v1/cron/discovery")
+
+        if resp.status_code != 200:
+            raise ConflictError(f"Remote CARAVAN discovery failed: HTTP {resp.status_code} - {resp.text}")
+        return resp.json()
+    except httpx.HTTPError as exc:
+        raise ConflictError(f"Remote CARAVAN communication failure: {type(exc).__name__}")
+
 
