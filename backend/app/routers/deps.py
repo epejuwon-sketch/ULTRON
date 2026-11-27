@@ -28,12 +28,6 @@ def get_current_principal(
         auth_val = request.headers.get("authorization") or request.headers.get("Authorization")
 
     if not auth_val or not auth_val.strip():
-        # Fallback for query-string token in streaming/preview contexts
-        token_param = request.query_params.get("token") or request.query_params.get("access_token")
-        if token_param and token_param.strip():
-            auth_val = f"Bearer {token_param.strip()}"
-
-    if not auth_val or not auth_val.strip():
         raise AuthenticationError("Missing Authorization Bearer token.")
 
     parts = auth_val.strip().split(" ", 1)

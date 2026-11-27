@@ -400,15 +400,16 @@ def test_11_chat_send_button_complete_lifecycle(client: TestClient, auth_headers
 
 
 def test_12_chat_send_request_header_and_query_fallbacks(client: TestClient, auth_headers: dict) -> None:
-    """Requirement 12: Backend correctly extracts token from lowercase headers or query parameter fallbacks."""
+    """Requirement 12: Backend correctly extracts token from lowercase headers and strictly rejects query-string tokens."""
     owner_token = auth_headers["owner"]["Authorization"].split(" ")[1]
 
     # Lowercase authorization header (proxy normalization)
     r1 = client.get("/api/v1/neon/conversations", headers={"authorization": f"Bearer {owner_token}"})
     assert r1.status_code == 200
 
-    # Query param token fallback (used for SSE streaming or direct links)
+    # Query param token without Authorization header MUST BE REJECTED with 401 (no credential in query string)
     r2 = client.post(f"/api/v1/neon/stream?token={owner_token}", json={"prompt": "Ping", "agent_id": "AGT-01"})
-    assert r2.status_code == 200
-    assert "text/event-stream" in r2.headers.get("content-type", "")
+    assert r2.status_code == 401
+    assert "bearer" in _get_err(r2).lower()
+
 
