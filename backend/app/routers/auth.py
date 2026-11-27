@@ -72,7 +72,7 @@ def api_login(
             httponly=True,
             secure=is_secure,
             samesite="lax",
-            max_age=int(settings.refresh_token_ttl_days * 86400),
+            max_age=settings.session_duration_seconds,
             path="/api/v1/auth",
         )
     return res
@@ -106,7 +106,7 @@ def api_refresh(
             httponly=True,
             secure=is_secure,
             samesite="lax",
-            max_age=int(settings.refresh_token_ttl_days * 86400),
+            max_age=settings.session_duration_seconds,
             path="/api/v1/auth",
         )
     return res

@@ -296,9 +296,17 @@ class Settings(BaseSettings):
         alias="ULTRON_VAULT_MASTER_KEY",
     )
     access_token_ttl_seconds: int = Field(default=900, ge=60, le=86400, alias="ULTRON_ACCESS_TOKEN_TTL_SECONDS")
-    refresh_token_ttl_days: int = Field(default=7, ge=1, le=90, alias="ULTRON_REFRESH_TOKEN_TTL_DAYS")
+    refresh_token_ttl_hours: int = Field(default=24, ge=1, le=2160, alias="ULTRON_REFRESH_TOKEN_TTL_HOURS")
+    refresh_token_ttl_days: int = Field(default=1, ge=1, le=90, alias="ULTRON_REFRESH_TOKEN_TTL_DAYS")
+    session_max_lifetime_hours: int = Field(default=24, ge=1, le=720, alias="ULTRON_SESSION_MAX_LIFETIME_HOURS")
     max_failed_logins: int = Field(default=5, ge=3, le=20, alias="ULTRON_MAX_FAILED_LOGINS")
     lockout_minutes: int = Field(default=15, ge=1, le=1440, alias="ULTRON_LOCKOUT_MINUTES")
+
+    @property
+    def session_duration_seconds(self) -> int:
+        if self.refresh_token_ttl_hours:
+            return self.refresh_token_ttl_hours * 3600
+        return self.refresh_token_ttl_days * 86400
 
     # --- Governance ---
     approval_soft_limit_usd: float = Field(default=50.0, ge=0.0, alias="ULTRON_APPROVAL_SOFT_LIMIT_USD")

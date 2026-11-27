@@ -198,7 +198,7 @@ def login_user(
         settings=settings,
     )
     raw_refresh, refresh_hash = generate_refresh_token()
-    refresh_exp = now + timedelta(days=settings.refresh_token_ttl_days)
+    refresh_exp = now + timedelta(seconds=settings.session_duration_seconds)
 
     db.add(
         SessionRecord(
@@ -237,13 +237,26 @@ def login_user(
 
 
 def refresh_user_session(db: Session, *, refresh_token: str, settings: Settings) -> dict[str, Any]:
-    """Rotate a valid refresh token and issue a fresh access + refresh token pair."""
+    """Rotate a valid refresh token and issue a fresh access + refresh token pair bound to the 24h session window."""
     now = datetime.now(timezone.utc)
     digest = hash_token(refresh_token.strip())
     session = db.execute(
         select(SessionRecord).where(SessionRecord.refresh_token_hash == digest)
     ).scalar_one_or_none()
-    if session is None or session.revoked:
+
+    if session is not None and session.revoked:
+        append_audit_log(
+            db,
+            tenant_id=session.tenant_id,
+            actor=session.user_id,
+            action="AUTH_REFRESH_TOKEN_REUSE_DETECTED",
+            resource=session.jti,
+            outcome="REVOKED_REUSE_BLOCKED",
+        )
+        db.commit()
+        raise AuthenticationError("Invalid or revoked refresh token.", code="SESSION_REVOKED")
+
+    if session is None:
         raise AuthenticationError("Invalid or revoked refresh token.", code="SESSION_REVOKED")
 
     refresh_exp = _ensure_utc(session.refresh_expires_at)
@@ -251,7 +264,7 @@ def refresh_user_session(db: Session, *, refresh_token: str, settings: Settings)
         session.revoked = True
         session.revoked_at = now
         db.commit()
-        raise AuthenticationError("Refresh token has expired.", code="SESSION_EXPIRED")
+        raise AuthenticationError("Session has expired after 24 hours. Please sign in again.", code="SESSION_EXPIRED")
 
     user = db.get(User, session.user_id)
     if user is None or not user.is_active:
@@ -269,7 +282,8 @@ def refresh_user_session(db: Session, *, refresh_token: str, settings: Settings)
         settings=settings,
     )
     raw_refresh, refresh_hash = generate_refresh_token()
-    new_refresh_exp = now + timedelta(days=settings.refresh_token_ttl_days)
+    # Preserve original 24-hour expiration window across rotations so session resets after 24 hours
+    new_refresh_exp = refresh_exp
     db.add(
         SessionRecord(
             jti=jti,

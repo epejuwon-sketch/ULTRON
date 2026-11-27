@@ -80,6 +80,70 @@ def test_phase1_refresh_cookie_and_single_flight_contract(
         json={"refresh_token": new_refresh_token},
     )
     assert replay_resp.status_code == 401
+    err = replay_resp.json()
+    assert err.get("code") == "SESSION_REVOKED" or err.get("error", {}).get("code") == "SESSION_REVOKED"
+
+
+def test_phase1_24_hour_session_policy_and_reuse_detection(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+):
+    """Phase 1: Enforce 24-hour absolute session expiration and audit revoked refresh token reuse."""
+    from datetime import datetime, timedelta, timezone
+    from app.core.config import get_settings
+    from app.db.models import AuditLogRecord, SessionRecord
+    from app.db.session import get_db
+
+    settings = get_settings()
+    assert settings.refresh_token_ttl_hours == 24
+    assert settings.session_duration_seconds == 86400
+
+    # 1. Login
+    login_resp = client.post(
+        "/api/v1/auth/login",
+        json={"username": "owner_admin", "password": "StrongOwnerPassword!2026"},
+    )
+    assert login_resp.status_code == 200
+    token1 = login_resp.json()["refresh_token"]
+
+    # 2. First refresh (valid)
+    ref_resp = client.post("/api/v1/auth/refresh", json={"refresh_token": token1})
+    assert ref_resp.status_code == 200
+    token2 = ref_resp.json()["refresh_token"]
+
+    # 3. Replay token1 (now revoked) - must trigger AUTH_REFRESH_TOKEN_REUSE_DETECTED
+    reuse_resp = client.post("/api/v1/auth/refresh", json={"refresh_token": token1})
+    assert reuse_resp.status_code == 401
+    reuse_err = reuse_resp.json()
+    assert reuse_err.get("code") == "SESSION_REVOKED" or reuse_err.get("error", {}).get("code") == "SESSION_REVOKED"
+
+    # Verify audit log recorded reuse
+    db = next(get_db())
+    try:
+        audit_entries = db.query(AuditLogRecord).filter(
+            AuditLogRecord.action == "AUTH_REFRESH_TOKEN_REUSE_DETECTED"
+        ).all()
+        assert len(audit_entries) >= 1
+        assert audit_entries[-1].outcome == "REVOKED_REUSE_BLOCKED"
+
+        # 4. Simulate session reaching 24 hours (refresh_expires_at in past)
+        from app.core.security import hash_token
+        sess_rec = db.query(SessionRecord).filter(
+            SessionRecord.refresh_token_hash == hash_token(token2)
+        ).first()
+        assert sess_rec is not None
+        sess_rec.refresh_expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        db.commit()
+    finally:
+        db.close()
+
+    # Refreshing after 24h expiration must fail with SESSION_EXPIRED
+    exp_resp = client.post("/api/v1/auth/refresh", json={"refresh_token": token2})
+    assert exp_resp.status_code == 401
+    exp_err = exp_resp.json()
+    assert exp_err.get("code") == "SESSION_EXPIRED" or exp_err.get("error", {}).get("code") == "SESSION_EXPIRED"
+    msg = exp_err.get("detail") or exp_err.get("error", {}).get("message", "")
+    assert "24 hours" in msg
 
 
 def test_phase2_iphone_xr_portrait_css_rules():
@@ -114,12 +178,17 @@ def test_phase2_iphone_xr_portrait_css_rules():
 
 
 def test_phase2_app_tsx_mobile_globe_scaling():
-    """Phase 2: Verify App.tsx scales EarthGlobe to compact size on mobile devices."""
+    """Phase 2: Verify App.tsx scales EarthGlobe to compact size on mobile devices and provides password visibility toggle."""
     app_content = APP_TSX.read_text(encoding="utf-8")
 
     # EarthGlobe should use device.isMobile ? 100 : 250
     assert "size={device.isMobile ? 100 : 250}" in app_content
     assert "auth-mode-row" in app_content
+
+    # Password visibility toggle control
+    assert 'id="auth-toggle-password"' in app_content
+    assert 'showPassword' in app_content
+    assert 'aria-label={showPassword ? "Hide password" : "Show password"}' in app_content
 
 
 def test_phase3_cac_registration_workflow_statutory_integrity(
