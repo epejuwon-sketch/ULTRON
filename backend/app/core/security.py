@@ -118,12 +118,12 @@ def decode_access_token(token: str, settings: Settings) -> dict[str, Any]:
             options={"require": ["sub", "jti", "exp", "role", "tenant_id"]},
         )
     except jwt.ExpiredSignatureError as exc:
-        raise AuthenticationError("Access token has expired.") from exc
+        raise AuthenticationError("Access token has expired.", code="ACCESS_TOKEN_EXPIRED") from exc
     except jwt.InvalidTokenError as exc:
-        raise AuthenticationError("Invalid access token.") from exc
+        raise AuthenticationError("Invalid access token.", code="INVALID_ACCESS_TOKEN") from exc
 
     if payload.get("type") != "access":
-        raise AuthenticationError("Invalid token type.")
+        raise AuthenticationError("Invalid token type.", code="INVALID_TOKEN_TYPE")
     return payload
 
 

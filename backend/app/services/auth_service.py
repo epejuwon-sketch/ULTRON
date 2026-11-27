@@ -151,7 +151,7 @@ def login_user(
             outcome="INVALID_CREDENTIALS",
         )
         db.commit()
-        raise AuthenticationError("Invalid username or password.")
+        raise AuthenticationError("Invalid username or password.", code="INVALID_CREDENTIALS")
 
     locked_until = _ensure_utc(user.locked_until)
     if locked_until is not None and now < locked_until:
@@ -173,7 +173,7 @@ def login_user(
             outcome=f"ATTEMPT_{user.failed_attempts}",
         )
         db.commit()
-        raise AuthenticationError("Invalid username or password.")
+        raise AuthenticationError("Invalid username or password.", code="INVALID_CREDENTIALS")
 
     if requested_tenant_id and requested_tenant_id.strip() != user.tenant_id:
         append_audit_log(
@@ -244,18 +244,18 @@ def refresh_user_session(db: Session, *, refresh_token: str, settings: Settings)
         select(SessionRecord).where(SessionRecord.refresh_token_hash == digest)
     ).scalar_one_or_none()
     if session is None or session.revoked:
-        raise AuthenticationError("Invalid or revoked refresh token.")
+        raise AuthenticationError("Invalid or revoked refresh token.", code="SESSION_REVOKED")
 
     refresh_exp = _ensure_utc(session.refresh_expires_at)
     if refresh_exp is None or now >= refresh_exp:
         session.revoked = True
         session.revoked_at = now
         db.commit()
-        raise AuthenticationError("Refresh token has expired.")
+        raise AuthenticationError("Refresh token has expired.", code="SESSION_EXPIRED")
 
     user = db.get(User, session.user_id)
     if user is None or not user.is_active:
-        raise AuthenticationError("Account is no longer active.")
+        raise AuthenticationError("Account is no longer active.", code="ACCOUNT_INACTIVE")
 
     # Revoke rotated session
     session.revoked = True
@@ -329,11 +329,11 @@ def authenticate_bearer_token(db: Session, *, token: str, settings: Settings) ->
     jti = str(payload["jti"])
     session = db.get(SessionRecord, jti)
     if session is None or session.revoked:
-        raise AuthenticationError("Session has been revoked or does not exist.")
+        raise AuthenticationError("Session has been revoked or does not exist.", code="SESSION_REVOKED")
 
     user = db.get(User, str(payload["sub"]))
     if user is None or not user.is_active:
-        raise AuthenticationError("Authenticated user is inactive or missing.")
+        raise AuthenticationError("Authenticated user is inactive or missing.", code="ACCOUNT_INACTIVE")
 
     return Principal(
         user_id=user.user_id,

@@ -365,8 +365,15 @@ export default function App() {
       navigate(target.moduleId, target.subPageId, { replace: true });
     } catch (err: any) {
       const msg = String(err?.message || "Authentication failed.");
+      const errCode = String(err?.code || "");
       // If auth failed due to database unavailability, refresh readiness so a single unified panel is shown
-      if (/postgresql|database|ultron_database_url|db_auth_failed/i.test(msg)) {
+      if (
+        err?.status === 503 ||
+        errCode.startsWith("DB_") ||
+        errCode === "DATABASE_UNAVAILABLE" ||
+        errCode === "DATABASE_CONFIGURATION_ERROR" ||
+        /postgresql|database|ultron_database_url|db_auth_failed|db_circuit_breaker/i.test(msg)
+      ) {
         setBackendReady(false);
         setBackendDetail(msg);
         setAuthErr("");

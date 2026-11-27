@@ -428,13 +428,18 @@ export async function apiFetch<T = any>(
 
   if (!resp.ok) {
     let message = `HTTP ${resp.status}`;
+    let code = "";
     try {
       const err = await resp.json();
       message = err?.error?.message || err?.detail || message;
+      code = err?.error?.code || err?.error?.details?.error_code || "";
     } catch {
       // ignore non-JSON errors
     }
-    throw new Error(message);
+    const error: any = new Error(message);
+    error.status = resp.status;
+    error.code = code;
+    throw error;
   }
 
   const ct = resp.headers.get("content-type") || "";
