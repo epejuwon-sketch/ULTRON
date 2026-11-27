@@ -134,7 +134,8 @@ def test_phase3_cac_registration_workflow_statutory_integrity(
 
     assert data["portal_url"] == "https://icrp.cac.gov.ng/"
     assert data["total_items"] == 14
-    assert data["total_estimated_fee_ngn"] == 23000.0
+    assert data["total_estimated_fee_ngn"] == 23500.0
+    assert data["mandatory_statutory_total_ngn"] == 18500.0
 
     # 8 canonical statuses
     assert len(data["canonical_statuses"]) == 8
@@ -144,13 +145,14 @@ def test_phase3_cac_registration_workflow_statutory_integrity(
     # Verify Item 10: Fee Estimates
     item10 = next(it for it in items if it["key"] == "FILING_FEE_ESTIMATES")
     assert item10["status"] == "APPROVED"
-    assert item10["details"]["total_estimated_fee_ngn"] == 23000.0
-    assert item10["details"]["name_reservation_ngn"] == 500.0
+    assert item10["details"]["total_estimated_fee_ngn"] == 23500.0
+    assert item10["details"]["mandatory_statutory_total_ngn"] == 18500.0
+    assert item10["details"]["name_reservation_ngn"] == 1000.0
     assert item10["details"]["registration_fee_ngn"] == 10000.0
     assert item10["details"]["stamp_duty_ngn"] == 7500.0
     assert item10["details"]["certified_true_copies_ngn"] == 5000.0
     assert "https://icrp.cac.gov.ng/" in item10["official_source"]
-    assert "November 2026" in item10["official_source"]
+    assert "Gazette No. 92" in item10["official_source"]
 
 
 def test_phase4_cama_section_20_statutory_safeguards(

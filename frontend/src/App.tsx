@@ -378,10 +378,15 @@ export default function App() {
     }
   }
 
-  function logout() {
-    apiFetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
-    clearSession("logged_out");
-    setUser(null);
+  async function logout() {
+    try {
+      await apiFetch("/api/v1/auth/logout", { method: "POST" });
+    } catch {
+      // Ignore network failures during logout
+    } finally {
+      clearSession("logged_out");
+      setUser(null);
+    }
   }
 
   if (sessionRestoring && (getStoredToken() || getStoredRefreshToken())) {

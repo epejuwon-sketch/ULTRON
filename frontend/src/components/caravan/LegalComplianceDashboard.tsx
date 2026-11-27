@@ -331,7 +331,7 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
               </div>
             </div>
             <div className="row-between" style={{ fontSize: 11, color: "#cbd5e1", flexWrap: "wrap", gap: 6 }}>
-              <span>Total Estimated Statutory Filing Fees: <strong style={{ color: "var(--accent-emerald)" }}>₦23,000.00</strong> (Source: CAC Portal &amp; Companies Regulations 2021 Gazette, Nov 2026)</span>
+              <span>Total Estimated Statutory Filing Fees: <strong style={{ color: "var(--accent-emerald)" }}>₦18,500.00 mandatory</strong> (₦23,500.00 with optional CTC) — Source: Official Gazette No. 92 (May 2025 / 2026)</span>
               <span>ApprovalGate Enforced · CAMA 2020 §20 Safeguards Active</span>
             </div>
           </div>
@@ -652,9 +652,9 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
               <div className="list-item" style={{ padding: "10px 12px" }}>
                 <div className="muted" style={{ fontSize: 11, color: "#cbd5e1" }}>Total Statutory Filing Fees</div>
                 <strong style={{ fontSize: 15, color: "var(--accent-emerald)" }}>
-                  ₦{(cacWorkflow?.total_estimated_fee_ngn || 23000).toLocaleString()}
+                  ₦{(cacWorkflow?.total_estimated_fee_ngn || 23500).toLocaleString()}
                 </strong>
-                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>CAC &amp; FIRS Gazette (Nov 2026)</div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>₦18,500 Mandatory + ₦5,000 CTC</div>
               </div>
 
               <div className="list-item" style={{ padding: "10px 12px" }}>
@@ -674,33 +674,37 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
             <div className="list-item" style={{ padding: "12px 14px", background: "rgba(56, 189, 248, 0.05)", border: "1px solid rgba(56, 189, 248, 0.2)" }}>
               <div className="row-between" style={{ marginBottom: 6 }}>
                 <strong style={{ fontSize: 13, color: "#ffffff" }}>
-                  Statutory Filing Fee Estimates (Item 10 Breakdown)
+                  Audited Statutory Filing Fee Schedule (Official Gazette No. 92, Vol. 112)
                 </strong>
                 <span className="mono" style={{ fontSize: 11, color: "var(--accent-cyan)" }}>
-                  Source: CAC Portal (https://icrp.cac.gov.ng/) &amp; Companies Regulations 2021 Gazette (Nov 2026)
+                  Official Source: https://icrp.cac.gov.ng/ &amp; Gazette No. 92 (May 2025 / 2026)
                 </span>
               </div>
               <div className="grid-4" style={{ gap: 8, fontSize: 12 }}>
                 <div>
                   <span className="muted" style={{ color: "#cbd5e1" }}>1. Name Reservation Fee:</span>
-                  <div style={{ fontWeight: 600, color: "#f8fafc" }}>₦500.00</div>
+                  <div style={{ fontWeight: 600, color: "#f8fafc" }}>₦1,000.00</div>
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>Gazette No. 92 (in force Oct 2025)</span>
                 </div>
                 <div>
                   <span className="muted" style={{ color: "#cbd5e1" }}>2. CAC Registration Fee (₦1M Share Capital):</span>
                   <div style={{ fontWeight: 600, color: "#f8fafc" }}>₦10,000.00</div>
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>Private Ltd (first ₦1,000,000)</span>
                 </div>
                 <div>
                   <span className="muted" style={{ color: "#cbd5e1" }}>3. FIRS Stamp Duty (0.75% ad valorem):</span>
                   <div style={{ fontWeight: 600, color: "#f8fafc" }}>₦7,500.00</div>
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>Stamp Duties Act / FIRS gateway</span>
                 </div>
                 <div>
-                  <span className="muted" style={{ color: "#cbd5e1" }}>4. Certified True Copies / Status Report:</span>
+                  <span className="muted" style={{ color: "#cbd5e1" }}>4. Optional Certified True Copies / CTC:</span>
                   <div style={{ fontWeight: 600, color: "#f8fafc" }}>₦5,000.00</div>
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>Initial e-Cert &amp; Status Report bundled free</span>
                 </div>
               </div>
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ color: "#cbd5e1" }}>Total Estimated Government Statutory Outlay:</span>
-                <strong style={{ color: "var(--accent-emerald)", fontSize: 13 }}>₦23,000.00 (Verified)</strong>
+                <span style={{ color: "#cbd5e1" }}>Mandatory Filing Total: <strong style={{ color: "var(--accent-emerald)" }}>₦18,500.00</strong> | With Optional Certified Documents:</span>
+                <strong style={{ color: "var(--accent-emerald)", fontSize: 13 }}>₦23,500.00 (Audited &amp; Verified)</strong>
               </div>
             </div>
 

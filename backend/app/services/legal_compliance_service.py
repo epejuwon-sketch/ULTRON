@@ -284,7 +284,7 @@ def get_legal_compliance_dashboard(db: Session, *, tenant_id: str) -> dict[str, 
 
     # Widget 6: Filing Receipts & Fees
     receipts_and_fees = [
-        {"item": "CAC Name Reservation Fee", "amount_ngn": 500.0, "status": "PAID", "receipt_ref": "REM-CAC-RES-1092"},
+        {"item": "CAC Name Reservation Fee", "amount_ngn": 1000.0, "status": "PAID", "receipt_ref": "REM-CAC-RES-1092"},
         {"item": "CAC Registration Fee (N1M Share Capital)", "amount_ngn": 10000.0, "status": "PENDING_APPROVAL", "receipt_ref": "RRR-2904-8173-9021"},
         {"item": "FIRS Stamp Duty on Share Capital", "amount_ngn": 7500.0, "status": "PENDING_APPROVAL", "receipt_ref": "FIRS-SD-2026-081"},
         {"item": "Certified True Copies (MEMART + Form CAC 1.1)", "amount_ngn": 5000.0, "status": "QUEUED", "receipt_ref": "CTC-ORDER-441"},
@@ -568,17 +568,18 @@ def get_company_registration_workflow(db: Session, *, tenant_id: str) -> dict[st
         "step": 10,
         "key": "FILING_FEE_ESTIMATES",
         "title": "Statutory Filing Fee Estimates",
-        "statutory_ref": "Companies Regulations 2021 Gazette (Nov 2026); Stamp Duties Act",
-        "official_source": "https://icrp.cac.gov.ng/ & Companies Regulations 2021 Schedule of Fees (November 2026)",
+        "statutory_ref": "Official Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025); Stamp Duties Act",
+        "official_source": "https://icrp.cac.gov.ng/ & Federal Republic of Nigeria Official Gazette No. 92 (29 May 2025 / 2026)",
         "status": "APPROVED",
         "details": {
-            "name_reservation_ngn": 500.0,
+            "name_reservation_ngn": 1000.0,
             "registration_fee_ngn": 10000.0,
             "stamp_duty_ngn": 7500.0,
             "certified_true_copies_ngn": 5000.0,
-            "total_estimated_fee_ngn": 23000.0,
+            "mandatory_statutory_total_ngn": 18500.0,
+            "total_estimated_fee_ngn": 23500.0,
         },
-        "notes": "Official CAC statutory filing fee breakdown for N1,000,000 share capital totals N23,000. Source: CAC Portal & Companies Regs 2021.",
+        "notes": "Audited statutory fee schedule: Mandatory filing total is N18,500 (Name Reservation N1,000 + Registration N10,000 for N1M share capital + FIRS Stamp Duty N7,500). Initial electronic Certificate & Status Report are bundled free on the portal; optional extra Certified True Copies (CTC) add N5,000, bringing total to N23,500. Source: Official Gazette No. 92 (29 May 2025, in force 1 Oct 2025).",
     }
 
     # Item 11: Professional Review
@@ -672,8 +673,9 @@ def get_company_registration_workflow(db: Session, *, tenant_id: str) -> dict[st
         "portal_url": "https://icrp.cac.gov.ng/",
         "authority": "Corporate Affairs Commission (CAC), Federal Republic of Nigeria",
         "governing_law": "Companies and Allied Matters Act 2020 (CAMA 2020)",
-        "fee_schedule_source": "CAC Official Portal (https://icrp.cac.gov.ng/) & Companies Regulations 2021 Gazette (November 2026)",
-        "total_estimated_fee_ngn": 23000.0,
+        "fee_schedule_source": "CAC Official Portal (https://icrp.cac.gov.ng/) & Official Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025 / 2026)",
+        "mandatory_statutory_total_ngn": 18500.0,
+        "total_estimated_fee_ngn": 23500.0,
         "canonical_statuses": [
             "NOT_STARTED",
             "IN_PROGRESS",

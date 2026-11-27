@@ -11,7 +11,7 @@ from app.core.exceptions import AuthenticationError
 from app.core.permissions import Principal
 from app.db.models import User
 from app.db.session import get_db
-from app.routers.deps import get_current_principal, require_perm
+from app.routers.deps import get_current_principal, get_optional_principal, require_perm
 from app.schemas import BootstrapOwnerRequest, CreateUserRequest, LoginRequest, RefreshRequest
 from app.services.auth_service import (
     bootstrap_owner,
@@ -115,13 +115,17 @@ def api_refresh(
 @router.post("/logout")
 def api_logout(
     response: Response,
-    principal: Principal = Depends(get_current_principal),
+    principal: Principal | None = Depends(get_optional_principal),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Immediately revoke the current Bearer token session."""
-    revoke_session(db, principal=principal)
+    """Immediately revoke the current Bearer token session and clear the refresh token cookie."""
+    jti = None
+    if principal:
+        revoke_session(db, principal=principal)
+        jti = principal.jti
     response.delete_cookie(key="ultron_refresh_token", path="/api/v1/auth")
-    return {"status": "revoked", "jti": principal.jti}
+    response.delete_cookie(key="ultron_refresh_token", path="/")
+    return {"status": "revoked", "jti": jti}
 
 
 @router.get("/me")

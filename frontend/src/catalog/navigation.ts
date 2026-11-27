@@ -383,7 +383,23 @@ export function getModule(id: ModuleId): ModuleDef {
 
 export function getSubPage(moduleId: ModuleId, subPageId: string): PageDef {
   const mod = getModule(moduleId);
-  return mod.subPages.find((p) => p.id === subPageId) || mod.subPages[0];
+  const found = mod.subPages.find((p) => p.id === subPageId);
+  if (found) return found;
+  if (subPageId) {
+    return {
+      id: subPageId,
+      number: mod.subPages[0]?.number || 0,
+      pageId: mod.subPages[0]?.pageId || "000",
+      module: moduleId,
+      label: subPageId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      category: mod.category,
+      subsystem: mod.label,
+      description: `${mod.label} — ${subPageId}`,
+      keywords: [moduleId, subPageId],
+      status: "VERIFIED",
+    };
+  }
+  return mod.subPages[0];
 }
 
 export function getPageByNumber(num: number): PageDef | undefined {

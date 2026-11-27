@@ -74,3 +74,24 @@ def require_perm(permission: str) -> Callable[[Principal], Principal]:
         return principal
 
     return _checker
+
+
+def get_optional_principal(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Principal | None:
+    """Extract and validate Bearer token if present, returning None if absent or invalid."""
+    try:
+        return get_current_principal(
+            request=request,
+            authorization=authorization,
+            x_tenant_id=x_tenant_id,
+            db=db,
+            settings=settings,
+        )
+    except Exception:
+        return None
+

@@ -399,7 +399,8 @@ def test_api_legal_dashboard_all_8_widgets(
     # Verify embedded company registration workflow
     assert "company_registration_workflow" in data
     assert len(data["company_registration_workflow"]["items"]) == 14
-    assert data["company_registration_workflow"]["total_estimated_fee_ngn"] == 23000.0
+    assert data["company_registration_workflow"]["total_estimated_fee_ngn"] == 23500.0
+    assert data["company_registration_workflow"]["mandatory_statutory_total_ngn"] == 18500.0
 
     widgets = data["widgets"]
     expected_widgets = [
@@ -436,7 +437,8 @@ def test_api_company_registration_workflow_14_items(
 
     assert data["portal_url"] == "https://icrp.cac.gov.ng/"
     assert data["total_items"] == 14
-    assert data["total_estimated_fee_ngn"] == 23000.0
+    assert data["total_estimated_fee_ngn"] == 23500.0
+    assert data["mandatory_statutory_total_ngn"] == 18500.0
     assert "CAC Official Portal (https://icrp.cac.gov.ng/)" in data["fee_schedule_source"]
 
     canonical_statuses = set(data["canonical_statuses"])
