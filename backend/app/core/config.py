@@ -471,7 +471,7 @@ class Settings(BaseSettings):
                     origins.append(p_clean)
         # Strictly validate ephemeral Vercel environment preview URLs to match approved project domains
         _vercel_preview_pattern = re.compile(
-            r"^https://(?:ultron|caravan)(?:-[a-zA-Z0-9_.-]+)?-juwon2\.vercel\.app$",
+            r"^https://(?:ultron|caravan)-[a-zA-Z0-9_.-]+\.vercel\.app$",
             re.IGNORECASE,
         )
         for host in (self.vercel_url.strip(), self.vercel_branch_url.strip()):
