@@ -64,6 +64,9 @@ import {
   type ProductIntelligenceData,
 } from "../components/ui/ProductDiscoveryShowcase";
 
+const AUTH_ERROR_REGEX =
+  /authorization|bearer|token|unauthorized|401|403|forbidden|session expired|reauth_required|authentication required|session required|sign in/i;
+
 function renderInlineLinksAndText(text: string) {
   const tokens = text.split(/(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)]+)/g);
   return tokens.map((tok, i) => {
@@ -242,7 +245,7 @@ export default function NeonModulePage({
       // 1. Core conversational data
       const [cRes, aRes] = await Promise.all([
         apiFetch<any>("/api/v1/neon/conversations").catch((err: any) => {
-          const isAuth = /authorization|bearer|token|unauthorized|401|session expired/i.test(err?.message || "");
+          const isAuth = AUTH_ERROR_REGEX.test(err?.message || "");
           if (isAuth) {
             clearSession("reauth_required");
           } else {
@@ -279,7 +282,7 @@ export default function NeonModulePage({
         pushToast(`Discovered ${gRes.catalog.models_discovered} live Gemini models (${gRes.catalog.latency_ms}ms).`, "success");
       }
     } catch (e: any) {
-      const isAuth = /authorization|bearer|token|unauthorized|401|session expired/i.test(e?.message || "");
+      const isAuth = AUTH_ERROR_REGEX.test(e?.message || "");
       if (isAuth) {
         clearSession("reauth_required");
       } else {
@@ -335,7 +338,7 @@ export default function NeonModulePage({
         return next;
       });
     } catch (e: any) {
-      const isAuth = /authorization|bearer|token|unauthorized|401|session expired/i.test(e?.message || "");
+      const isAuth = AUTH_ERROR_REGEX.test(e?.message || "");
       if (isAuth) {
         clearSession("reauth_required");
       } else {
@@ -992,7 +995,7 @@ export default function NeonModulePage({
       if (err?.name === "AbortError" || err?.message?.includes("aborted")) {
         pushToast("NEON streaming cancelled.", "info");
       } else {
-        const isAuthError = /authorization|bearer|token|unauthorized|401|session expired/i.test(err?.message || "");
+        const isAuthError = AUTH_ERROR_REGEX.test(err?.message || "");
         if (isAuthError) {
           pushToast("Session expired or authentication required. Please sign in.", "error");
           clearSession("reauth_required");
@@ -1042,7 +1045,7 @@ export default function NeonModulePage({
       onSelectSubPage("chat");
       pushToast(`Started conversation with ${selectedAgent}.`, "success");
     } catch (err: any) {
-      const isAuthError = /authorization|bearer|token|unauthorized|401|session expired/i.test(err?.message || "");
+      const isAuthError = AUTH_ERROR_REGEX.test(err?.message || "");
       if (isAuthError) {
         clearSession("reauth_required");
         pushToast("Session expired or authentication required. Please sign in.", "error");
@@ -1120,12 +1123,12 @@ export default function NeonModulePage({
         }
       />
 
-      {error && !/authorization|token|unauthorized|401|session expired/i.test(error) && (
+      {error && !AUTH_ERROR_REGEX.test(error) && (
         <ErrorState message={error} onRetry={() => loadBase(false)} />
       )}
       {warning && <div className="alert-box alert-warn">{warning}</div>}
 
-      {(!tokenPresent && !getStoredToken()) || /authorization|token|unauthorized|401|session expired/i.test(error) ? (
+      {(!tokenPresent && !getStoredToken()) || AUTH_ERROR_REGEX.test(error) ? (
         <div className="card">
           <div className="card-title"><span>NEON Intelligence // {page.label}</span></div>
           <EmptyState

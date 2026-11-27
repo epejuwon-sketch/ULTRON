@@ -407,6 +407,14 @@ def test_12_chat_send_request_header_and_query_fallbacks(client: TestClient, aut
     r1 = client.get("/api/v1/neon/conversations", headers={"authorization": f"Bearer {owner_token}"})
     assert r1.status_code == 200
 
+    # X-Authorization fallback (proxy/edge header forwarding)
+    r_xauth = client.get("/api/v1/neon/conversations", headers={"X-Authorization": f"Bearer {owner_token}"})
+    assert r_xauth.status_code == 200
+
+    # X-Forwarded-Authorization fallback
+    r_fwd = client.get("/api/v1/neon/conversations", headers={"x-forwarded-authorization": f"Bearer {owner_token}"})
+    assert r_fwd.status_code == 200
+
     # Query param token without Authorization header MUST BE REJECTED with 401 (no credential in query string)
     r2 = client.post(f"/api/v1/neon/stream?token={owner_token}", json={"prompt": "Ping", "agent_id": "AGT-01"})
     assert r2.status_code == 401

@@ -165,10 +165,16 @@ export async function waitForSessionRestoration(): Promise<AuthUser | null> {
   }
   const token = getStoredToken();
   const refreshToken = getStoredRefreshToken();
-  if ((!token || isAccessTokenExpiredOrExpiring(token, 45)) && refreshToken) {
-    return restoreSession();
+  if (!token || isAccessTokenExpiredOrExpiring(token, 45)) {
+    if (refreshToken) {
+      return restoreSession();
+    }
+    if (token) {
+      clearSession("session_expired");
+    }
+    return null;
   }
-  return token ? getStoredUser() : null;
+  return getStoredUser();
 }
 
 /**
@@ -318,7 +324,9 @@ async function fetchWithAutoRefresh(
   const buildHeaders = (bearer: string | null): Record<string, string> => {
     const h: Record<string, string> = { ...customHeaders };
     if (bearer && bearer.trim()) {
-      h["Authorization"] = `Bearer ${bearer.trim()}`;
+      const clean = bearer.trim();
+      h["Authorization"] = `Bearer ${clean}`;
+      h["X-Authorization"] = `Bearer ${clean}`;
     }
     return h;
   };

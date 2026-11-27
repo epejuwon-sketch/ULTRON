@@ -106,6 +106,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Authorization",
+            "X-Authorization",
+            "X-Forwarded-Authorization",
             "Content-Type",
             "Accept",
             "X-Requested-With",

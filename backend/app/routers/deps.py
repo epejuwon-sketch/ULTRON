@@ -24,8 +24,15 @@ def get_current_principal(
     """Extract and validate Bearer JWT + active session + optional X-Tenant-ID header."""
     auth_val = authorization
     if not auth_val or not auth_val.strip():
-        # Defensive fallback for case-normalized proxy headers
-        auth_val = request.headers.get("authorization") or request.headers.get("Authorization")
+        # Defensive fallback for case-normalized proxy headers and edge proxy stripping
+        auth_val = (
+            request.headers.get("authorization")
+            or request.headers.get("Authorization")
+            or request.headers.get("x-authorization")
+            or request.headers.get("X-Authorization")
+            or request.headers.get("x-forwarded-authorization")
+            or request.headers.get("X-Forwarded-Authorization")
+        )
 
     if not auth_val or not auth_val.strip():
         raise AuthenticationError("Missing Authorization Bearer token.")
