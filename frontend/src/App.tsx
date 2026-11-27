@@ -69,7 +69,8 @@ export default function App() {
   const [user, setUser] = useState<AuthUser | null>(() => {
     const token = getStoredToken();
     const u = getStoredUser();
-    if (token && u) return u;
+    if (token && u && !isAccessTokenExpiredOrExpiring(token, 0)) return u;
+    if (getStoredRefreshToken() && u) return u;
     return null;
   });
   const initialRoute = parseRouteFromPathname(typeof window !== "undefined" ? window.location.pathname : "/");
@@ -294,11 +295,13 @@ export default function App() {
       const detail = (e as CustomEvent).detail;
       if (detail && "user" in detail) {
         setUser(detail.user || null);
-        if (!detail.user && detail.reason === "session_expired") {
-          setAuthErr("Your session expired. Please sign in again.");
+        if (!detail.user && (detail.reason === "session_expired" || detail.reason === "reauth_required")) {
+          setAuthErr("Your session has expired or re-authentication is required. Please sign in again.");
         }
       } else {
-        setUser(getStoredToken() ? getStoredUser() : null);
+        const token = getStoredToken();
+        const u = getStoredUser();
+        setUser(token && u && !isAccessTokenExpiredOrExpiring(token, 0) ? u : null);
       }
       setSessionRestoring(false);
     };

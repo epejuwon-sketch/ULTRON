@@ -353,3 +353,62 @@ def test_10_malformed_and_tampered_bearer_tokens_rejected(client: TestClient) ->
     )
     r4 = client.get("/api/v1/neon/conversations", headers={"Authorization": f"Bearer {bad_jwt}"})
     assert r4.status_code == 401
+
+
+def test_11_chat_send_button_complete_lifecycle(client: TestClient, auth_headers: dict) -> None:
+    """Requirement 11: Exact Send button flow executes successfully with Bearer token in persisted and streaming modes."""
+    headers = auth_headers["owner"]
+
+    # 1. Unauthenticated send message fails with 401
+    r_unauth = client.post("/api/v1/neon/conversations", json={"title": "Send button test", "agent_id": "AGT-01"})
+    assert r_unauth.status_code == 401
+    assert "bearer" in _get_err(r_unauth).lower()
+
+    # 2. Authenticated Send button flow: create conversation
+    r_conv = client.post(
+        "/api/v1/neon/conversations",
+        json={"title": "Send button test", "agent_id": "AGT-01"},
+        headers=headers,
+    )
+    assert r_conv.status_code == 201
+    cid = r_conv.json()["conversation_id"]
+
+    # 3. Authenticated Send: Persisted message mode
+    r_msg = client.post(
+        f"/api/v1/neon/conversations/{cid}/messages",
+        json={"content": "What is the status of the ULTRON autonomous core?", "enable_web_research": True},
+        headers=headers,
+    )
+    assert r_msg.status_code == 200
+    msg_data = r_msg.json()
+    assert "assistant_message" in msg_data or "message" in msg_data
+
+    # 4. Authenticated Send: SSE streaming mode
+    r_stream = client.post(
+        "/api/v1/neon/stream",
+        json={"prompt": "Stream the latest system telemetry", "agent_id": "AGT-01", "conversation_id": cid},
+        headers=headers,
+    )
+    assert r_stream.status_code == 200
+    assert "text/event-stream" in r_stream.headers.get("content-type", "")
+
+    # 5. Verify conversation history contains both user messages and assistant responses
+    r_hist = client.get(f"/api/v1/neon/conversations/{cid}", headers=headers)
+    assert r_hist.status_code == 200
+    history_messages = r_hist.json().get("messages", [])
+    assert len(history_messages) >= 2
+
+
+def test_12_chat_send_request_header_and_query_fallbacks(client: TestClient, auth_headers: dict) -> None:
+    """Requirement 12: Backend correctly extracts token from lowercase headers or query parameter fallbacks."""
+    owner_token = auth_headers["owner"]["Authorization"].split(" ")[1]
+
+    # Lowercase authorization header (proxy normalization)
+    r1 = client.get("/api/v1/neon/conversations", headers={"authorization": f"Bearer {owner_token}"})
+    assert r1.status_code == 200
+
+    # Query param token fallback (used for SSE streaming or direct links)
+    r2 = client.post(f"/api/v1/neon/stream?token={owner_token}", json={"prompt": "Ping", "agent_id": "AGT-01"})
+    assert r2.status_code == 200
+    assert "text/event-stream" in r2.headers.get("content-type", "")
+

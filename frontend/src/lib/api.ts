@@ -301,14 +301,14 @@ async function fetchWithAutoRefresh(
   // Guard: if signed out and attempting protected request without valid access token,
   // do not dispatch unauthenticated request over wire with missing Authorization header.
   if (!publicEndpoint && !token) {
-    clearSession("signed_out");
-    throw new Error("Missing Authorization Bearer token.");
+    clearSession("reauth_required");
+    throw new Error("Active authenticated session required. Please sign in.");
   }
 
   const buildHeaders = (bearer: string | null): Record<string, string> => {
     const h: Record<string, string> = { ...customHeaders };
-    if (bearer) {
-      h["Authorization"] = `Bearer ${bearer}`;
+    if (bearer && bearer.trim()) {
+      h["Authorization"] = `Bearer ${bearer.trim()}`;
     }
     return h;
   };
@@ -493,7 +493,18 @@ export async function streamNeon(
     );
     if (!resp.ok || !resp.body) {
       const errText = await resp.text().catch(() => "");
-      throw new Error(`Stream failed (HTTP ${resp.status}): ${errText || resp.statusText}`);
+      let parsedMsg = "";
+      try {
+        const parsed = JSON.parse(errText);
+        parsedMsg = parsed.error?.message || parsed.detail || "";
+      } catch {
+        // raw text
+      }
+      if (resp.status === 401) {
+        clearSession("session_expired");
+        throw new Error(parsedMsg || "Session expired or authentication required. Please sign in.");
+      }
+      throw new Error(`Stream failed (HTTP ${resp.status}): ${parsedMsg || errText || resp.statusText}`);
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();

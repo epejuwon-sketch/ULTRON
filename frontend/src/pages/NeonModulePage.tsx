@@ -261,13 +261,23 @@ export default function NeonModulePage({
       setUsage(uRes);
       setGeminiDiag(gRes);
       if (authErrors.length >= 3) {
-        setError(authErrors[0]);
+        const isAuth = authErrors.some((e) => /authorization|bearer|token|unauthorized|401|session expired/i.test(e));
+        if (isAuth) {
+          clearSession("reauth_required");
+        } else {
+          setError(authErrors[0]);
+        }
       }
       if (discoverLive && gRes?.catalog?.catalog_verified) {
         pushToast(`Discovered ${gRes.catalog.models_discovered} live Gemini models (${gRes.catalog.latency_ms}ms).`, "success");
       }
     } catch (e: any) {
-      setError(e.message);
+      const isAuth = /authorization|bearer|token|unauthorized|401|session expired/i.test(e?.message || "");
+      if (isAuth) {
+        clearSession("reauth_required");
+      } else {
+        setError(e.message);
+      }
     } finally {
       setLoading(false);
       if (discoverLive) setDiscoveringModels(false);
@@ -313,7 +323,12 @@ export default function NeonModulePage({
         return next;
       });
     } catch (e: any) {
-      setError(e.message);
+      const isAuth = /authorization|bearer|token|unauthorized|401|session expired/i.test(e?.message || "");
+      if (isAuth) {
+        clearSession("reauth_required");
+      } else {
+        setError(e.message);
+      }
     }
   }
 
@@ -767,8 +782,10 @@ export default function NeonModulePage({
     if (!input.trim() && attachedFiles.length === 0) return;
 
     await waitForSessionRestoration();
-    if (!getStoredToken()) {
-      setError("Active authenticated session required. Please sign in.");
+    const token = getStoredToken();
+    if (!token) {
+      clearSession("reauth_required");
+      pushToast("Active authenticated session required. Please sign in.", "error");
       return;
     }
 
@@ -821,7 +838,15 @@ export default function NeonModulePage({
         });
         cid = created.conversation_id;
         setActiveId(cid);
-        loadBase();
+        setConversations((prev) => [
+          {
+            conversation_id: cid,
+            title: promptText.slice(0, 48),
+            agent_id: selectedAgent,
+            updated_at: new Date().toISOString(),
+          },
+          ...prev.filter((c) => c.conversation_id !== cid),
+        ]);
       }
 
       if (useStream) {
@@ -950,8 +975,14 @@ export default function NeonModulePage({
       if (err?.name === "AbortError" || err?.message?.includes("aborted")) {
         pushToast("NEON streaming cancelled.", "info");
       } else {
-        setError(err.message);
-        pushToast(err.message, "error");
+        const isAuthError = /authorization|bearer|token|unauthorized|401|session expired/i.test(err?.message || "");
+        if (isAuthError) {
+          pushToast("Session expired or authentication required. Please sign in.", "error");
+          clearSession("reauth_required");
+        } else {
+          setError(err.message);
+          pushToast(err.message, "error");
+        }
       }
     } finally {
       setSending(false);
@@ -962,8 +993,10 @@ export default function NeonModulePage({
   async function createConversation(e: React.FormEvent) {
     e.preventDefault();
     await waitForSessionRestoration();
-    if (!getStoredToken()) {
-      pushToast("Authentication required to create a new conversation.", "error");
+    const token = getStoredToken();
+    if (!token) {
+      clearSession("reauth_required");
+      pushToast("Authentication required to create a new conversation. Please sign in.", "error");
       return;
     }
     try {
@@ -976,11 +1009,25 @@ export default function NeonModulePage({
       });
       setNewTitle("");
       setActiveId(created.conversation_id);
-      await loadBase();
+      setConversations((prev) => [
+        {
+          conversation_id: created.conversation_id,
+          title: newTitle.trim() || `NEON Session (${selectedAgent})`,
+          agent_id: selectedAgent,
+          updated_at: new Date().toISOString(),
+        },
+        ...prev.filter((c) => c.conversation_id !== created.conversation_id),
+      ]);
       onSelectSubPage("chat");
       pushToast(`Started conversation with ${selectedAgent}.`, "success");
     } catch (err: any) {
-      pushToast(err.message, "error");
+      const isAuthError = /authorization|bearer|token|unauthorized|401|session expired/i.test(err?.message || "");
+      if (isAuthError) {
+        clearSession("reauth_required");
+        pushToast("Session expired or authentication required. Please sign in.", "error");
+      } else {
+        pushToast(err.message, "error");
+      }
     }
   }
 
