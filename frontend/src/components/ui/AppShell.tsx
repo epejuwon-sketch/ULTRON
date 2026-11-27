@@ -96,7 +96,7 @@ export function DesktopSidebar({
             subtitle={`${user.username} · ${user.role}`}
           />
           {drawerOpen ? (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={onCloseDrawer} aria-label="Close navigation">
+            <button id="mobile-drawer-close" type="button" className="btn btn-secondary btn-sm" onClick={onCloseDrawer} aria-label="Close navigation">
               <X size={14} />
             </button>
           ) : (
