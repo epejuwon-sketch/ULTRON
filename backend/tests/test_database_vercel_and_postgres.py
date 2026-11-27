@@ -502,12 +502,13 @@ def test_unencoded_pg_password_chars_and_placeholder_detection() -> None:
     assert ci_enc["password"] == "Already@Encoded#1"
 
     # Literal Supabase placeholder rejected immediately
-    with pytest.raises(DatabaseConfigurationError, match="YOUR-PASSWORD"):
-        normalize_database_url(
-            "postgresql://postgres.projref:[YOUR-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:6543/postgres",
-            allow_sqlite=False,
-            is_vercel=True,
-        )
+    for placeholder in ("[YOUR-PASSWORD]", "your-password", "[database-password]", "<password>"):
+        with pytest.raises(DatabaseConfigurationError, match="YOUR-PASSWORD"):
+            normalize_database_url(
+                f"postgresql://postgres.projref:{placeholder}@aws-0-us-east-1.pooler.supabase.com:6543/postgres",
+                allow_sqlite=False,
+                is_vercel=True,
+            )
 
 
 def test_pulse_page_data_binding_uses_concrete_page_id(client: TestClient, auth_headers: dict) -> None:

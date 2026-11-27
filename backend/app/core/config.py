@@ -46,6 +46,18 @@ _PLACEHOLDER_PASSWORDS = frozenset(
         "<your-password>",
         "<password>",
         "[password]",
+        "password",
+        "[your-password-here]",
+        "your-password-here",
+        "[your_password]",
+        "[database-password]",
+        "database-password",
+        "[db-password]",
+        "db-password",
+        "[supabase-password]",
+        "supabase-password",
+        "[enter-your-password]",
+        "enter-your-password",
     }
 )
 
