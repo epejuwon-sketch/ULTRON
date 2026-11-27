@@ -413,9 +413,14 @@ def test_12_chat_send_request_header_and_query_fallbacks(client: TestClient, aut
     assert "bearer" in _get_err(r2).lower()
 
 
-def test_13_production_vercel_cors_preflight_and_headers(client: TestClient) -> None:
-    """Requirement 13: CORS preflight allows production Vercel domains and handles non-safelisted headers."""
-    # 1. Production domain preflight
+def test_13_production_vercel_cors_preflight_and_headers(client: TestClient, auth_headers: dict) -> None:
+    """Requirement 13: CORS securely allows explicit production/preview origins and rejects unapproved origins."""
+    from app.core.config import Settings
+    from app.main import create_app
+
+    owner_token = auth_headers["owner"]["Authorization"]
+
+    # 1. Approved ULTRON production origin preflight
     r1 = client.options(
         "/api/v1/neon/conversations",
         headers={
@@ -429,20 +434,50 @@ def test_13_production_vercel_cors_preflight_and_headers(client: TestClient) -> 
     assert "authorization" in r1.headers.get("access-control-allow-headers", "").lower()
     assert r1.headers.get("access-control-allow-credentials") == "true"
 
-    # 2. Preview branch domain matching regex
+    # 2. Approved CARAVAN production origin preflight
     r2 = client.options(
         "/api/v1/neon/conversations",
         headers={
-            "Origin": "https://ultron-juwon2-git-main-epejuwon.vercel.app",
+            "Origin": "https://caravan-juwon2.vercel.app",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "authorization, content-type",
         },
     )
     assert r2.status_code == 200
-    assert r2.headers.get("access-control-allow-origin") == "https://ultron-juwon2-git-main-epejuwon.vercel.app"
+    assert r2.headers.get("access-control-allow-origin") == "https://caravan-juwon2.vercel.app"
+    assert r2.headers.get("access-control-allow-credentials") == "true"
 
-    # 3. Disallowed external origin rejected
-    r3 = client.options(
+    # 3. Controlled preview origin through explicit allowlist
+    custom_cfg = Settings(
+        cors_preview_origins="https://ultron-preview-safe.vercel.app",
+        ultron_env="test",
+    )
+    custom_app = create_app(custom_cfg)
+    with TestClient(custom_app) as custom_client:
+        r_preview = custom_client.options(
+            "/api/v1/neon/conversations",
+            headers={
+                "Origin": "https://ultron-preview-safe.vercel.app",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization, content-type",
+            },
+        )
+        assert r_preview.status_code == 200
+        assert r_preview.headers.get("access-control-allow-origin") == "https://ultron-preview-safe.vercel.app"
+
+    # 4. Unapproved Vercel origin rejected (no broad wildcard regex!)
+    r_unapproved_vercel = client.options(
+        "/api/v1/neon/conversations",
+        headers={
+            "Origin": "https://unapproved-random-app.vercel.app",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert r_unapproved_vercel.status_code == 400
+
+    # 5. Disallowed external origin rejected
+    r_malicious = client.options(
         "/api/v1/neon/conversations",
         headers={
             "Origin": "https://malicious-attacker.com",
@@ -450,7 +485,18 @@ def test_13_production_vercel_cors_preflight_and_headers(client: TestClient) -> 
             "Access-Control-Request-Headers": "authorization",
         },
     )
-    assert r3.status_code == 400
+    assert r_malicious.status_code == 400
+
+    # 6. Unapproved origins cannot read authenticated API responses (no Access-Control-Allow-Origin header returned)
+    r_auth_unapproved = client.get(
+        "/api/v1/neon/conversations",
+        headers={
+            "Origin": "https://unapproved-random-app.vercel.app",
+            "Authorization": owner_token,
+        },
+    )
+    assert "access-control-allow-origin" not in r_auth_unapproved.headers
+    assert r_auth_unapproved.headers.get("access-control-allow-origin") is None
 
 
 def test_14_chat_lifecycle_with_unconfigured_or_failing_gemini_diagnostics(

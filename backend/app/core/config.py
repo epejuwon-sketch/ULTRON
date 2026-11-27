@@ -253,11 +253,15 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="ULTRON_LOG_LEVEL")
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173,https://ultron-juwon2.vercel.app,https://caravan-juwon2.vercel.app",
-        alias="ULTRON_CORS_ORIGINS",
+        validation_alias=AliasChoices("ULTRON_CORS_ORIGINS", "cors_origins"),
     )
     cors_origin_regex: str = Field(
-        default=r"^https://([a-zA-Z0-9_-]+\.)*vercel\.app$",
-        alias="ULTRON_CORS_ORIGIN_REGEX",
+        default="",
+        validation_alias=AliasChoices("ULTRON_CORS_ORIGIN_REGEX", "cors_origin_regex"),
+    )
+    cors_preview_origins: str = Field(
+        default="",
+        validation_alias=AliasChoices("ULTRON_CORS_PREVIEW_ORIGINS", "cors_preview_origins"),
     )
 
     # --- Rate Limiting & Orchestration Limits ---
@@ -459,11 +463,22 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        # Controlled explicit preview allowlist
+        if self.cors_preview_origins:
+            for p in self.cors_preview_origins.split(","):
+                p_clean = p.strip()
+                if p_clean and p_clean not in origins:
+                    origins.append(p_clean)
+        # Strictly validate ephemeral Vercel environment preview URLs to match approved project domains
+        _vercel_preview_pattern = re.compile(
+            r"^https://(?:ultron|caravan)(?:-[a-zA-Z0-9_.-]+)?-juwon2\.vercel\.app$",
+            re.IGNORECASE,
+        )
         for host in (self.vercel_url.strip(), self.vercel_branch_url.strip()):
             if not host:
                 continue
             origin = host if host.startswith(("http://", "https://")) else f"https://{host}"
-            if origin not in origins:
+            if origin not in origins and _vercel_preview_pattern.match(origin):
                 origins.append(origin)
         return origins
 

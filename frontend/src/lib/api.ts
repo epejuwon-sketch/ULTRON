@@ -48,6 +48,15 @@ export function resolveGeminiProviderStatus(opts: {
       health?.integrations?.capabilities?.gemini?.live_verified
   );
 
+  // If live inference failed or returned an error, report honest failure
+  if (
+    liveInf?.status === "FAILED" ||
+    geminiDiag?.connection_status === "FAILED" ||
+    (liveInf?.verified === false && liveInf?.error)
+  ) {
+    return { configured: Boolean(configured), verified: false, label: "GEMINI FAILED", tone: "warn" };
+  }
+
   if (liveInf?.status === "LIVE VERIFIED" || (verified && liveInf?.status !== "LIVE VERIFIED WITH FALLBACK")) {
     return { configured: true, verified: true, label: "GEMINI LIVE VERIFIED", tone: "success" };
   }
@@ -57,7 +66,7 @@ export function resolveGeminiProviderStatus(opts: {
   if (configured) {
     return { configured: true, verified: false, label: "GEMINI CONFIGURED", tone: "info" };
   }
-  return { configured: false, verified: false, label: "GEMINI UNCONFIGURED", tone: "warn" };
+  return { configured: false, verified: false, label: "GEMINI NOT CONFIGURED", tone: "warn" };
 }
 
 function emitAuthStateChanged(user: AuthUser | null, reason?: string): void {
