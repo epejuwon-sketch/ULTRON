@@ -479,6 +479,22 @@ def test_classify_database_error_diagnoses_supabase_auth_and_pooler_errors() -> 
     assert "brackets" in msg3
     assert "ActualPass123" not in msg3
 
+    code_cb, msg_cb = db_session.classify_database_error(
+        Exception("FATAL: (ECIRCUITBREAKER) too many authentication failures, new connections are temporarily blocked"), cfg
+    )
+    assert code_cb == "DB_CIRCUIT_BREAKER"
+    assert "circuit breaker tripped" in msg_cb.lower()
+
+    # Verify circuit-breaker storm backoff
+    db_session.clear_auth_failure()
+    assert db_session.get_active_auth_backoff() is None
+    db_session.record_auth_failure("DB_CIRCUIT_BREAKER", msg_cb)
+    active = db_session.get_active_auth_backoff()
+    assert active is not None
+    assert active[0] == "DB_CIRCUIT_BREAKER"
+    db_session.clear_auth_failure()
+    assert db_session.get_active_auth_backoff() is None
+
 
 def test_unencoded_pg_password_chars_and_placeholder_detection() -> None:
     import psycopg.conninfo

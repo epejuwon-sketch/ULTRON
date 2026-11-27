@@ -119,12 +119,39 @@ CREATE TABLE IF NOT EXISTS legal_archived_documents (
 );
 CREATE INDEX IF NOT EXISTS ix_legal_archives_tenant_cat ON legal_archived_documents (tenant_id, document_category);
 
+CREATE TABLE IF NOT EXISTS legal_pre_registration_questionnaires (
+    questionnaire_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(tenant_id),
+    draft_id VARCHAR(64) NOT NULL,
+    company_type VARCHAR(48) NOT NULL DEFAULT 'PRIVATE_COMPANY_LIMITED_BY_SHARES',
+    proposed_name VARCHAR(200) NOT NULL,
+    alternative_names_json TEXT NOT NULL DEFAULT '[]',
+    business_activities TEXT NOT NULL,
+    principal_objects_json TEXT NOT NULL DEFAULT '[]',
+    issued_share_capital FLOAT NOT NULL DEFAULT 100000.0,
+    nominal_value_per_share FLOAT NOT NULL DEFAULT 1.0,
+    registered_office_address VARCHAR(300) NOT NULL,
+    registered_office_state VARCHAR(64) NOT NULL DEFAULT 'Lagos',
+    registered_office_lga VARCHAR(64) NOT NULL DEFAULT 'Eti-Osa',
+    shareholders_json TEXT NOT NULL DEFAULT '[]',
+    capacity_safeguards_json TEXT NOT NULL DEFAULT '{}',
+    fee_breakdown_json TEXT NOT NULL DEFAULT '{}',
+    status VARCHAR(32) NOT NULL DEFAULT 'DRAFT',
+    created_by VARCHAR(120) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ix_legal_pre_reg_tenant ON legal_pre_registration_questionnaires (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_legal_pre_reg_draft ON legal_pre_registration_questionnaires (draft_id);
+CREATE INDEX IF NOT EXISTS ix_legal_pre_reg_status ON legal_pre_registration_questionnaires (status);
+
 ALTER TABLE legal_entity_drafts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE legal_officers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE legal_statutory_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE legal_compliance_calendar_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE legal_filing_workflows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE legal_archived_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE legal_pre_registration_questionnaires ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation_legal_entity_drafts ON legal_entity_drafts
     USING (tenant_id = current_setting('app.current_tenant_id', true));
@@ -137,4 +164,6 @@ CREATE POLICY tenant_isolation_legal_calendar ON legal_compliance_calendar_event
 CREATE POLICY tenant_isolation_legal_workflows ON legal_filing_workflows
     USING (tenant_id = current_setting('app.current_tenant_id', true));
 CREATE POLICY tenant_isolation_legal_archives ON legal_archived_documents
+    USING (tenant_id = current_setting('app.current_tenant_id', true));
+CREATE POLICY tenant_isolation_legal_pre_registration_questionnaires ON legal_pre_registration_questionnaires
     USING (tenant_id = current_setting('app.current_tenant_id', true));

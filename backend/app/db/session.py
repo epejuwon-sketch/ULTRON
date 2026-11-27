@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,29 @@ _ENGINE: Engine | None = None
 _SESSION_FACTORY: sessionmaker[Session] | None = None
 _ENGINE_URL: str | None = None
 _INITIALIZED_ENGINE_URLS: set[str] = set()
+
+_CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = 15.0
+_LAST_AUTH_FAILURE_TIME: float = 0.0
+_LAST_AUTH_FAILURE_DETAIL: tuple[str, str] | None = None
+
+
+def record_auth_failure(err_code: str, detail: str) -> None:
+    global _LAST_AUTH_FAILURE_TIME, _LAST_AUTH_FAILURE_DETAIL
+    _LAST_AUTH_FAILURE_TIME = time.monotonic()
+    _LAST_AUTH_FAILURE_DETAIL = (err_code, detail)
+
+
+def clear_auth_failure() -> None:
+    global _LAST_AUTH_FAILURE_TIME, _LAST_AUTH_FAILURE_DETAIL
+    _LAST_AUTH_FAILURE_TIME = 0.0
+    _LAST_AUTH_FAILURE_DETAIL = None
+
+
+def get_active_auth_backoff() -> tuple[str, str] | None:
+    global _LAST_AUTH_FAILURE_TIME, _LAST_AUTH_FAILURE_DETAIL
+    if _LAST_AUTH_FAILURE_DETAIL and (time.monotonic() - _LAST_AUTH_FAILURE_TIME) < _CIRCUIT_BREAKER_COOLDOWN_SECONDS:
+        return _LAST_AUTH_FAILURE_DETAIL
+    return None
 
 MIGRATION_REGISTRY: list[tuple[str, str]] = [
     ("001", "001_initial_schema.sql"),
@@ -90,6 +114,12 @@ def classify_database_error(exc: Exception, settings: Settings) -> tuple[str, st
             "DB_POOLER_TENANT_USER_NOT_FOUND",
             "Supabase Transaction Pooler rejected the username. Ensure ULTRON_DATABASE_URL uses the pooled "
             "username format `postgres.<project-ref>` copied from Supabase -> Connect -> Transaction Pooler.",
+        )
+    if "ecircuitbreaker" in lower or "too many authentication failures" in lower:
+        return (
+            "DB_CIRCUIT_BREAKER",
+            "Supabase connection pooler circuit breaker tripped (ECIRCUITBREAKER): too many authentication failures, new connections are temporarily blocked. "
+            "Update ULTRON_DATABASE_URL with the correct Supabase database password in Vercel environment variables and allow the pooler cooldown period to elapse.",
         )
     if "password authentication failed" in lower or "authentication failed" in lower:
         if diag.get("password_wrapped_in_brackets"):
@@ -195,6 +225,7 @@ def reset_engine() -> None:
     _SESSION_FACTORY = None
     _ENGINE_URL = None
     _INITIALIZED_ENGINE_URLS.clear()
+    clear_auth_failure()
 
 
 def _record_schema_migrations(db: Session) -> None:
@@ -230,11 +261,10 @@ def init_database(settings: Settings | None = None) -> None:
                 db.flush()
             seed_agent_catalog(db)
             db.commit()
+            clear_auth_failure()
         except IntegrityError:
             # Tolerate concurrent cold-start seeding races in serverless environments.
             db.rollback()
-
-    _INITIALIZED_ENGINE_URLS.add(url)
 
 
 def ensure_database_initialized(settings: Settings | None = None) -> None:
@@ -267,15 +297,29 @@ def get_session_factory(settings: Settings | None = None) -> sessionmaker[Sessio
 
 
 def get_db() -> Generator[Session, None, None]:
-    """FastAPI dependency yielding a scoped SQLAlchemy session."""
+    """FastAPI dependency yielding a scoped SQLAlchemy session with circuit-breaker storm protection."""
     cfg = get_settings()
+    backoff = get_active_auth_backoff()
+    if backoff:
+        raise DatabaseUnavailableError(
+            f"{backoff[1]} (circuit breaker backoff active)",
+            details={
+                "error_code": backoff[0],
+                **cfg.database_diagnostics(),
+            },
+        )
     try:
         ensure_database_initialized(cfg)
         factory = get_session_factory(cfg)
-    except DatabaseConfigurationError:
+        clear_auth_failure()
+    except DatabaseConfigurationError as exc:
+        if exc.code in {"DB_PLACEHOLDER_PASSWORD", "DB_AUTH_FAILED"}:
+            record_auth_failure(exc.code, exc.message)
         raise
     except SQLAlchemyError as exc:
         err_code, detail = classify_database_error(exc, cfg)
+        if err_code in {"DB_AUTH_FAILED", "DB_CIRCUIT_BREAKER", "DB_PLACEHOLDER_PASSWORD"}:
+            record_auth_failure(err_code, detail)
         raise DatabaseUnavailableError(
             detail,
             details={
@@ -294,10 +338,21 @@ def check_database_health_detailed(settings: Settings | None = None) -> dict[str
     """Execute a lightweight connectivity probe and return structured non-secret diagnostics."""
     cfg = settings or get_settings()
     diag = cfg.database_diagnostics()
+    backoff = get_active_auth_backoff()
+    if backoff:
+        remaining = max(1, int(_CIRCUIT_BREAKER_COOLDOWN_SECONDS - (time.monotonic() - _LAST_AUTH_FAILURE_TIME)))
+        return {
+            "healthy": False,
+            "backend": cfg.database_backend,
+            "error_code": backoff[0],
+            "detail": f"{backoff[1]} (circuit breaker backoff active for {remaining}s)",
+            **diag,
+        }
     try:
         engine = get_engine(cfg)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
+        clear_auth_failure()
         return {
             "healthy": True,
             "backend": cfg.database_backend,
@@ -307,6 +362,8 @@ def check_database_health_detailed(settings: Settings | None = None) -> dict[str
         }
     except Exception as exc:
         err_code, detail = classify_database_error(exc, cfg)
+        if err_code in {"DB_AUTH_FAILED", "DB_CIRCUIT_BREAKER", "DB_PLACEHOLDER_PASSWORD"}:
+            record_auth_failure(err_code, detail)
         return {
             "healthy": False,
             "backend": cfg.database_backend,
