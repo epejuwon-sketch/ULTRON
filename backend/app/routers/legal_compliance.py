@@ -26,17 +26,21 @@ from app.db.session import get_db
 from app.routers.deps import require_perm
 from app.services.legal_compliance_service import (
     archive_official_document,
+    calculate_statutory_filing_fees,
     evaluate_professional_review,
     execute_approved_filing,
     generate_statutory_policies,
     get_company_registration_workflow,
     get_legal_compliance_dashboard,
+    get_pre_registration_questionnaire,
     get_statutory_research_knowledge,
     populate_regulatory_compliance_calendar,
     prepare_incorporation_draft,
     prepare_ndpc_registration_materials,
     register_officer_with_safeguards,
+    save_pre_registration_questionnaire,
     trigger_statutory_filing_action,
+    validate_and_process_pre_registration_questionnaire,
 )
 
 router = APIRouter(prefix="/api/v1/legal", tags=["Legal & Compliance Operations"])
@@ -95,9 +99,75 @@ class ProfessionalReviewRequest(BaseModel):
     filing_type: str = Field(min_length=3, max_length=64)
 
 
+class PreRegistrationFeeRequest(BaseModel):
+    entity_type: str = Field(default="PRIVATE_COMPANY_LIMITED_BY_SHARES")
+    issued_share_capital: float = Field(default=100000.0, ge=0.0)
+    include_ctc: bool = Field(default=False)
+    include_ai_search: bool = Field(default=False)
+    include_express_delivery: bool = Field(default=False)
+    include_professional_advisory: bool = Field(default=False)
+
+
+class PreRegistrationQuestionnaireRequest(BaseModel):
+    company_type: str = Field(default="PRIVATE_COMPANY_LIMITED_BY_SHARES")
+    proposed_name: str = Field(min_length=3, max_length=200)
+    alternative_names: list[str] = Field(default_factory=list)
+    business_activities: str = Field(min_length=5)
+    principal_objects: list[str] = Field(default_factory=list)
+    issued_share_capital: float = Field(default=100000.0, ge=0.0)
+    nominal_value_per_share: float = Field(default=1.0, gt=0.0)
+    registered_office_address: str = Field(min_length=10, max_length=300)
+    registered_office_state: str = Field(default="Lagos", max_length=64)
+    registered_office_lga: str = Field(default="Eti-Osa", max_length=64)
+    shareholders: list[dict[str, Any]] = Field(default_factory=list)
+    include_ctc: bool = Field(default=False)
+    include_ai_search: bool = Field(default=False)
+    include_express_delivery: bool = Field(default=False)
+    include_professional_advisory: bool = Field(default=False)
+
+
 # -----------------------------------------------------------------------------
 # Routes
 # -----------------------------------------------------------------------------
+
+@router.post("/pre-registration/calculate-fees")
+def api_calculate_statutory_fees(
+    body: PreRegistrationFeeRequest,
+    principal: Principal = Depends(require_perm("legal:read")),
+) -> dict[str, Any]:
+    """Calculate itemized statutory filing fees, FIRS stamp duty, optional services, and legal advisory estimates."""
+    return calculate_statutory_filing_fees(
+        entity_type=body.entity_type,
+        issued_share_capital=body.issued_share_capital,
+        include_ctc=body.include_ctc,
+        include_ai_search=body.include_ai_search,
+        include_express_delivery=body.include_express_delivery,
+        include_professional_advisory=body.include_professional_advisory,
+    )
+
+
+@router.get("/pre-registration/questionnaire")
+def api_get_pre_registration_questionnaire(
+    principal: Principal = Depends(require_perm("legal:read")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any] | None:
+    """Retrieve pre-registration questionnaire in DRAFT status."""
+    return get_pre_registration_questionnaire(db, tenant_id=principal.tenant_id)
+
+
+@router.post("/pre-registration/questionnaire", status_code=status.HTTP_200_OK)
+def api_save_pre_registration_questionnaire(
+    body: PreRegistrationQuestionnaireRequest,
+    principal: Principal = Depends(require_perm("legal:write")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Save or update pre-registration questionnaire strictly in DRAFT status with zero-sensitive-ID checks and capacity safeguards."""
+    return save_pre_registration_questionnaire(
+        db,
+        principal=principal,
+        data=body.model_dump(),
+    )
+
 
 @router.get("/dashboard")
 def api_get_dashboard(

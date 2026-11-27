@@ -17,8 +17,11 @@ from app.services.legal_compliance_service import (
     _calculate_age,
     _mask_nin,
     _validate_not_synthetic_identity,
+    calculate_statutory_filing_fees,
     evaluate_professional_review,
     get_statutory_research_knowledge,
+    validate_and_process_pre_registration_questionnaire,
+    STATUTORY_COMPANY_CATEGORIES,
 )
 
 
@@ -550,4 +553,301 @@ def test_cama_section_20_2_minor_subscriber_with_two_adults(
     minor_data = resp_minor.json()
     assert minor_data["is_under_18"] is True
     assert minor_data["guardian_officer_id"] is None
+
+
+def test_statutory_fee_calculation_engine_all_categories_and_share_capital():
+    """Verify dynamic CAC incorporation fee calculation, FIRS stamp duty, and optional/professional breakdowns.
+    
+    CAMA 2020 §27(2)(a) sets statutory minimum issued share capital at ₦100,000 for private companies
+    and ₦2,000,000 for public companies. Authorized capital is abolished.
+    Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025 / 2026).
+    """
+    # 1. Private LTD with statutory minimum ₦100,000 share capital
+    fees_100k = calculate_statutory_filing_fees(
+        entity_type="PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        issued_share_capital=100000.0,
+        include_ctc=False,
+    )
+    # Name Reservation ₦1,000 + Filing ₦10,000 + Stamp Duty 0.75% of ₦100,000 (₦750) = ₦11,750
+    assert fees_100k["mandatory_government_total_ngn"] == 11750.0
+    assert fees_100k["total_estimated_fee_ngn"] == 11750.0
+    assert fees_100k["mandatory_government_items"][0]["amount_ngn"] == 1000.0
+    assert fees_100k["mandatory_government_items"][1]["amount_ngn"] == 10000.0
+    assert fees_100k["mandatory_government_items"][2]["amount_ngn"] == 750.0
+
+    # With optional CTC (+₦5,000)
+    fees_100k_ctc = calculate_statutory_filing_fees(
+        entity_type="PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        issued_share_capital=100000.0,
+        include_ctc=True,
+    )
+    assert fees_100k_ctc["mandatory_government_total_ngn"] == 11750.0
+    assert fees_100k_ctc["optional_services_total_ngn"] == 5000.0
+    assert fees_100k_ctc["total_estimated_fee_ngn"] == 16750.0
+
+    # 2. Private LTD with ₦1,000,000 share capital
+    fees_1m = calculate_statutory_filing_fees(
+        entity_type="PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        issued_share_capital=1000000.0,
+        include_ctc=True,
+    )
+    # Name Reservation ₦1,000 + Filing ₦10,000 + Stamp Duty 0.75% (₦7,500) = ₦18,500 mandatory + ₦5,000 CTC = ₦23,500
+    assert fees_1m["mandatory_government_total_ngn"] == 18500.0
+    assert fees_1m["total_estimated_fee_ngn"] == 23500.0
+
+    # 3. Private LTD with ₦5,000,000 share capital
+    fees_5m = calculate_statutory_filing_fees(
+        entity_type="PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        issued_share_capital=5000000.0,
+    )
+    # Filing fee: ₦10,000 (first ₦1M) + 4 * ₦5,000 = ₦30,000
+    # Stamp duty: 0.75% of ₦5,000,000 = ₦37,500
+    # Mandatory total = ₦1,000 + ₦30,000 + ₦37,500 = ₦68,500
+    assert fees_5m["mandatory_government_items"][1]["amount_ngn"] == 30000.0
+    assert fees_5m["mandatory_government_items"][2]["amount_ngn"] == 37500.0
+    assert fees_5m["mandatory_government_total_ngn"] == 68500.0
+
+    # 4. Public PLC with statutory minimum ₦2,000,000 share capital
+    fees_plc = calculate_statutory_filing_fees(
+        entity_type="PUBLIC_COMPANY_LIMITED_BY_SHARES",
+        issued_share_capital=2000000.0,
+        include_ctc=True,
+    )
+    # Filing fee: ₦20,000 (first ₦1M) + ₦10,000 (second ₦1M) = ₦30,000
+    # Stamp duty: 0.75% of ₦2,000,000 = ₦15,000
+    # Mandatory total = ₦1,000 + ₦30,000 + ₦15,000 = ₦46,000
+    # With CTC (+₦5,000) = ₦51,000
+    assert fees_plc["mandatory_government_items"][1]["amount_ngn"] == 30000.0
+    assert fees_plc["mandatory_government_items"][2]["amount_ngn"] == 15000.0
+    assert fees_plc["mandatory_government_total_ngn"] == 46000.0
+    assert fees_plc["total_estimated_fee_ngn"] == 51000.0
+
+    # 5. Company Limited by Guarantee (LTD/GTE)
+    fees_gte = calculate_statutory_filing_fees(
+        entity_type="COMPANY_LIMITED_BY_GUARANTEE",
+        include_ctc=False,
+    )
+    # Name Reservation ₦1,000 + Filing ₦20,000 flat + Stamp duty ₦500 flat = ₦21,500
+    assert fees_gte["mandatory_government_items"][1]["amount_ngn"] == 20000.0
+    assert fees_gte["mandatory_government_items"][2]["amount_ngn"] == 500.0
+    assert fees_gte["mandatory_government_total_ngn"] == 21500.0
+
+    # 6. Optional & Professional estimates
+    fees_all = calculate_statutory_filing_fees(
+        entity_type="PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        issued_share_capital=100000.0,
+        include_ctc=True,
+        include_ai_search=True,
+        include_express_delivery=True,
+        include_professional_advisory=True,
+    )
+    assert fees_all["mandatory_government_total_ngn"] == 11750.0
+    assert fees_all["optional_services_total_ngn"] == (5000.0 + 200.0 + 3500.0)
+    assert fees_all["professional_advisory_total_ngn"] == 45000.0
+    assert fees_all["total_estimated_fee_ngn"] == (11750.0 + 8700.0 + 45000.0)
+
+
+def test_pre_registration_questionnaire_validation_and_rejections():
+    """Verify strict CAMA 2020 §27(2)(a) share capital thresholds and zero-sensitive-ID rejection."""
+    # 1. CAMA §27(2)(a) minimum share capital: Private LTD below ₦100,000 rejected
+    with pytest.raises(ValidationError) as exc_info:
+        validate_and_process_pre_registration_questionnaire({
+            "company_type": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+            "proposed_name": "CARAVAN LABS LTD",
+            "business_activities": "Software development & artificial intelligence platform",
+            "issued_share_capital": 50000.0,  # Below ₦100,000 statutory minimum!
+            "registered_office_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+        })
+    assert "below the statutory minimum of ₦100,000.00" in str(exc_info.value)
+
+    # 2. CAMA §27(2)(a) minimum share capital: Public PLC below ₦2,000,000 rejected
+    with pytest.raises(ValidationError) as exc_info_plc:
+        validate_and_process_pre_registration_questionnaire({
+            "company_type": "PUBLIC_COMPANY_LIMITED_BY_SHARES",
+            "proposed_name": "CARAVAN AFRICA PLC",
+            "business_activities": "Public non-dilutive capital matching infrastructure",
+            "issued_share_capital": 1000000.0,  # Below ₦2,000,000 minimum for PLC!
+            "registered_office_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+        })
+    assert "below the statutory minimum of ₦2,000,000.00" in str(exc_info_plc.value)
+
+    # 3. Zero-sensitive-ID policy: Top-level NIN / BVN rejected
+    with pytest.raises(ValidationError) as exc_info_nin:
+        validate_and_process_pre_registration_questionnaire({
+            "company_type": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+            "proposed_name": "CARAVAN LABS LTD",
+            "business_activities": "Software development",
+            "issued_share_capital": 100000.0,
+            "registered_office_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+            "nin": "12345678901",  # FORBIDDEN!
+        })
+    assert "Zero Personal Data Transmission Policy" in str(exc_info_nin.value)
+
+    # 4. Zero-sensitive-ID policy: Shareholder dict with NIN rejected
+    with pytest.raises(ValidationError) as exc_info_sh_nin:
+        validate_and_process_pre_registration_questionnaire({
+            "company_type": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+            "proposed_name": "CARAVAN LABS LTD",
+            "business_activities": "Software development",
+            "issued_share_capital": 100000.0,
+            "registered_office_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+            "shareholders": [
+                {
+                    "full_legal_name": "Epejuwon Founder",
+                    "shares_allocated": 100000,
+                    "nin": "12345678901",  # FORBIDDEN!
+                }
+            ],
+        })
+    assert "Zero Personal Data Transmission Policy" in str(exc_info_sh_nin.value)
+
+    # 5. Raw 11-digit number in text field rejected
+    with pytest.raises(ValidationError) as exc_info_raw_digits:
+        validate_and_process_pre_registration_questionnaire({
+            "company_type": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+            "proposed_name": "CARAVAN LABS LTD",
+            "business_activities": "Software development",
+            "issued_share_capital": 100000.0,
+            "registered_office_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+            "shareholders": [
+                {
+                    "full_legal_name": "Epejuwon Founder 12345678901",
+                    "shares_allocated": 100000,
+                }
+            ],
+        })
+    assert "Detected 11-digit identity number" in str(exc_info_raw_digits.value)
+
+
+def test_pre_registration_questionnaire_capacity_safeguards():
+    """Verify CAMA 2020 §20(1)(a) infant director disqualification and §20(2) minor shareholder rules."""
+    result = validate_and_process_pre_registration_questionnaire({
+        "company_type": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        "proposed_name": "CARAVAN LABS LTD",
+        "alternative_names": ["CARAVAN TECH LTD", "AURELIA LABS LTD"],
+        "business_activities": "Software technology and non-dilutive grant intelligence",
+        "issued_share_capital": 100000.0,
+        "nominal_value_per_share": 1.0,
+        "registered_office_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+        "shareholders": [
+            {
+                "full_legal_name": "Juwon Epejuwon",
+                "is_under_18": True,
+                "is_director": True,  # ATTEMPTED INFANT DIRECTORSHIP
+                "shares_allocated": 70000,
+                "equity_percentage": 70.0,
+                "guardian_trustee_name": "Dr. Babatunde Epejuwon",
+            },
+            {
+                "full_legal_name": "Dr. Babatunde Epejuwon",
+                "is_under_18": False,
+                "is_director": True,
+                "shares_allocated": 30000,
+                "equity_percentage": 30.0,
+            },
+        ],
+    })
+
+    # Status must strictly be DRAFT
+    assert result["status"] == "DRAFT"
+
+    # Infant directorship must be stripped under CAMA 2020 §20(1)(a)
+    minor_sh = [s for s in result["shareholders"] if s["is_under_18"]][0]
+    assert minor_sh["is_director"] is False  # Disqualified!
+
+    safeguards = result["capacity_safeguards"]
+    assert safeguards["infant_directorship_attempted_and_disqualified"] is True
+    assert safeguards["cama_section_20_1_a_enforced"] is True
+    assert safeguards["cama_section_20_2_compliant"] is True
+    assert safeguards["legal_professional_mandatory"] is True
+
+
+def test_api_pre_registration_endpoints_lifecycle(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+):
+    """Test full API lifecycle: fee calculator, saving questionnaire in DRAFT, and retrieval."""
+    headers = auth_headers["owner"]
+
+    # 1. Fee Calculator API
+    fee_resp = client.post(
+        "/api/v1/legal/pre-registration/calculate-fees",
+        headers=headers,
+        json={
+            "entity_type": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+            "issued_share_capital": 100000.0,
+            "include_ctc": True,
+            "include_ai_search": True,
+            "include_express_delivery": False,
+            "include_professional_advisory": True,
+        },
+    )
+    assert fee_resp.status_code == 200
+    fee_data = fee_resp.json()
+    assert fee_data["mandatory_government_total_ngn"] == 11750.0
+    assert fee_data["optional_services_total_ngn"] == 5200.0  # CTC ₦5,000 + AI Search ₦200
+    assert fee_data["professional_advisory_total_ngn"] == 45000.0
+    assert fee_data["total_estimated_fee_ngn"] == 61950.0
+
+    # 2. Save Questionnaire API
+    save_resp = client.post(
+        "/api/v1/legal/pre-registration/questionnaire",
+        headers=headers,
+        json={
+            "company_type": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+            "proposed_name": "CARAVAN FUNDING INTELLIGENCE LTD",
+            "alternative_names": ["CARAVAN VENTURES AFRICA LTD", "AURELIA FUNDING INTELLIGENCE LTD"],
+            "business_activities": "Autonomous venture analytics and financial technology platform",
+            "principal_objects": [
+                "To carry on business as developers and operators of grant intelligence systems.",
+                "To provide non-dilutive capital matching technology.",
+            ],
+            "issued_share_capital": 100000.0,
+            "nominal_value_per_share": 1.0,
+            "registered_office_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+            "registered_office_state": "Lagos",
+            "registered_office_lga": "Eti-Osa",
+            "shareholders": [
+                {
+                    "full_legal_name": "Juwon Epejuwon",
+                    "is_under_18": True,
+                    "is_director": False,
+                    "shares_allocated": 70000,
+                    "equity_percentage": 70.0,
+                    "guardian_trustee_name": "Dr. Babatunde Epejuwon",
+                },
+                {
+                    "full_legal_name": "Dr. Babatunde Epejuwon",
+                    "is_under_18": False,
+                    "is_director": True,
+                    "shares_allocated": 30000,
+                    "equity_percentage": 30.0,
+                },
+            ],
+            "include_ctc": True,
+            "include_professional_advisory": True,
+        },
+    )
+    assert save_resp.status_code == 200
+    saved_data = save_resp.json()
+    assert saved_data["status"] == "DRAFT"
+    assert "questionnaire_id" in saved_data
+    assert saved_data["data"]["fee_breakdown"]["mandatory_government_total_ngn"] == 11750.0
+
+    # 3. Retrieve Questionnaire API
+    get_resp = client.get(
+        "/api/v1/legal/pre-registration/questionnaire",
+        headers=headers,
+    )
+    assert get_resp.status_code == 200
+    retrieved = get_resp.json()
+    assert retrieved is not None
+    assert retrieved["status"] == "DRAFT"
+    assert retrieved["company_type"] == "PRIVATE_COMPANY_LIMITED_BY_SHARES"
+    assert retrieved["issued_share_capital"] == 100000.0
+    assert retrieved["fee_breakdown"]["mandatory_government_total_ngn"] == 11750.0
+    assert len(retrieved["shareholders"]) == 2
+    assert retrieved["capacity_safeguards"]["has_minor_subscribers"] is True
+    assert retrieved["capacity_safeguards"]["cama_section_20_2_compliant"] is True
+
 

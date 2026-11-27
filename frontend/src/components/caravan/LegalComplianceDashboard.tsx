@@ -54,9 +54,50 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
   const [policies, setPolicies] = useState<any[]>([]);
   const [officers, setOfficers] = useState<any[]>([]);
   const [archives, setArchives] = useState<any[]>([]);
-  const [activeSubTab, setActiveSubTab] = useState<"dashboard" | "cac_workflow" | "incorporation" | "officers" | "policies" | "vault">("dashboard");
+  const [activeSubTab, setActiveSubTab] = useState<"dashboard" | "questionnaire" | "cac_workflow" | "incorporation" | "officers" | "policies" | "vault">("dashboard");
   const [selectedPolicy, setSelectedPolicy] = useState<any>(null);
   const [actionLoading, setActionLoading] = useState(false);
+
+  // Pre-Registration Questionnaire State
+  const [questionnaire, setQuestionnaire] = useState<any>(null);
+  const [qCompanyType, setQCompanyType] = useState("PRIVATE_COMPANY_LIMITED_BY_SHARES");
+  const [qProposedName, setQProposedName] = useState("CARAVAN FUNDING INTELLIGENCE LTD");
+  const [qAltName1, setQAltName1] = useState("CARAVAN VENTURES AFRICA LTD");
+  const [qAltName2, setQAltName2] = useState("AURELIA FUNDING INTELLIGENCE LTD");
+  const [qActivities, setQActivities] = useState("Autonomous artificial intelligence matching engine, venture data intelligence, and non-dilutive capital discovery platform for African enterprises.");
+  const [qObjects, setQObjects] = useState<string[]>([
+    "To carry on business as developers and operators of grant intelligence systems.",
+    "To provide corporate advisory and compliance technology infrastructure.",
+  ]);
+  const [qShareCapital, setQShareCapital] = useState(100000);
+  const [qNominalVal, setQNominalVal] = useState(1.0);
+  const [qAddress, setQAddress] = useState("12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria");
+  const [qState, setQState] = useState("Lagos");
+  const [qLga, setQLga] = useState("Eti-Osa");
+  const [qShareholders, setQShareholders] = useState<any[]>([
+    {
+      full_legal_name: "Juwon Epejuwon",
+      is_under_18: true,
+      is_director: false,
+      shares_allocated: 70000,
+      equity_percentage: 70.0,
+      guardian_trustee_name: "Dr. Babatunde Epejuwon",
+    },
+    {
+      full_legal_name: "Dr. Babatunde Epejuwon",
+      is_under_18: false,
+      is_director: true,
+      shares_allocated: 30000,
+      equity_percentage: 30.0,
+      guardian_trustee_name: "",
+    },
+  ]);
+  const [qIncludeCtc, setQIncludeCtc] = useState(false);
+  const [qIncludeAiSearch, setQIncludeAiSearch] = useState(false);
+  const [qIncludeExpress, setQIncludeExpress] = useState(false);
+  const [qIncludeProf, setQIncludeProf] = useState(false);
+  const [qFeeBreakdown, setQFeeBreakdown] = useState<any>(null);
+  const [qSaving, setQSaving] = useState(false);
 
   // New officer form
   const [officerType, setOfficerType] = useState("DIRECTOR");
@@ -70,19 +111,72 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
   const [officerEquity, setOfficerEquity] = useState(10.0);
   const [guardianId, setGuardianId] = useState("");
 
+  async function fetchFeeBreakdown(
+    cType: string = qCompanyType,
+    capital: number = qShareCapital,
+    ctc: boolean = qIncludeCtc,
+    aiSearch: boolean = qIncludeAiSearch,
+    express: boolean = qIncludeExpress,
+    prof: boolean = qIncludeProf,
+  ) {
+    try {
+      const res = await apiFetch<any>("/api/v1/legal/pre-registration/calculate-fees", {
+        method: "POST",
+        body: JSON.stringify({
+          entity_type: cType,
+          issued_share_capital: Number(capital),
+          include_ctc: ctc,
+          include_ai_search: aiSearch,
+          include_express_delivery: express,
+          include_professional_advisory: prof,
+        }),
+      });
+      setQFeeBreakdown(res);
+    } catch {
+      // fallback
+    }
+  }
+
   async function loadData() {
     setLoading(true);
     try {
-      const [dashRes, polRes, offRes, arcRes] = await Promise.all([
+      const [dashRes, polRes, offRes, arcRes, qRes] = await Promise.all([
         apiFetch<any>("/api/v1/legal/dashboard"),
         apiFetch<any[]>("/api/v1/legal/policies"),
         apiFetch<any[]>("/api/v1/legal/officers"),
         apiFetch<any[]>("/api/v1/legal/archive"),
+        apiFetch<any>("/api/v1/legal/pre-registration/questionnaire").catch(() => null),
       ]);
       setDashboard(dashRes);
       setPolicies(polRes || []);
       setOfficers(offRes || []);
       setArchives(arcRes || []);
+      if (qRes) {
+        setQuestionnaire(qRes);
+        setQCompanyType(qRes.company_type || "PRIVATE_COMPANY_LIMITED_BY_SHARES");
+        setQProposedName(qRes.proposed_name || "CARAVAN FUNDING INTELLIGENCE LTD");
+        if (qRes.alternative_names && qRes.alternative_names.length > 0) {
+          setQAltName1(qRes.alternative_names[0] || "");
+          setQAltName2(qRes.alternative_names[1] || "");
+        }
+        setQActivities(qRes.business_activities || "");
+        if (qRes.principal_objects) {
+          setQObjects(qRes.principal_objects);
+        }
+        setQShareCapital(qRes.issued_share_capital || 100000);
+        setQNominalVal(qRes.nominal_value_per_share || 1.0);
+        setQAddress(qRes.registered_office_address || "");
+        setQState(qRes.registered_office_state || "Lagos");
+        setQLga(qRes.registered_office_lga || "Eti-Osa");
+        if (qRes.shareholders && qRes.shareholders.length > 0) {
+          setQShareholders(qRes.shareholders);
+        }
+        if (qRes.fee_breakdown) {
+          setQFeeBreakdown(qRes.fee_breakdown);
+        }
+      } else {
+        await fetchFeeBreakdown("PRIVATE_COMPANY_LIMITED_BY_SHARES", 100000, false, false, false, false);
+      }
     } catch (err: any) {
       pushToast(err.message || "Failed loading legal compliance telemetry", "error");
     } finally {
@@ -156,6 +250,49 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
       pushToast(err.message || "Failed registering officer", "error");
     } finally {
       setActionLoading(false);
+    }
+  }
+
+  async function handleSaveQuestionnaire() {
+    const minCap = qCompanyType === "PUBLIC_COMPANY_LIMITED_BY_SHARES" ? 2000000 : 100000;
+    if (qCompanyType !== "COMPANY_LIMITED_BY_GUARANTEE" && qShareCapital < minCap) {
+      pushToast(`Minimum issued share capital for ${qCompanyType === "PUBLIC_COMPANY_LIMITED_BY_SHARES" ? "PLC is ₦2,000,000" : "Private LTD is ₦100,000"} under CAMA 2020 §27(2)(a).`, "error");
+      return;
+    }
+
+    setQSaving(true);
+    try {
+      const altNames = [qAltName1, qAltName2].filter(Boolean);
+      const res = await apiFetch<any>("/api/v1/legal/pre-registration/questionnaire", {
+        method: "POST",
+        body: JSON.stringify({
+          company_type: qCompanyType,
+          proposed_name: qProposedName,
+          alternative_names: altNames,
+          business_activities: qActivities,
+          principal_objects: qObjects,
+          issued_share_capital: Number(qShareCapital),
+          nominal_value_per_share: Number(qNominalVal),
+          registered_office_address: qAddress,
+          registered_office_state: qState,
+          registered_office_lga: qLga,
+          shareholders: qShareholders,
+          include_ctc: qIncludeCtc,
+          include_ai_search: qIncludeAiSearch,
+          include_express_delivery: qIncludeExpress,
+          include_professional_advisory: qIncludeProf,
+        }),
+      });
+      setQuestionnaire(res);
+      if (res.data?.fee_breakdown) {
+        setQFeeBreakdown(res.data.fee_breakdown);
+      }
+      pushToast("Pre-registration questionnaire saved strictly in DRAFT status.", "success");
+      await loadData();
+    } catch (err: any) {
+      pushToast(err.message || "Failed saving questionnaire", "error");
+    } finally {
+      setQSaving(false);
     }
   }
 
@@ -235,6 +372,16 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
           onClick={() => setActiveSubTab("dashboard")}
         >
           8-Widget Acceptance Dashboard
+        </button>
+        <button
+          type="button"
+          className={`seg-btn ${activeSubTab === "questionnaire" ? "active" : ""}`}
+          onClick={() => {
+            setActiveSubTab("questionnaire");
+            fetchFeeBreakdown();
+          }}
+        >
+          Pre-Registration Questionnaire &amp; Fee Auditor
         </button>
         <button
           type="button"
@@ -609,6 +756,651 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
         </div>
       )}
 
+      {/* SUBTAB: PRE-REGISTRATION QUESTIONNAIRE & STATUTORY FEE AUDITOR */}
+      {activeSubTab === "questionnaire" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* Top Banner / Disclaimer */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10, borderLeft: "4px solid var(--accent-amber)" }}>
+            <div className="row-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Scale size={18} style={{ color: "var(--accent-amber)" }} />
+                  <strong style={{ fontSize: 16, color: "#ffffff" }}>
+                    CAMA 2020 Company Pre-Registration Questionnaire &amp; Statutory Fee Auditor
+                  </strong>
+                  <span className="pill pill-warn mono">STATUS: DRAFT (UNSUBMITTED)</span>
+                </div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 4, color: "#cbd5e1" }}>
+                  Prepare verified company incorporation particulars under Nigerian Corporate Affairs Commission (CAC) rules.
+                  Authorized share capital abolished by CAMA 2020; statutory minimum issued share capital is ₦100,000 for private companies and ₦2,000,000 for public companies under CAMA 2020 §27(2)(a).
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={qSaving}
+                  onClick={handleSaveQuestionnaire}
+                >
+                  <FileCheck size={14} /> {qSaving ? "Saving..." : "Save Questionnaire (DRAFT)"}
+                </button>
+              </div>
+            </div>
+
+            {/* Operating Safeguard Badges */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
+              <span className="pill pill-emerald" style={{ fontSize: 11 }}>
+                <ShieldCheck size={11} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                Zero CAC Portal Submissions
+              </span>
+              <span className="pill pill-cyan" style={{ fontSize: 11 }}>
+                <Lock size={11} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                Zero Payments Dispatched
+              </span>
+              <span className="pill pill-amber" style={{ fontSize: 11 }}>
+                <ShieldAlert size={11} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                Zero Sensitive Identity Numbers (NIN/BVN)
+              </span>
+              <span className="pill" style={{ fontSize: 11, background: "rgba(255,255,255,0.06)", color: "#f8fafc" }}>
+                <Scale size={11} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                CAMA §20 &amp; Infants Relief Act Capacity Enforced
+              </span>
+            </div>
+
+            {/* Crucial Statutory Warning Notice */}
+            <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.3)", borderRadius: 6, padding: "10px 12px", fontSize: 12, color: "#fde68a", display: "flex", alignItems: "flex-start", gap: 8 }}>
+              <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2, color: "#f59e0b" }} />
+              <div>
+                <strong>Statutory Pre-Filing Governance Notice:</strong> All data entered in this questionnaire remains strictly in <strong>DRAFT</strong> status.
+                Do <strong>NOT</strong> enter National Identity Numbers (NIN), Bank Verification Numbers (BVN), or passport credentials into ordinary chat or forms.
+                The company is <strong>NOT</strong> registered until CAC officially issues the electronic Certificate of Incorporation and Status Report with a valid RC number.
+              </div>
+            </div>
+          </div>
+
+          {/* Section 1: Dynamic Statutory Fee Calculation Engine */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="row-between">
+              <strong style={{ fontSize: 14, color: "#ffffff" }}>
+                <BookOpen size={16} style={{ verticalAlign: "middle", marginRight: 6, color: "var(--accent-cyan)" }} />
+                1. Statutory Fee Calculation Engine (Official Gazette No. 92, Vol. 112)
+              </strong>
+              <span className="pill pill-cyan mono" style={{ fontSize: 11 }}>
+                In force 1 Oct 2025 / 2026
+              </span>
+            </div>
+
+            <div className="grid-2" style={{ gap: 12 }}>
+              {/* Company Category Selector */}
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4, fontWeight: 500 }}>
+                  Statutory Company Category:
+                </label>
+                <select
+                  className="input"
+                  value={qCompanyType}
+                  onChange={(e) => {
+                    const newType = e.target.value;
+                    setQCompanyType(newType);
+                    const defaultCap = newType === "PUBLIC_COMPANY_LIMITED_BY_SHARES" ? 2000000 : 100000;
+                    if (qShareCapital < defaultCap && newType !== "COMPANY_LIMITED_BY_GUARANTEE") {
+                      setQShareCapital(defaultCap);
+                    }
+                    fetchFeeBreakdown(newType, newType === "PUBLIC_COMPANY_LIMITED_BY_SHARES" ? Math.max(qShareCapital, 2000000) : qShareCapital);
+                  }}
+                  style={{ width: "100%", padding: "8px 10px" }}
+                >
+                  <option value="PRIVATE_COMPANY_LIMITED_BY_SHARES">Private Company Limited by Shares (LTD) — Min ₦100,000</option>
+                  <option value="PUBLIC_COMPANY_LIMITED_BY_SHARES">Public Company Limited by Shares (PLC) — Min ₦2,000,000</option>
+                  <option value="COMPANY_LIMITED_BY_GUARANTEE">Company Limited by Guarantee (LTD/GTE) — No Share Capital</option>
+                  <option value="UNLIMITED_COMPANY">Unlimited Company (ULTD) — Min ₦100,000 if Private</option>
+                </select>
+                <div className="muted" style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>
+                  Authority: CAMA 2020 §27(2)(a). Authorized capital abolished; minimum issued share capital is ₦100,000 for private companies and ₦2,000,000 for public companies.
+                </div>
+              </div>
+
+              {/* Proposed Issued Share Capital */}
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4, fontWeight: 500 }}>
+                  Proposed Issued Share Capital (NGN):
+                </label>
+                <input
+                  type="number"
+                  className="input"
+                  disabled={qCompanyType === "COMPANY_LIMITED_BY_GUARANTEE"}
+                  value={qShareCapital}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setQShareCapital(val);
+                    fetchFeeBreakdown(qCompanyType, val);
+                  }}
+                  style={{ width: "100%", padding: "8px 10px" }}
+                />
+                {/* Quick Presets */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: 10, padding: "2px 8px" }}
+                    onClick={() => {
+                      setQShareCapital(100000);
+                      fetchFeeBreakdown(qCompanyType, 100000);
+                    }}
+                  >
+                    ₦100,000 (Private Min)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: 10, padding: "2px 8px" }}
+                    onClick={() => {
+                      setQShareCapital(500000);
+                      fetchFeeBreakdown(qCompanyType, 500000);
+                    }}
+                  >
+                    ₦500,000
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: 10, padding: "2px 8px" }}
+                    onClick={() => {
+                      setQShareCapital(1000000);
+                      fetchFeeBreakdown(qCompanyType, 1000000);
+                    }}
+                  >
+                    ₦1,000,000
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: 10, padding: "2px 8px" }}
+                    onClick={() => {
+                      setQShareCapital(2000000);
+                      fetchFeeBreakdown(qCompanyType, 2000000);
+                    }}
+                  >
+                    ₦2,000,000 (Public Min)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: 10, padding: "2px 8px" }}
+                    onClick={() => {
+                      setQShareCapital(10000000);
+                      fetchFeeBreakdown(qCompanyType, 10000000);
+                    }}
+                  >
+                    ₦10,000,000
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Optional Services & Professional Review Checkboxes */}
+            <div style={{ padding: "10px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 6, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#ffffff" }}>Optional Ancillary Services &amp; Professional Legal Fees:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, fontSize: 12 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#cbd5e1", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={qIncludeCtc}
+                    onChange={(e) => {
+                      setQIncludeCtc(e.target.checked);
+                      fetchFeeBreakdown(qCompanyType, qShareCapital, e.target.checked, qIncludeAiSearch, qIncludeExpress, qIncludeProf);
+                    }}
+                  />
+                  <span>Certified True Copies (CTC) (+₦5,000)</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#cbd5e1", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={qIncludeAiSearch}
+                    onChange={(e) => {
+                      setQIncludeAiSearch(e.target.checked);
+                      fetchFeeBreakdown(qCompanyType, qShareCapital, qIncludeCtc, e.target.checked, qIncludeExpress, qIncludeProf);
+                    }}
+                  />
+                  <span>CAC AI Name Pre-Search (+₦200)</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#cbd5e1", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={qIncludeExpress}
+                    onChange={(e) => {
+                      setQIncludeExpress(e.target.checked);
+                      fetchFeeBreakdown(qCompanyType, qShareCapital, qIncludeCtc, qIncludeAiSearch, e.target.checked, qIncludeProf);
+                    }}
+                  />
+                  <span>Express Courier Delivery (+₦3,500)</span>
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#cbd5e1", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={qIncludeProf}
+                    onChange={(e) => {
+                      setQIncludeProf(e.target.checked);
+                      fetchFeeBreakdown(qCompanyType, qShareCapital, qIncludeCtc, qIncludeAiSearch, qIncludeExpress, e.target.checked);
+                    }}
+                  />
+                  <span>CAC Accredited Legal Practitioner Review (+₦45,000)</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Live Fee Breakdown Table */}
+            {qFeeBreakdown && (
+              <div style={{ border: "1px solid rgba(56, 189, 248, 0.2)", borderRadius: 6, overflow: "hidden" }}>
+                <div style={{ background: "rgba(56, 189, 248, 0.08)", padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <strong style={{ fontSize: 13, color: "#ffffff" }}>
+                    Itemized Statutory Fee Breakdown — {qFeeBreakdown.company_category_name}
+                  </strong>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--accent-cyan)" }}>
+                    Share Capital: ₦{Number(qFeeBreakdown.issued_share_capital_ngn).toLocaleString()}
+                  </span>
+                </div>
+                <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
+                  {/* Mandatory government items */}
+                  <div className="muted" style={{ fontWeight: 600, color: "var(--accent-cyan)", fontSize: 11 }}>
+                    MANDATORY GOVERNMENT STATUTORY CHARGES (CAC &amp; FIRS)
+                  </div>
+                  {qFeeBreakdown.mandatory_government_items?.map((m: any, idx: number) => (
+                    <div key={idx} className="row-between list-item" style={{ padding: "6px 10px" }}>
+                      <div>
+                        <div style={{ fontWeight: 500, color: "#f8fafc" }}>{m.name}</div>
+                        <div className="muted" style={{ fontSize: 10, color: "#94a3b8" }}>
+                          Authority: {m.authority} · Ref: {m.statutory_basis} ({m.date})
+                        </div>
+                      </div>
+                      <strong style={{ color: "var(--accent-emerald)" }}>₦{Number(m.amount_ngn).toLocaleString()}</strong>
+                    </div>
+                  ))}
+
+                  {/* Bundled free deliverables */}
+                  <div className="muted" style={{ fontWeight: 600, color: "var(--accent-emerald)", fontSize: 11, marginTop: 4 }}>
+                    BUNDLED OFFICIAL GOVERNMENT DELIVERABLES (NO EXTRA CHARGE)
+                  </div>
+                  {qFeeBreakdown.bundled_deliverables?.map((b: any, idx: number) => (
+                    <div key={idx} className="row-between list-item" style={{ padding: "6px 10px" }}>
+                      <div style={{ color: "#cbd5e1" }}>{b.name}</div>
+                      <span className="pill pill-emerald mono" style={{ fontSize: 10 }}>₦0.00 (BUNDLED)</span>
+                    </div>
+                  ))}
+
+                  {/* Optional items if selected */}
+                  {qFeeBreakdown.optional_services?.filter((o: any) => o.selected).length > 0 && (
+                    <>
+                      <div className="muted" style={{ fontWeight: 600, color: "var(--accent-amber)", fontSize: 11, marginTop: 4 }}>
+                        OPTIONAL ANCILLARY SERVICES
+                      </div>
+                      {qFeeBreakdown.optional_services.filter((o: any) => o.selected).map((opt: any) => (
+                        <div key={opt.service_id} className="row-between list-item" style={{ padding: "6px 10px" }}>
+                          <div>
+                            <div style={{ color: "#f8fafc" }}>{opt.name}</div>
+                            <div className="muted" style={{ fontSize: 10, color: "#94a3b8" }}>{opt.source}</div>
+                          </div>
+                          <strong style={{ color: "#38bdf8" }}>₦{Number(opt.amount_ngn).toLocaleString()}</strong>
+                        </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* Professional legal estimates if selected */}
+                  {qFeeBreakdown.professional_advisory_estimates?.filter((p: any) => p.selected).length > 0 && (
+                    <>
+                      <div className="muted" style={{ fontWeight: 600, color: "var(--accent-amber)", fontSize: 11, marginTop: 4 }}>
+                        PROFESSIONAL LEGAL ADVISORY ESTIMATES (NOT A GOVERNMENT TAX)
+                      </div>
+                      {qFeeBreakdown.professional_advisory_estimates.filter((p: any) => p.selected).map((p: any) => (
+                        <div key={p.advisory_id} className="row-between list-item" style={{ padding: "6px 10px" }}>
+                          <div>
+                            <div style={{ color: "#f8fafc" }}>{p.name}</div>
+                            <div className="muted" style={{ fontSize: 10, color: "#94a3b8" }}>{p.source}</div>
+                          </div>
+                          <strong style={{ color: "var(--accent-amber)" }}>₦{Number(p.amount_ngn).toLocaleString()}</strong>
+                        </div>
+                      ))}
+                    </>
+                  )}
+
+                  {/* Totals Summary */}
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <span style={{ color: "#cbd5e1" }}>Mandatory Government Statutory Total: </span>
+                      <strong style={{ color: "var(--accent-emerald)", fontSize: 14 }}>
+                        ₦{Number(qFeeBreakdown.mandatory_government_total_ngn).toLocaleString()}
+                      </strong>
+                    </div>
+                    <div>
+                      <span style={{ color: "#cbd5e1" }}>Total Estimated Expenditure: </span>
+                      <strong style={{ color: "#38bdf8", fontSize: 15 }}>
+                        ₦{Number(qFeeBreakdown.total_estimated_fee_ngn).toLocaleString()}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Section 2: Proposed Name & Registered Office */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <strong style={{ fontSize: 14, color: "#ffffff" }}>
+              <Award size={16} style={{ verticalAlign: "middle", marginRight: 6, color: "var(--accent-emerald)" }} />
+              2. Proposed Company Particulars &amp; Registered Office
+            </strong>
+
+            <div className="grid-3" style={{ gap: 10 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4 }}>
+                  Primary Proposed Name:
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={qProposedName}
+                  onChange={(e) => setQProposedName(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4 }}>
+                  Alternative Name Option 1:
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={qAltName1}
+                  onChange={(e) => setQAltName1(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4 }}>
+                  Alternative Name Option 2:
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={qAltName2}
+                  onChange={(e) => setQAltName2(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px" }}
+                />
+              </div>
+            </div>
+
+            <div className="grid-2" style={{ gap: 10 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4 }}>
+                  Principal Business Activities:
+                </label>
+                <textarea
+                  className="input"
+                  rows={3}
+                  value={qActivities}
+                  onChange={(e) => setQActivities(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px", fontSize: 12 }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4 }}>
+                  Registered Office Address (Physical Nigerian Address):
+                </label>
+                <textarea
+                  className="input"
+                  rows={3}
+                  value={qAddress}
+                  onChange={(e) => setQAddress(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px", fontSize: 12 }}
+                />
+              </div>
+            </div>
+
+            <div className="grid-2" style={{ gap: 10 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4 }}>
+                  State of Registered Office:
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={qState}
+                  onChange={(e) => setQState(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#cbd5e1", marginBottom: 4 }}>
+                  Local Government Area (LGA):
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={qLga}
+                  onChange={(e) => setQLga(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px" }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Shareholders, Equity & Capacity Safeguards */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <strong style={{ fontSize: 14, color: "#ffffff" }}>
+                  <Users size={16} style={{ verticalAlign: "middle", marginRight: 6, color: "var(--accent-cyan)" }} />
+                  3. Shareholders, Equity Allocation &amp; Capacity Safeguards
+                </strong>
+                <div className="muted" style={{ fontSize: 11, color: "#cbd5e1", marginTop: 2 }}>
+                  CAMA 2020 §20(1)(a) disqualifies infants from directorship. Minor founders may participate as subscribers under §20(2) with 2 adult subscribers or legal trustee.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setQShareholders([
+                    ...qShareholders,
+                    {
+                      full_legal_name: "",
+                      is_under_18: false,
+                      is_director: false,
+                      shares_allocated: 0,
+                      equity_percentage: 0.0,
+                      guardian_trustee_name: "",
+                    },
+                  ]);
+                }}
+              >
+                <Plus size={12} /> Add Shareholder
+              </button>
+            </div>
+
+            {/* Zero Personal Data Transmission Warning */}
+            <div style={{ background: "rgba(56, 189, 248, 0.05)", border: "1px solid rgba(56, 189, 248, 0.2)", borderRadius: 6, padding: "8px 12px", fontSize: 11, color: "#cbd5e1" }}>
+              🔒 <strong>Zero Personal Data Transmission Policy:</strong> Do NOT enter National Identity Numbers (NIN), Bank Verification Numbers (BVN), or passport numbers here. Official identity slips are verified exclusively through accredited legal practitioners.
+            </div>
+
+            {/* Shareholders Table */}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", textAlign: "left", color: "#94a3b8" }}>
+                    <th style={{ padding: "8px 10px" }}>Full Legal Name</th>
+                    <th style={{ padding: "8px 10px" }}>Capacity / Age</th>
+                    <th style={{ padding: "8px 10px" }}>Directorship</th>
+                    <th style={{ padding: "8px 10px" }}>Shares Allocated</th>
+                    <th style={{ padding: "8px 10px" }}>Equity %</th>
+                    <th style={{ padding: "8px 10px" }}>Adult Trustee / Guardian</th>
+                    <th style={{ padding: "8px 10px" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {qShareholders.map((sh: any, idx: number) => (
+                    <tr key={idx} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                      <td style={{ padding: "6px 10px" }}>
+                        <input
+                          type="text"
+                          className="input"
+                          placeholder="Legal Full Name"
+                          value={sh.full_legal_name}
+                          onChange={(e) => {
+                            const updated = [...qShareholders];
+                            updated[idx].full_legal_name = e.target.value;
+                            setQShareholders(updated);
+                          }}
+                          style={{ width: "100%", padding: "4px 8px", fontSize: 12 }}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={sh.is_under_18}
+                            onChange={(e) => {
+                              const updated = [...qShareholders];
+                              updated[idx].is_under_18 = e.target.checked;
+                              if (e.target.checked) {
+                                updated[idx].is_director = false;
+                              }
+                              setQShareholders(updated);
+                            }}
+                          />
+                          <span style={{ color: sh.is_under_18 ? "var(--accent-amber)" : "#cbd5e1" }}>
+                            {sh.is_under_18 ? "Minor (<18)" : "Adult (18+)"}
+                          </span>
+                        </label>
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        {sh.is_under_18 ? (
+                          <span className="pill pill-error" style={{ fontSize: 10 }}>
+                            Disqualified (§20(1)(a))
+                          </span>
+                        ) : (
+                          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={sh.is_director}
+                              onChange={(e) => {
+                                const updated = [...qShareholders];
+                                updated[idx].is_director = e.target.checked;
+                                setQShareholders(updated);
+                              }}
+                            />
+                            <span style={{ color: "#cbd5e1" }}>Director</span>
+                          </label>
+                        )}
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <input
+                          type="number"
+                          className="input"
+                          value={sh.shares_allocated}
+                          onChange={(e) => {
+                            const updated = [...qShareholders];
+                            updated[idx].shares_allocated = Number(e.target.value);
+                            setQShareholders(updated);
+                          }}
+                          style={{ width: 100, padding: "4px 8px", fontSize: 12 }}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <input
+                          type="number"
+                          className="input"
+                          value={sh.equity_percentage}
+                          onChange={(e) => {
+                            const updated = [...qShareholders];
+                            updated[idx].equity_percentage = Number(e.target.value);
+                            setQShareholders(updated);
+                          }}
+                          style={{ width: 70, padding: "4px 8px", fontSize: 12 }}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        {sh.is_under_18 ? (
+                          <input
+                            type="text"
+                            className="input"
+                            placeholder="Adult Trustee Name"
+                            value={sh.guardian_trustee_name || ""}
+                            onChange={(e) => {
+                              const updated = [...qShareholders];
+                              updated[idx].guardian_trustee_name = e.target.value;
+                              setQShareholders(updated);
+                            }}
+                            style={{ width: "100%", padding: "4px 8px", fontSize: 12 }}
+                          />
+                        ) : (
+                          <span className="muted" style={{ fontSize: 11, color: "#94a3b8" }}>Not required (Adult)</span>
+                        )}
+                      </td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: 11, padding: "2px 8px", color: "var(--accent-danger)" }}
+                          disabled={qShareholders.length <= 1}
+                          onClick={() => {
+                            setQShareholders(qShareholders.filter((_: any, i: number) => i !== idx));
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Section 4: Capacity Safeguards & Legal Advisory Notice */}
+          <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10, background: "rgba(255,255,255,0.02)" }}>
+            <strong style={{ fontSize: 13, color: "#ffffff" }}>
+              <Scale size={14} style={{ verticalAlign: "middle", marginRight: 6, color: "var(--accent-amber)" }} />
+              Legal Capacity &amp; Corporate Governance Safeguards Notice
+            </strong>
+            <div className="grid-3" style={{ gap: 10, fontSize: 11 }}>
+              <div className="list-item" style={{ padding: "10px" }}>
+                <strong style={{ color: "var(--accent-amber)" }}>CAMA 2020 §20(1)(a)</strong>
+                <div style={{ color: "#cbd5e1", marginTop: 4 }}>
+                  Persons under the age of 18 are <strong>strictly disqualified by law</strong> from appointment as company directors. Any directorship attempt for an infant is void.
+                </div>
+              </div>
+              <div className="list-item" style={{ padding: "10px" }}>
+                <strong style={{ color: "var(--accent-cyan)" }}>CAMA 2020 §20(2) &amp; IRA 1874</strong>
+                <div style={{ color: "#cbd5e1", marginTop: 4 }}>
+                  A minor founder may hold beneficial shares provided <strong>two or more adult subscribers</strong> join the memorandum, or shares are held in trust by an adult legal guardian/trustee.
+                </div>
+              </div>
+              <div className="list-item" style={{ padding: "10px" }}>
+                <strong style={{ color: "var(--accent-emerald)" }}>CAMA 2020 §40 Compliance</strong>
+                <div style={{ color: "#cbd5e1", marginTop: 4 }}>
+                  Founder must involve an appropriately qualified adult and Nigerian CAC Accredited Legal Practitioner to certify the statutory Statement of Compliance.
+                </div>
+              </div>
+            </div>
+
+            <div className="row-between" style={{ marginTop: 6, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+              <span className="mono" style={{ fontSize: 11, color: "#94a3b8" }}>
+                Status: DRAFT · Unsubmitted · Zero Payments Transmitted
+              </span>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={qSaving}
+                onClick={handleSaveQuestionnaire}
+              >
+                <FileCheck size={14} /> {qSaving ? "Saving..." : "Save Pre-Registration Questionnaire (DRAFT)"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* SUBTAB: CAC REGISTRATION WORKFLOW (14 ITEMS) */}
       {activeSubTab === "cac_workflow" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -654,7 +1446,9 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
                 <strong style={{ fontSize: 15, color: "var(--accent-emerald)" }}>
                   ₦{(cacWorkflow?.total_estimated_fee_ngn || 23500).toLocaleString()}
                 </strong>
-                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>₦18,500 Mandatory + ₦5,000 CTC</div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                  ₦{(cacWorkflow?.mandatory_statutory_total_ngn || 18500).toLocaleString()} Mandatory + ₦5,000 CTC
+                </div>
               </div>
 
               <div className="list-item" style={{ padding: "10px 12px" }}>
@@ -687,13 +1481,17 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
                   <span style={{ fontSize: 10, color: "#94a3b8" }}>Gazette No. 92 (in force Oct 2025)</span>
                 </div>
                 <div>
-                  <span className="muted" style={{ color: "#cbd5e1" }}>2. CAC Registration Fee (₦1M Share Capital):</span>
-                  <div style={{ fontWeight: 600, color: "#f8fafc" }}>₦10,000.00</div>
-                  <span style={{ fontSize: 10, color: "#94a3b8" }}>Private Ltd (first ₦1,000,000)</span>
+                  <span className="muted" style={{ color: "#cbd5e1" }}>2. CAC Registration Fee:</span>
+                  <div style={{ fontWeight: 600, color: "#f8fafc" }}>
+                    ₦{(cacWorkflow?.items?.find((it: any) => it.step === 10)?.details?.registration_fee_ngn || 10000).toLocaleString()}
+                  </div>
+                  <span style={{ fontSize: 10, color: "#94a3b8" }}>Official Gazette No. 92, Vol. 112</span>
                 </div>
                 <div>
                   <span className="muted" style={{ color: "#cbd5e1" }}>3. FIRS Stamp Duty (0.75% ad valorem):</span>
-                  <div style={{ fontWeight: 600, color: "#f8fafc" }}>₦7,500.00</div>
+                  <div style={{ fontWeight: 600, color: "#f8fafc" }}>
+                    ₦{(cacWorkflow?.items?.find((it: any) => it.step === 10)?.details?.stamp_duty_ngn || 7500).toLocaleString()}
+                  </div>
                   <span style={{ fontSize: 10, color: "#94a3b8" }}>Stamp Duties Act / FIRS gateway</span>
                 </div>
                 <div>
@@ -703,8 +1501,12 @@ export function LegalComplianceDashboard({ onNavigateTab }: LegalComplianceDashb
                 </div>
               </div>
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ color: "#cbd5e1" }}>Mandatory Filing Total: <strong style={{ color: "var(--accent-emerald)" }}>₦18,500.00</strong> | With Optional Certified Documents:</span>
-                <strong style={{ color: "var(--accent-emerald)", fontSize: 13 }}>₦23,500.00 (Audited &amp; Verified)</strong>
+                <span style={{ color: "#cbd5e1" }}>
+                  Mandatory Filing Total: <strong style={{ color: "var(--accent-emerald)" }}>₦{(cacWorkflow?.mandatory_statutory_total_ngn || 18500).toLocaleString()}</strong> | With Optional Certified Documents:
+                </span>
+                <strong style={{ color: "var(--accent-emerald)", fontSize: 13 }}>
+                  ₦{(cacWorkflow?.total_estimated_fee_ngn || 23500).toLocaleString()} (Dynamically Calculated)
+                </strong>
               </div>
             </div>
 

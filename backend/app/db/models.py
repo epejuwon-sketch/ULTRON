@@ -1569,3 +1569,29 @@ class LegalArchivedDocumentRecord(Base):
     uploaded_by: Mapped[str] = mapped_column(String(120), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
+
+class LegalPreRegistrationQuestionnaireRecord(Base):
+    __tablename__ = "legal_pre_registration_questionnaires"
+
+    questionnaire_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    draft_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    company_type: Mapped[str] = mapped_column(String(48), nullable=False, default="PRIVATE_COMPANY_LIMITED_BY_SHARES")
+    proposed_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    alternative_names_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    business_activities: Mapped[str] = mapped_column(Text, nullable=False)
+    principal_objects_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    issued_share_capital: Mapped[float] = mapped_column(Float, nullable=False, default=100000.0)
+    nominal_value_per_share: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    registered_office_address: Mapped[str] = mapped_column(String(300), nullable=False)
+    registered_office_state: Mapped[str] = mapped_column(String(64), nullable=False, default="Lagos")
+    registered_office_lga: Mapped[str] = mapped_column(String(64), nullable=False, default="Eti-Osa")
+    shareholders_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    capacity_safeguards_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    fee_breakdown_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT", index=True)
+    created_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+

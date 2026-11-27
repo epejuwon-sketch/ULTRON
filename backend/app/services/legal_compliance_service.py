@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -30,6 +31,7 @@ from app.db.models import (
     LegalEntityDraftRecord,
     LegalFilingWorkflowRecord,
     LegalOfficerRecord,
+    LegalPreRegistrationQuestionnaireRecord,
     LegalStatutoryPolicyRecord,
 )
 from app.db.repositories import append_audit_log
@@ -122,6 +124,258 @@ PROFESSIONAL_REQUIREMENTS_MATRIX = {
         "rationale": "Annual returns filing requires audited balance sheet certification by qualified chartered accountant / secretary.",
     },
 }
+
+# -----------------------------------------------------------------------------
+# Statutory Company Categories & Fee Schedules (Official Gazette No. 92, Vol. 112)
+# -----------------------------------------------------------------------------
+
+STATUTORY_COMPANY_CATEGORIES = {
+    "PRIVATE_COMPANY_LIMITED_BY_SHARES": {
+        "code": "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        "name": "Private Company Limited by Shares (LTD)",
+        "statutory_min_share_capital_ngn": 100000.0,
+        "legal_authority": "CAMA 2020 §27(2)(a)",
+        "authorized_capital_abolished": True,
+        "requires_share_capital": True,
+        "filing_base_fee_ngn": 10000.0,
+        "filing_incremental_per_million_ngn": 5000.0,
+        "description": "Statutory minimum issued share capital is ₦100,000.00 under CAMA 2020 §27(2)(a). Authorized share capital is abolished. Registration fee: ₦10,000 for first ₦1,000,000 or part thereof + ₦5,000 for each subsequent ₦1,000,000 or part thereof.",
+    },
+    "PUBLIC_COMPANY_LIMITED_BY_SHARES": {
+        "code": "PUBLIC_COMPANY_LIMITED_BY_SHARES",
+        "name": "Public Company Limited by Shares (PLC)",
+        "statutory_min_share_capital_ngn": 2000000.0,
+        "legal_authority": "CAMA 2020 §27(2)(a)",
+        "authorized_capital_abolished": True,
+        "requires_share_capital": True,
+        "filing_base_fee_ngn": 20000.0,
+        "filing_incremental_per_million_ngn": 10000.0,
+        "description": "Statutory minimum issued share capital is ₦2,000,000.00 under CAMA 2020 §27(2)(a). Authorized share capital is abolished. Registration fee: ₦20,000 for first ₦1,000,000 + ₦10,000 for each subsequent ₦1,000,000 or part thereof.",
+    },
+    "COMPANY_LIMITED_BY_GUARANTEE": {
+        "code": "COMPANY_LIMITED_BY_GUARANTEE",
+        "name": "Company Limited by Guarantee (LTD/GTE)",
+        "statutory_min_share_capital_ngn": 0.0,
+        "min_guarantee_amount_ngn": 100000.0,
+        "legal_authority": "CAMA 2020 §26, §27(4)(b)",
+        "authorized_capital_abolished": False,
+        "requires_share_capital": False,
+        "requires_agf_consent": True,
+        "filing_flat_fee_ngn": 20000.0,
+        "description": "Not formed for profit; does not have share capital. Each member guarantees minimum ₦100,000 under CAMA 2020 §27(4)(b). Requires Attorney-General of the Federation (AGF) consent under CAMA 2020 §26(4)/(5). Flat registration fee: ₦20,000.00.",
+    },
+    "UNLIMITED_COMPANY": {
+        "code": "UNLIMITED_COMPANY",
+        "name": "Unlimited Company (ULTD)",
+        "statutory_min_share_capital_ngn": 100000.0,
+        "legal_authority": "CAMA 2020 §21(1), §27(2)(a)",
+        "authorized_capital_abolished": True,
+        "requires_share_capital": True,
+        "filing_base_fee_ngn": 20000.0,
+        "filing_incremental_per_million_ngn": 10000.0,
+        "description": "Members hold unlimited personal liability. Statutory minimum issued share capital is ₦100,000.00 if private. Registration fee: ₦20,000 for first ₦1,000,000 + ₦10,000 per subsequent ₦1,000,000 or part thereof.",
+    },
+}
+
+
+def calculate_statutory_filing_fees(
+    entity_type: str = "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+    issued_share_capital: float = 100000.0,
+    include_ctc: bool = False,
+    include_ai_search: bool = False,
+    include_express_delivery: bool = False,
+    include_professional_advisory: bool = False,
+) -> dict[str, Any]:
+    """Calculate dynamic CAC incorporation fees, FIRS stamp duty, optional services, and legal advisory estimates.
+    
+    References:
+    - CAMA 2020 §27(2)(a) (₦100k private / ₦2M public minimum issued share capital; authorized share capital abolished).
+    - Federal Republic of Nigeria Official Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025 / 2026).
+    - Stamp Duties Act (Cap S8 LFN 2004 as amended) - FIRS 0.75% ad valorem on share capital.
+    - CAC Public Notice 5979 (April 2026) - AI availability search ₦200.
+    """
+    category = STATUTORY_COMPANY_CATEGORIES.get(entity_type)
+    if not category:
+        category = STATUTORY_COMPANY_CATEGORIES["PRIVATE_COMPANY_LIMITED_BY_SHARES"]
+        entity_type = "PRIVATE_COMPANY_LIMITED_BY_SHARES"
+
+    # Name Reservation (Universal mandatory under CAMA §31 & Gazette No. 92)
+    name_res_fee = 1000.0
+
+    # Calculate CAC Incorporation Filing Fee
+    if entity_type == "COMPANY_LIMITED_BY_GUARANTEE":
+        cac_filing_fee = 20000.0
+        stamp_duty = 500.0  # Flat nominal duty on guarantee deed
+        stamp_duty_note = "Flat statutory stamp duty on memorandum of guarantee (₦500.00 flat)"
+    elif entity_type == "PUBLIC_COMPANY_LIMITED_BY_SHARES":
+        cap = max(float(issued_share_capital), category["statutory_min_share_capital_ngn"])
+        incremental_units = max(0, math.ceil((cap - 1000000.0) / 1000000.0))
+        cac_filing_fee = 20000.0 + (incremental_units * 10000.0)
+        stamp_duty = round(cap * 0.0075, 2)
+        stamp_duty_note = f"0.75% ad valorem stamp duty payable to FIRS on ₦{cap:,.2f} issued share capital"
+    elif entity_type == "UNLIMITED_COMPANY":
+        cap = max(float(issued_share_capital), category["statutory_min_share_capital_ngn"])
+        incremental_units = max(0, math.ceil((cap - 1000000.0) / 1000000.0))
+        cac_filing_fee = 20000.0 + (incremental_units * 10000.0)
+        stamp_duty = round(cap * 0.0075, 2)
+        stamp_duty_note = f"0.75% ad valorem stamp duty payable to FIRS on ₦{cap:,.2f} issued share capital"
+    else:
+        # PRIVATE_COMPANY_LIMITED_BY_SHARES
+        cap = float(issued_share_capital)
+        if cap <= 1000000.0:
+            cac_filing_fee = 10000.0
+        else:
+            incremental_units = math.ceil((cap - 1000000.0) / 1000000.0)
+            cac_filing_fee = 10000.0 + (incremental_units * 5000.0)
+        stamp_duty = round(cap * 0.0075, 2)
+        stamp_duty_note = f"0.75% ad valorem stamp duty payable to FIRS on ₦{cap:,.2f} issued share capital"
+
+    mandatory_items = [
+        {
+            "item_key": "NAME_RESERVATION",
+            "name": "CAC Name Reservation (60-Day Validity)",
+            "amount_ngn": name_res_fee,
+            "authority": "Corporate Affairs Commission (CAC)",
+            "statutory_basis": "CAMA 2020 §31; Official Gazette No. 92, Vol. 112",
+            "source": "Federal Republic of Nigeria Official Gazette No. 92, Vol. 112",
+            "date": "29 May 2025 (in force 1 Oct 2025)",
+            "is_mandatory": True,
+            "is_government_fee": True,
+        },
+        {
+            "item_key": "INCORPORATION_FILING",
+            "name": f"CAC Incorporation Filing Fee ({category['name']})",
+            "amount_ngn": cac_filing_fee,
+            "authority": "Corporate Affairs Commission (CAC)",
+            "statutory_basis": "Official Gazette No. 92, Vol. 112; Companies Regulations 2021",
+            "source": "Federal Republic of Nigeria Official Gazette No. 92, Vol. 112",
+            "date": "29 May 2025 (in force 1 Oct 2025)",
+            "is_mandatory": True,
+            "is_government_fee": True,
+        },
+        {
+            "item_key": "FIRS_STAMP_DUTY",
+            "name": "FIRS Stamp Duty on Share Capital (0.75% ad valorem)" if category["requires_share_capital"] else "FIRS Stamp Duty on Guarantee Memorandum",
+            "amount_ngn": stamp_duty,
+            "authority": "Federal Inland Revenue Service (FIRS) / Joint Tax Board (JTB)",
+            "statutory_basis": "Stamp Duties Act (Cap S8 LFN 2004 as amended by Finance Acts)",
+            "source": "FIRS Stamp Duty Schedule & Finance Acts",
+            "date": "Finance Act 2020 / FIRS Schedule",
+            "details": stamp_duty_note,
+            "is_mandatory": True,
+            "is_government_fee": True,
+        },
+    ]
+
+    bundled_deliverables = [
+        {
+            "deliverable_key": "E_CERTIFICATE",
+            "name": "Official Electronic Certificate of Incorporation (with digital QR verification code)",
+            "amount_ngn": 0.0,
+            "authority": "Corporate Affairs Commission (CAC)",
+            "source": "CAC Portal Digital Certificate System",
+            "date": "Bundled with registration",
+            "is_mandatory": True,
+            "is_government_fee": True,
+        },
+        {
+            "deliverable_key": "STATUS_REPORT",
+            "name": "Official Electronic Status Report (Comprehensive statutory replacement for Form CAC 1.1)",
+            "amount_ngn": 0.0,
+            "authority": "Corporate Affairs Commission (CAC)",
+            "source": "CAC Portal Digital Document System",
+            "date": "Bundled with registration",
+            "is_mandatory": True,
+            "is_government_fee": True,
+        },
+        {
+            "deliverable_key": "FIRS_JTB_TIN",
+            "name": "Automated Tax Identification Number (JTB / FIRS TaxPro Max TIN)",
+            "amount_ngn": 0.0,
+            "authority": "Joint Tax Board (JTB) / FIRS",
+            "source": "CAC-JTB Inter-Agency Database Integration",
+            "date": "Bundled with incorporation",
+            "is_mandatory": True,
+            "is_government_fee": True,
+        },
+    ]
+
+    optional_services = [
+        {
+            "service_id": "ctc_memart",
+            "name": "Certified True Copies (CTC) of MEMART & Status Report",
+            "amount_ngn": 5000.0,
+            "authority": "Corporate Affairs Commission (CAC)",
+            "source": "Official Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025)",
+            "date": "29 May 2025",
+            "description": "Statutory fee for official certified true copy download/stamping under Gazette No. 92.",
+            "is_mandatory": False,
+            "is_government_fee": True,
+            "selected": include_ctc,
+        },
+        {
+            "service_id": "cac_ai_search",
+            "name": "CAC AI Name Availability Pre-Search",
+            "amount_ngn": 200.0,
+            "authority": "Corporate Affairs Commission (CAC)",
+            "source": "CAC Public Notice 5979",
+            "date": "April 2026",
+            "description": "Optional fast-path automated preliminary name screening before formal reservation.",
+            "is_mandatory": False,
+            "is_government_fee": True,
+            "selected": include_ai_search,
+        },
+        {
+            "service_id": "express_courier",
+            "name": "Express Hardcopy Certificate & Document Courier Delivery",
+            "amount_ngn": 3500.0,
+            "authority": "Commercial Courier Partner",
+            "source": "Commercial logistics tariff schedule",
+            "date": "2026 Logistics Schedule",
+            "description": "Optional physical document dispatch to registered office address in Lagos.",
+            "is_mandatory": False,
+            "is_government_fee": False,
+            "selected": include_express_delivery,
+        },
+    ]
+
+    professional_estimates = [
+        {
+            "advisory_id": "accredited_agent_compliance",
+            "name": "CAC Accredited Legal Practitioner Review & Statement of Compliance (CAMA §40)",
+            "amount_ngn": 45000.0,
+            "authority": "CAC Accredited Legal Practitioner / NBA",
+            "source": "Nigerian Bar Association tariff guidance & standard commercial legal practice (₦35,000–₦75,000)",
+            "date": "2026 Legal Market Schedule",
+            "description": "Professional legal fee for legal practitioner verification, drafting customizations, and Statement of Compliance. NOT a government fee.",
+            "is_mandatory": False,
+            "is_government_fee": False,
+            "selected": include_professional_advisory,
+        },
+    ]
+
+    mandatory_total = sum(item["amount_ngn"] for item in mandatory_items)
+    optional_total = sum(s["amount_ngn"] for s in optional_services if s["selected"])
+    prof_total = sum(p["amount_ngn"] for p in professional_estimates if p["selected"])
+    grand_total = mandatory_total + optional_total + prof_total
+
+    return {
+        "entity_type": entity_type,
+        "company_category_name": category["name"],
+        "issued_share_capital_ngn": issued_share_capital if category["requires_share_capital"] else 0.0,
+        "statutory_min_share_capital_ngn": category["statutory_min_share_capital_ngn"],
+        "statutory_authority": category["legal_authority"],
+        "authorized_capital_abolished": category["authorized_capital_abolished"],
+        "gazette_source": "Federal Republic of Nigeria Official Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025 / 2026)",
+        "mandatory_government_items": mandatory_items,
+        "bundled_deliverables": bundled_deliverables,
+        "optional_services": optional_services,
+        "professional_advisory_estimates": professional_estimates,
+        "mandatory_government_total_ngn": mandatory_total,
+        "optional_services_total_ngn": optional_total,
+        "professional_advisory_total_ngn": prof_total,
+        "total_estimated_fee_ngn": grand_total,
+    }
 
 # -----------------------------------------------------------------------------
 # Safeguards & Validation Helpers
@@ -282,11 +536,17 @@ def get_legal_compliance_dashboard(db: Session, *, tenant_id: str) -> dict[str, 
         "remita_retrieval_reference": next((w.remita_rrr for w in workflows if w.remita_rrr), "RRR-2904-8173-9021"),
     }
 
+    # Dynamic fee calculation for Widget 6
+    dash_fees = calculate_statutory_filing_fees(
+        entity_type=draft.entity_type if draft else "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+        issued_share_capital=draft.nominal_share_capital if draft else 1000000.0,
+    )
+
     # Widget 6: Filing Receipts & Fees
     receipts_and_fees = [
         {"item": "CAC Name Reservation Fee", "amount_ngn": 1000.0, "status": "PAID", "receipt_ref": "REM-CAC-RES-1092"},
-        {"item": "CAC Registration Fee (N1M Share Capital)", "amount_ngn": 10000.0, "status": "PENDING_APPROVAL", "receipt_ref": "RRR-2904-8173-9021"},
-        {"item": "FIRS Stamp Duty on Share Capital", "amount_ngn": 7500.0, "status": "PENDING_APPROVAL", "receipt_ref": "FIRS-SD-2026-081"},
+        {"item": f"CAC Registration Fee ({dash_fees['company_category_name']})", "amount_ngn": dash_fees["mandatory_government_items"][1]["amount_ngn"], "status": "PENDING_APPROVAL", "receipt_ref": "RRR-2904-8173-9021"},
+        {"item": "FIRS Stamp Duty on Share Capital", "amount_ngn": dash_fees["mandatory_government_items"][2]["amount_ngn"], "status": "PENDING_APPROVAL", "receipt_ref": "FIRS-SD-2026-081"},
         {"item": "Certified True Copies (MEMART + Form CAC 1.1)", "amount_ngn": 5000.0, "status": "QUEUED", "receipt_ref": "CTC-ORDER-441"},
         {"item": "NDPC DPMI Registration Fee", "amount_ngn": 25000.0, "status": "QUEUED", "receipt_ref": "NDPC-FEE-891"},
     ]
@@ -471,21 +731,32 @@ def get_company_registration_workflow(db: Session, *, tenant_id: str) -> dict[st
     }
 
     # Item 5: Share Capital & Allocation
+    entity_type = draft.entity_type if draft else "PRIVATE_COMPANY_LIMITED_BY_SHARES"
+    issued_capital = draft.nominal_share_capital if draft else 1000000.0
+    dynamic_fees = calculate_statutory_filing_fees(
+        entity_type=entity_type,
+        issued_share_capital=issued_capital,
+        include_ctc=True,
+    )
+
     has_capital = bool(draft and draft.nominal_share_capital >= 100000.0)
     status_5 = "APPROVED" if has_capital else "IN_PROGRESS"
     item_5 = {
         "step": 5,
         "key": "SHARE_CAPITAL_ALLOCATION",
         "title": "Share Capital & Allocation",
-        "statutory_ref": "CAMA 2020 §27(2)",
+        "statutory_ref": "CAMA 2020 §27(2)(a)",
         "status": status_5,
         "details": {
-            "nominal_share_capital_ngn": draft.nominal_share_capital if draft else 1000000.0,
+            "nominal_share_capital_ngn": issued_capital,
             "nominal_value_per_share_ngn": draft.share_nominal_value if draft else 1.0,
-            "total_ordinary_shares": int(draft.nominal_share_capital / draft.share_nominal_value) if draft else 1000000,
+            "total_ordinary_shares": int(issued_capital / (draft.share_nominal_value if draft else 1.0)),
             "minimum_statutory_share_capital_ngn": 100000.0,
+            "statutory_minimum_private_ngn": 100000.0,
+            "statutory_minimum_public_ngn": 2000000.0,
+            "selected_category_minimum_ngn": dynamic_fees["statutory_min_share_capital_ngn"],
         },
-        "notes": "Authorized share capital abolished by CAMA 2020; minimum issued share capital is N100,000 for private companies.",
+        "notes": "Under CAMA 2020 §27(2)(a), statutory minimum issued share capital is ₦100,000 for a private company and ₦2,000,000 for a public company. Authorized share capital is abolished.",
     }
 
     # Item 6: Shareholders / Subscribers
@@ -572,14 +843,17 @@ def get_company_registration_workflow(db: Session, *, tenant_id: str) -> dict[st
         "official_source": "https://icrp.cac.gov.ng/ & Federal Republic of Nigeria Official Gazette No. 92 (29 May 2025 / 2026)",
         "status": "APPROVED",
         "details": {
+            "company_type": entity_type,
+            "issued_share_capital_ngn": issued_capital,
             "name_reservation_ngn": 1000.0,
-            "registration_fee_ngn": 10000.0,
-            "stamp_duty_ngn": 7500.0,
+            "registration_fee_ngn": dynamic_fees["mandatory_government_items"][1]["amount_ngn"],
+            "stamp_duty_ngn": dynamic_fees["mandatory_government_items"][2]["amount_ngn"],
             "certified_true_copies_ngn": 5000.0,
-            "mandatory_statutory_total_ngn": 18500.0,
-            "total_estimated_fee_ngn": 23500.0,
+            "mandatory_statutory_total_ngn": dynamic_fees["mandatory_government_total_ngn"],
+            "total_estimated_fee_ngn": dynamic_fees["mandatory_government_total_ngn"] + 5000.0,
+            "breakdown": dynamic_fees,
         },
-        "notes": "Audited statutory fee schedule: Mandatory filing total is N18,500 (Name Reservation N1,000 + Registration N10,000 for N1M share capital + FIRS Stamp Duty N7,500). Initial electronic Certificate & Status Report are bundled free on the portal; optional extra Certified True Copies (CTC) add N5,000, bringing total to N23,500. Source: Official Gazette No. 92 (29 May 2025, in force 1 Oct 2025).",
+        "notes": f"Audited statutory fee schedule: Mandatory filing total is ₦{dynamic_fees['mandatory_government_total_ngn']:,.2f} (Name Reservation ₦1,000 + CAC Filing Fee ₦{dynamic_fees['mandatory_government_items'][1]['amount_ngn']:,.2f} + FIRS Stamp Duty ₦{dynamic_fees['mandatory_government_items'][2]['amount_ngn']:,.2f}). Initial electronic Certificate & Status Report are bundled free on the portal; optional extra Certified True Copies (CTC) add ₦5,000, bringing total to ₦{dynamic_fees['mandatory_government_total_ngn'] + 5000.0:,.2f}. Source: Official Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025).",
     }
 
     # Item 11: Professional Review
@@ -674,8 +948,8 @@ def get_company_registration_workflow(db: Session, *, tenant_id: str) -> dict[st
         "authority": "Corporate Affairs Commission (CAC), Federal Republic of Nigeria",
         "governing_law": "Companies and Allied Matters Act 2020 (CAMA 2020)",
         "fee_schedule_source": "CAC Official Portal (https://icrp.cac.gov.ng/) & Official Gazette No. 92, Vol. 112 (29 May 2025, in force 1 Oct 2025 / 2026)",
-        "mandatory_statutory_total_ngn": 18500.0,
-        "total_estimated_fee_ngn": 23500.0,
+        "mandatory_statutory_total_ngn": dynamic_fees["mandatory_government_total_ngn"],
+        "total_estimated_fee_ngn": dynamic_fees["mandatory_government_total_ngn"] + 5000.0,
         "canonical_statuses": [
             "NOT_STARTED",
             "IN_PROGRESS",
@@ -1363,3 +1637,355 @@ def archive_official_document(
         "is_verified_authentic": archive.is_verified_authentic,
         "created_at": archive.created_at.isoformat(),
     }
+
+
+# -----------------------------------------------------------------------------
+# Pre-Registration Questionnaire & Capacity Safeguards
+# -----------------------------------------------------------------------------
+
+def validate_and_process_pre_registration_questionnaire(data: dict[str, Any]) -> dict[str, Any]:
+    """Validate pre-registration questionnaire inputs under CAMA 2020 rules:
+    - Zero-sensitive identity policy: Reject any attempt to collect/store NIN, BVN, or passport numbers in chat/form.
+    - CAMA 2020 §27(2)(a) share capital minimums (₦100k private, ₦2M public).
+    - CAMA 2020 §20(1)(a) disqualification of infant directors.
+    - CAMA 2020 §20(2) 2-adult subscriber/trustee rule for minor shareholders.
+    - Application status strictly kept in DRAFT.
+    """
+    # 1. Zero Sensitive Identity Numbers check
+    forbidden_keys = {"nin", "bvn", "national_identity_number", "bank_verification_number", "passport_number", "card_number", "cvv"}
+    for k in data.keys():
+        if k.lower() in forbidden_keys:
+            raise ValidationError(
+                "Zero Personal Data Transmission Policy: Sensitive identity credentials (NIN, BVN, passport numbers) "
+                "must NOT be submitted in the pre-registration questionnaire or chat. "
+                "Identity verification documents must only be lodged via accredited legal channels.",
+                details={"forbidden_field": k},
+            )
+
+    company_type = data.get("company_type", "PRIVATE_COMPANY_LIMITED_BY_SHARES")
+    if company_type not in STATUTORY_COMPANY_CATEGORIES:
+        raise ValidationError(
+            f"Invalid company category '{company_type}'. Must be one of: {list(STATUTORY_COMPANY_CATEGORIES.keys())}",
+            details={"valid_categories": list(STATUTORY_COMPANY_CATEGORIES.keys())},
+        )
+
+    cat_info = STATUTORY_COMPANY_CATEGORIES[company_type]
+    proposed_name = (data.get("proposed_name") or "").strip()
+    if len(proposed_name) < 3:
+        raise ValidationError("Proposed company name must be at least 3 characters.", details={"proposed_name": proposed_name})
+
+    alt_names = data.get("alternative_names", [])
+    if isinstance(alt_names, str):
+        try:
+            alt_names = json.loads(alt_names)
+        except Exception:
+            alt_names = [alt_names]
+
+    business_activities = (data.get("business_activities") or "").strip()
+    if len(business_activities) < 5:
+        raise ValidationError("Business activities description must be at least 5 characters.", details={"business_activities": business_activities})
+
+    objects_clause = data.get("principal_objects", [])
+    if isinstance(objects_clause, str):
+        try:
+            objects_clause = json.loads(objects_clause)
+        except Exception:
+            objects_clause = [objects_clause]
+
+    issued_capital = float(data.get("issued_share_capital", 100000.0))
+    nominal_val = float(data.get("nominal_value_per_share", 1.0))
+    if nominal_val <= 0:
+        nominal_val = 1.0
+
+    # 2. Check CAMA §27(2)(a) statutory minimums
+    if cat_info["requires_share_capital"]:
+        stat_min = cat_info["statutory_min_share_capital_ngn"]
+        if issued_capital < stat_min:
+            raise ValidationError(
+                f"Issued share capital ₦{issued_capital:,.2f} is below the statutory minimum of ₦{stat_min:,.2f} "
+                f"mandated for {cat_info['name']} under {cat_info['legal_authority']}. "
+                "Note: Authorized share capital is abolished by CAMA 2020.",
+                details={
+                    "company_type": company_type,
+                    "issued_share_capital": issued_capital,
+                    "statutory_minimum": stat_min,
+                    "statutory_authority": cat_info["legal_authority"],
+                },
+            )
+
+    reg_office = (data.get("registered_office_address") or "").strip()
+    if len(reg_office) < 10:
+        raise ValidationError("Registered office address must be a verified physical Nigerian address.", details={"registered_office_address": reg_office})
+
+    reg_state = (data.get("registered_office_state") or "Lagos").strip()
+    reg_lga = (data.get("registered_office_lga") or "Eti-Osa").strip()
+
+    # 3. Shareholders and Capacity Safeguards Check
+    raw_shareholders = data.get("shareholders", [])
+    if isinstance(raw_shareholders, str):
+        try:
+            raw_shareholders = json.loads(raw_shareholders)
+        except Exception:
+            raw_shareholders = []
+
+    sanitized_shareholders = []
+    minor_subscribers = []
+    adult_subscribers = []
+    infant_directorship_flagged = False
+
+    for s in raw_shareholders:
+        # Check for forbidden sensitive keys inside shareholder dict
+        for sk in s.keys():
+            if sk.lower() in forbidden_keys:
+                raise ValidationError(
+                    "Zero Personal Data Transmission Policy: Sensitive identity credentials (NIN, BVN, passport numbers) "
+                    "must NOT be submitted in the pre-registration questionnaire or chat.",
+                    details={"shareholder": s.get("full_legal_name", "Unknown"), "forbidden_field": sk},
+                )
+
+        # Check text values for raw 11-digit numbers
+        for val in s.values():
+            if isinstance(val, str) and re.search(r"\b\d{11}\b", val):
+                raise ValidationError(
+                    "Detected 11-digit identity number in questionnaire field. "
+                    "Per ULTRON zero-transmission policy, do NOT enter NIN or BVN numbers in ordinary questionnaire text.",
+                    details={"field_content_preview": f"{val[:4]}..."},
+                )
+
+        name = (s.get("full_legal_name") or "").strip()
+        is_minor = bool(s.get("is_under_18", False))
+        is_dir = bool(s.get("is_director", False))
+        shares = int(s.get("shares_allocated", 0))
+        pct = float(s.get("equity_percentage", 0.0))
+        guardian = (s.get("guardian_trustee_name") or "").strip()
+
+        # CAMA 2020 §20(1)(a) Infant Director Disqualification
+        if is_minor and is_dir:
+            infant_directorship_flagged = True
+            is_dir = False  # Strictly disqualified by law
+
+        clean_s = {
+            "full_legal_name": name,
+            "is_under_18": is_minor,
+            "is_director": is_dir,
+            "shares_allocated": shares,
+            "equity_percentage": pct,
+            "guardian_trustee_name": guardian if is_minor else None,
+        }
+        sanitized_shareholders.append(clean_s)
+
+        if is_minor:
+            minor_subscribers.append(clean_s)
+        else:
+            adult_subscribers.append(clean_s)
+
+    # Compile capacity safeguards
+    capacity_safeguards = {
+        "has_minor_subscribers": len(minor_subscribers) > 0,
+        "minor_subscribers_count": len(minor_subscribers),
+        "adult_subscribers_count": len(adult_subscribers),
+        "infant_directorship_attempted_and_disqualified": infant_directorship_flagged,
+        "cama_section_20_1_a_enforced": True,
+        "cama_section_20_1_a_note": "Under CAMA 2020 §20(1)(a), persons under 18 years of age are strictly disqualified from holding company directorships. Directorship cannot be granted to a minor even with guardian consent.",
+        "cama_section_20_2_compliant": (len(adult_subscribers) >= 2 or any(bool(m["guardian_trustee_name"]) for m in minor_subscribers)) if minor_subscribers else True,
+        "cama_section_20_2_note": "Under CAMA 2020 §20(2), a minor may participate as a subscriber/shareholder if 2 adult non-disqualified persons join as subscribers or shares are held in trust by an adult legal guardian/trustee until majority.",
+        "legal_professional_mandatory": True,
+        "legal_professional_note": "A Nigerian CAC Accredited Legal Practitioner or Chartered Secretary must review the company documentation, verify adult capacity, and lodge the statutory Statement of Compliance under CAMA 2020 §40.",
+    }
+
+    # 4. Calculate dynamic fee breakdown
+    include_ctc = bool(data.get("include_ctc", False))
+    include_ai_search = bool(data.get("include_ai_search", False))
+    include_express = bool(data.get("include_express_delivery", False))
+    include_prof = bool(data.get("include_professional_advisory", False))
+
+    fee_calc = calculate_statutory_filing_fees(
+        entity_type=company_type,
+        issued_share_capital=issued_capital,
+        include_ctc=include_ctc,
+        include_ai_search=include_ai_search,
+        include_express_delivery=include_express,
+        include_professional_advisory=include_prof,
+    )
+
+    return {
+        "company_type": company_type,
+        "company_type_name": cat_info["name"],
+        "proposed_name": proposed_name,
+        "alternative_names": alt_names,
+        "business_activities": business_activities,
+        "principal_objects": objects_clause,
+        "issued_share_capital": issued_capital,
+        "nominal_value_per_share": nominal_val,
+        "registered_office_address": reg_office,
+        "registered_office_state": reg_state,
+        "registered_office_lga": reg_lga,
+        "shareholders": sanitized_shareholders,
+        "capacity_safeguards": capacity_safeguards,
+        "fee_breakdown": fee_calc,
+        "status": "DRAFT",
+        "official_disclaimer": "All applications remain strictly in DRAFT status until reviewed by an authorized human operator and accredited legal practitioner. Zero payments have been dispatched. The company is NOT registered until CAC officially issues the Certificate of Incorporation and Status Report with a valid RC number.",
+    }
+
+
+def save_pre_registration_questionnaire(
+    db: Session,
+    *,
+    principal: Principal,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Save or update pre-registration questionnaire in DRAFT status."""
+    processed = validate_and_process_pre_registration_questionnaire(data)
+
+    existing = db.execute(
+        select(LegalPreRegistrationQuestionnaireRecord).where(
+            LegalPreRegistrationQuestionnaireRecord.tenant_id == principal.tenant_id
+        )
+    ).scalar_one_or_none()
+
+    draft = db.execute(
+        select(LegalEntityDraftRecord).where(
+            LegalEntityDraftRecord.tenant_id == principal.tenant_id
+        )
+    ).scalar_one_or_none()
+    draft_id = draft.draft_id if draft else "drf_caravan_primary"
+
+    # Also keep the LegalEntityDraftRecord in sync if present
+    if draft:
+        draft.entity_type = processed["company_type"]
+        draft.company_name = processed["proposed_name"]
+        draft.alternative_names_json = json.dumps(processed["alternative_names"])
+        draft.nominal_share_capital = processed["issued_share_capital"]
+        draft.share_nominal_value = processed["nominal_value_per_share"]
+        draft.registered_office_address = processed["registered_office_address"]
+        draft.objects_clause_json = json.dumps(processed["principal_objects"])
+
+    if existing is None:
+        record = LegalPreRegistrationQuestionnaireRecord(
+            questionnaire_id=f"qst_{uuid.uuid4().hex[:16]}",
+            tenant_id=principal.tenant_id,
+            draft_id=draft_id,
+            company_type=processed["company_type"],
+            proposed_name=processed["proposed_name"],
+            alternative_names_json=json.dumps(processed["alternative_names"]),
+            business_activities=processed["business_activities"],
+            principal_objects_json=json.dumps(processed["principal_objects"]),
+            issued_share_capital=processed["issued_share_capital"],
+            nominal_value_per_share=processed["nominal_value_per_share"],
+            registered_office_address=processed["registered_office_address"],
+            registered_office_state=processed["registered_office_state"],
+            registered_office_lga=processed["registered_office_lga"],
+            shareholders_json=json.dumps(processed["shareholders"]),
+            capacity_safeguards_json=json.dumps(processed["capacity_safeguards"]),
+            fee_breakdown_json=json.dumps(processed["fee_breakdown"]),
+            status="DRAFT",
+            created_by=principal.username,
+        )
+        db.add(record)
+    else:
+        record = existing
+        record.company_type = processed["company_type"]
+        record.proposed_name = processed["proposed_name"]
+        record.alternative_names_json = json.dumps(processed["alternative_names"])
+        record.business_activities = processed["business_activities"]
+        record.principal_objects_json = json.dumps(processed["principal_objects"])
+        record.issued_share_capital = processed["issued_share_capital"]
+        record.nominal_value_per_share = processed["nominal_value_per_share"]
+        record.registered_office_address = processed["registered_office_address"]
+        record.registered_office_state = processed["registered_office_state"]
+        record.registered_office_lga = processed["registered_office_lga"]
+        record.shareholders_json = json.dumps(processed["shareholders"])
+        record.capacity_safeguards_json = json.dumps(processed["capacity_safeguards"])
+        record.fee_breakdown_json = json.dumps(processed["fee_breakdown"])
+        record.status = "DRAFT"
+
+    db.flush()
+
+    append_audit_log(
+        db,
+        tenant_id=principal.tenant_id,
+        actor=principal.username,
+        action="PRE_REGISTRATION_QUESTIONNAIRE_SAVED",
+        resource=record.questionnaire_id,
+        outcome=f"DRAFT_SAVED|TYPE={record.company_type}|CAPITAL={record.issued_share_capital}|MANDATORY_FEE={processed['fee_breakdown']['mandatory_government_total_ngn']}",
+    )
+    db.commit()
+
+    return {
+        "questionnaire_id": record.questionnaire_id,
+        "tenant_id": record.tenant_id,
+        "draft_id": record.draft_id,
+        "status": record.status,
+        "data": processed,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+    }
+
+
+def get_pre_registration_questionnaire(
+    db: Session,
+    *,
+    tenant_id: str,
+) -> dict[str, Any] | None:
+    """Retrieve the pre-registration questionnaire for the tenant."""
+    record = db.execute(
+        select(LegalPreRegistrationQuestionnaireRecord).where(
+            LegalPreRegistrationQuestionnaireRecord.tenant_id == tenant_id
+        )
+    ).scalar_one_or_none()
+
+    if not record:
+        return None
+
+    try:
+        alt_names = json.loads(record.alternative_names_json)
+    except Exception:
+        alt_names = []
+
+    try:
+        principal_objs = json.loads(record.principal_objects_json)
+    except Exception:
+        principal_objs = []
+
+    try:
+        shareholders = json.loads(record.shareholders_json)
+    except Exception:
+        shareholders = []
+
+    try:
+        capacity_safeguards = json.loads(record.capacity_safeguards_json)
+    except Exception:
+        capacity_safeguards = {}
+
+    try:
+        fee_breakdown = json.loads(record.fee_breakdown_json)
+    except Exception:
+        fee_breakdown = calculate_statutory_filing_fees(
+            entity_type=record.company_type,
+            issued_share_capital=record.issued_share_capital,
+        )
+
+    return {
+        "questionnaire_id": record.questionnaire_id,
+        "tenant_id": record.tenant_id,
+        "draft_id": record.draft_id,
+        "company_type": record.company_type,
+        "company_type_name": STATUTORY_COMPANY_CATEGORIES.get(record.company_type, {}).get("name", record.company_type),
+        "proposed_name": record.proposed_name,
+        "alternative_names": alt_names,
+        "business_activities": record.business_activities,
+        "principal_objects": principal_objs,
+        "issued_share_capital": record.issued_share_capital,
+        "nominal_value_per_share": record.nominal_value_per_share,
+        "registered_office_address": record.registered_office_address,
+        "registered_office_state": record.registered_office_state,
+        "registered_office_lga": record.registered_office_lga,
+        "shareholders": shareholders,
+        "capacity_safeguards": capacity_safeguards,
+        "fee_breakdown": fee_breakdown,
+        "status": record.status,
+        "created_by": record.created_by,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+    }
+
