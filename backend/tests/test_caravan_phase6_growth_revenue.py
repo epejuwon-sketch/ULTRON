@@ -18,7 +18,7 @@ def test_caravan_phase6_pricing_webhooks_bi_crm_growth_and_privacy(
     prc = client.get("/api/v1/caravan/pricing")
     assert prc.status_code == 200
     assert prc.json()["live_payments_enabled"] is False
-    assert len(prc.json()["plans"]) == 3
+    assert len(prc.json()["plans"]) == 6
 
     # 2. Ensure account exists & upgrade subscription to PRO (sandbox)
     ov = client.get("/api/v1/caravan/overview", headers=auth_headers["owner"]).json()

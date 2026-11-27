@@ -1063,4 +1063,129 @@ def api_caravan_remote_discovery(
     return execute_remote_caravan_discovery(settings, principal=principal)
 
 
+# --- 60-Agent Integration & S2S Bridge Endpoints ---
+
+class CaravanAgentDispatchRequest(BaseModel):
+    agent_id: str = Field(min_length=6, max_length=12)
+    operation: str = Field(min_length=3, max_length=64)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    task_id: str | None = None
+    correlation_id: str | None = None
+    bypass_approval: bool = False
+
+
+class CaravanCollaborativeWorkflowRequest(BaseModel):
+    workflow_name: str = Field(min_length=3, max_length=64)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaravanActivationReviewRequest(BaseModel):
+    notes: str = Field(default="", max_length=1000)
+
+
+@router.get("/agents/capabilities")
+def api_caravan_agent_capabilities(
+    agent_id: str | None = Query(default=None),
+    principal: Principal = Depends(require_perm("caravan:read")),
+) -> dict:
+    """Retrieve capability profiles for specialist agents interacting with CARAVAN."""
+    from app.services.caravan_agent_bridge import (
+        AGENT_TO_CARAVAN_SCOPE,
+        PERMITTED_SCOPE_OPERATIONS,
+        get_agent_caravan_capability,
+    )
+
+    if agent_id:
+        return get_agent_caravan_capability(agent_id)
+
+    capabilities = []
+    for aid in sorted(AGENT_TO_CARAVAN_SCOPE.keys()):
+        capabilities.append(get_agent_caravan_capability(aid))
+    return {
+        "total_agents": len(capabilities),
+        "total_domains": len(PERMITTED_SCOPE_OPERATIONS),
+        "agents": capabilities,
+    }
+
+
+@router.post("/agents/dispatch")
+def api_caravan_agent_dispatch(
+    body: CaravanAgentDispatchRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Dispatch an authenticated action by an authorized ULTRON agent to CARAVAN."""
+    from app.services.caravan_agent_bridge import dispatch_caravan_agent_action
+
+    return dispatch_caravan_agent_action(
+        db,
+        principal=principal,
+        agent_id=body.agent_id,
+        operation=body.operation,
+        parameters=body.parameters,
+        task_id=body.task_id,
+        correlation_id=body.correlation_id,
+        bypass_approval=body.bypass_approval,
+    )
+
+
+@router.post("/workflows/collaborative")
+def api_caravan_collaborative_workflow(
+    body: CaravanCollaborativeWorkflowRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Execute a multi-agent ARGON collaborative DAG workflow across CARAVAN domains."""
+    from app.services.caravan_agent_bridge import execute_caravan_collaborative_workflow
+
+    return execute_caravan_collaborative_workflow(
+        db,
+        principal=principal,
+        workflow_name=body.workflow_name,
+        parameters=body.parameters,
+    )
+
+
+@router.get("/subscription-tiers")
+def api_caravan_subscription_tiers(
+    principal: Principal = Depends(require_perm("caravan:read")),
+) -> dict:
+    """Return the authoritative 6-tier subscription catalog."""
+    from app.services.caravan_growth_service import PLAN_CATALOG
+
+    tiers_list = []
+    for code, info in PLAN_CATALOG.items():
+        if code not in {"INSTITUTIONAL", "CUSTOM"}:  # exclude backward aliases from primary list
+            tiers_list.append(info)
+    return {
+        "total_tiers": len(tiers_list),
+        "tiers": tiers_list,
+        "aliases": {"INSTITUTIONAL": "BUSINESS", "CUSTOM": "ENTERPRISE"},
+    }
+
+
+@router.get("/activation/status")
+def api_caravan_activation_status(
+    principal: Principal = Depends(require_perm("caravan:read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Retrieve CARAVAN registration-dependent business activation status and minor founder safeguards."""
+    from app.services.caravan_business_activation_service import get_caravan_business_activation_status
+
+    return get_caravan_business_activation_status(db, principal=principal)
+
+
+@router.post("/activation/request-review")
+def api_caravan_activation_request_review(
+    body: CaravanActivationReviewRequest,
+    principal: Principal = Depends(require_perm("caravan:write")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Request executive sign-off for CARAVAN business activation."""
+    from app.services.caravan_business_activation_service import request_business_activation_review
+
+    return request_business_activation_review(db, principal=principal, notes=body.notes)
+
+
+
 

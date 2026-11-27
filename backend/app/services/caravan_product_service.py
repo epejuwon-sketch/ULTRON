@@ -69,19 +69,41 @@ PLAN_ENTITLEMENTS: dict[str, dict[str, Any]] = {
         "argon_research_runs": 1,
         "live_payments_enabled": False,
     },
-    "PRO": {
-        "max_saved_opportunities": 100,
-        "neon_assessments_per_month": 50,
-        "argon_research_runs": 15,
+    "STARTER": {
+        "max_saved_opportunities": 50,
+        "neon_assessments_per_month": 25,
+        "argon_research_runs": 5,
         "live_payments_enabled": False,
     },
-    "INSTITUTIONAL": {
+    "GROWTH": {
+        "max_saved_opportunities": 150,
+        "neon_assessments_per_month": 75,
+        "argon_research_runs": 25,
+        "live_payments_enabled": False,
+    },
+    "PRO": {
+        "max_saved_opportunities": 300,
+        "neon_assessments_per_month": 150,
+        "argon_research_runs": 50,
+        "live_payments_enabled": False,
+    },
+    "BUSINESS": {
         "max_saved_opportunities": 1000,
         "neon_assessments_per_month": 500,
         "argon_research_runs": 100,
         "live_payments_enabled": False,
     },
+    "ENTERPRISE": {
+        "max_saved_opportunities": 5000,
+        "neon_assessments_per_month": 2500,
+        "argon_research_runs": 500,
+        "live_payments_enabled": False,
+    },
 }
+# Backward compatibility aliases
+PLAN_ENTITLEMENTS["INSTITUTIONAL"] = PLAN_ENTITLEMENTS["BUSINESS"]
+PLAN_ENTITLEMENTS["CUSTOM"] = PLAN_ENTITLEMENTS["ENTERPRISE"]
+
 
 
 def _utcnow() -> datetime:

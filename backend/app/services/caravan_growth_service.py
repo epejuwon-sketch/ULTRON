@@ -38,7 +38,7 @@ from app.services.operational_control_service import evaluate_operational_action
 PLAN_CATALOG: dict[str, dict[str, Any]] = {
     "FREE": {
         "tier": "FREE",
-        "label": "Starter (Free)",
+        "label": "Community Explorer (Free)",
         "target_audience": "Individuals, students, and early-stage founders exploring verified funding.",
         "monthly_usd": 0.0,
         "annual_usd": 0.0,
@@ -46,27 +46,61 @@ PLAN_CATALOG: dict[str, dict[str, Any]] = {
         "annual_ngn": 0.0,
         "entitlements": PLAN_ENTITLEMENTS["FREE"],
     },
+    "STARTER": {
+        "tier": "STARTER",
+        "label": "Emerging Founder (Starter)",
+        "target_audience": "Early-stage startups and solo founders initiating grant applications.",
+        "monthly_usd": 19.0,
+        "annual_usd": 190.0,
+        "monthly_ngn": 29000.0,
+        "annual_ngn": 290000.0,
+        "entitlements": PLAN_ENTITLEMENTS["STARTER"],
+    },
+    "GROWTH": {
+        "tier": "GROWTH",
+        "label": "Growth Accelerator",
+        "target_audience": "Active seed/pre-series A ventures scaling application output.",
+        "monthly_usd": 49.0,
+        "annual_usd": 490.0,
+        "monthly_ngn": 75000.0,
+        "annual_ngn": 750000.0,
+        "entitlements": PLAN_ENTITLEMENTS["GROWTH"],
+    },
     "PRO": {
         "tier": "PRO",
         "label": "Caravan Pro",
-        "target_audience": "Active startups, SMEs, and nonprofits preparing multiple applications.",
-        "monthly_usd": 19.0,
-        "annual_usd": 190.0,
-        "monthly_ngn": 25000.0,
-        "annual_ngn": 250000.0,
-        "entitlements": PLAN_ENTITLEMENTS["PRO"],
-    },
-    "INSTITUTIONAL": {
-        "tier": "INSTITUTIONAL",
-        "label": "Institutional & Enterprise",
-        "target_audience": "Universities, incubators, accelerators, and advisory teams.",
+        "target_audience": "High-volume applicants and advisory teams requiring advanced intelligence.",
         "monthly_usd": 99.0,
         "annual_usd": 990.0,
-        "monthly_ngn": 120000.0,
-        "annual_ngn": 1200000.0,
-        "entitlements": PLAN_ENTITLEMENTS["INSTITUTIONAL"],
+        "monthly_ngn": 150000.0,
+        "annual_ngn": 1500000.0,
+        "entitlements": PLAN_ENTITLEMENTS["PRO"],
+    },
+    "BUSINESS": {
+        "tier": "BUSINESS",
+        "label": "Business & Institutional",
+        "target_audience": "Incubators, venture studios, universities, and corporate accelerators.",
+        "monthly_usd": 249.0,
+        "annual_usd": 2490.0,
+        "monthly_ngn": 380000.0,
+        "annual_ngn": 3800000.0,
+        "entitlements": PLAN_ENTITLEMENTS["BUSINESS"],
+    },
+    "ENTERPRISE": {
+        "tier": "ENTERPRISE",
+        "label": "Custom Enterprise",
+        "target_audience": "Government agencies, sovereign wealth funds, and large ecosystem managers.",
+        "monthly_usd": 999.0,
+        "annual_usd": 9990.0,
+        "monthly_ngn": 1500000.0,
+        "annual_ngn": 15000000.0,
+        "entitlements": PLAN_ENTITLEMENTS["ENTERPRISE"],
     },
 }
+# Backward compatibility aliases
+PLAN_CATALOG["INSTITUTIONAL"] = PLAN_CATALOG["BUSINESS"]
+PLAN_CATALOG["CUSTOM"] = PLAN_CATALOG["ENTERPRISE"]
+
 
 PERIOD_DAYS = {
     "daily": 1,
@@ -82,11 +116,12 @@ def _utcnow() -> datetime:
 
 
 def get_public_pricing_catalog() -> dict[str, Any]:
+    canonical_plans = [v for k, v in PLAN_CATALOG.items() if k not in {"INSTITUTIONAL", "CUSTOM"}]
     return {
         "live_payments_enabled": False,
         "sandbox_mode": True,
         "currencies": ["USD", "NGN"],
-        "plans": list(PLAN_CATALOG.values()),
+        "plans": canonical_plans,
         "cancellation_policy": "Cancel anytime; access continues through the current period with zero hidden fees.",
         "legal_notice": "Terms of Service, Privacy Policy, and NDPR/GDPR consent controls apply prior to public launch.",
     }
@@ -268,10 +303,13 @@ def get_caravan_business_intelligence(
     onboarded_customers = sum(1 for a in accounts if a.onboarding_completed)
     onboarding_pct = round((onboarded_customers / total_customers) * 100, 1) if total_customers else 0.0
 
-    sub_dist = {"FREE": 0, "PRO": 0, "INSTITUTIONAL": 0}
+    sub_dist = {"FREE": 0, "STARTER": 0, "GROWTH": 0, "PRO": 0, "BUSINESS": 0, "ENTERPRISE": 0}
     for s in subs:
-        sub_dist[s.plan_tier] = sub_dist.get(s.plan_tier, 0) + 1
-    paid_subs = sum(1 for s in subs if s.plan_tier in {"PRO", "INSTITUTIONAL"} and s.status == "ACTIVE")
+        normalized_tier = "BUSINESS" if s.plan_tier == "INSTITUTIONAL" else ("ENTERPRISE" if s.plan_tier == "CUSTOM" else s.plan_tier)
+        sub_dist[normalized_tier] = sub_dist.get(normalized_tier, 0) + 1
+    paid_subs = sum(
+        1 for s in subs if s.plan_tier in {"STARTER", "GROWTH", "PRO", "BUSINESS", "ENTERPRISE", "INSTITUTIONAL", "CUSTOM"} and s.status == "ACTIVE"
+    )
     free_to_paid_pct = round((paid_subs / total_customers) * 100, 1) if total_customers else 0.0
 
     # Committed MRR/ARR (based on active subscriptions, clearly labelled as commitments vs actual collected)
