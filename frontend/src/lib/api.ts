@@ -327,6 +327,7 @@ async function fetchWithAutoRefresh(
       const clean = bearer.trim();
       h["Authorization"] = `Bearer ${clean}`;
       h["X-Authorization"] = `Bearer ${clean}`;
+      h["X-Ultron-Authorization"] = `Bearer ${clean}`;
     }
     return h;
   };

@@ -539,4 +539,59 @@ def test_14_chat_lifecycle_with_unconfigured_or_failing_gemini_diagnostics(
     assert "assistant_message" in data or "message" in data or "reply" in data
 
 
+def test_15_resilient_header_authentication_x_ultron_authorization(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """Requirement 15: X-Ultron-Authorization header is extracted and authenticated when Authorization is absent."""
+    owner_token = auth_headers["owner"]["Authorization"]
+    # Provide only X-Ultron-Authorization, no Authorization header
+    r_conv = client.get(
+        "/api/v1/neon/conversations",
+        headers={"X-Ultron-Authorization": owner_token},
+    )
+    assert r_conv.status_code == 200
+    assert "conversations" in r_conv.json()
+
+    # Create conversation with X-Ultron-Authorization
+    r_create = client.post(
+        "/api/v1/neon/conversations",
+        json={"title": "Custom Header Session", "agent_id": "AGT-01"},
+        headers={"X-Ultron-Authorization": owner_token},
+    )
+    assert r_create.status_code == 201
+
+
+def test_16_vercel_sc_headers_unpacking(client: TestClient, auth_headers: dict) -> None:
+    """Requirement 16: x-vercel-sc-headers JSON envelope is correctly parsed to extract bearer token."""
+    owner_token = auth_headers["owner"]["Authorization"]
+
+    # Envelope with standard Authorization
+    sc_json = json.dumps({"Authorization": owner_token, "Host": "ultron-juwon2.vercel.app"})
+    r_conv1 = client.get(
+        "/api/v1/neon/conversations",
+        headers={"x-vercel-sc-headers": sc_json},
+    )
+    assert r_conv1.status_code == 200
+    assert "conversations" in r_conv1.json()
+
+    # Envelope with x-ultron-authorization
+    sc_json2 = json.dumps({"x-ultron-authorization": owner_token})
+    r_conv2 = client.get(
+        "/api/v1/neon/conversations",
+        headers={"x-vercel-sc-headers": sc_json2},
+    )
+    assert r_conv2.status_code == 200
+    assert "conversations" in r_conv2.json()
+
+
+def test_17_no_slash_redirects_for_neon_endpoints(client: TestClient, auth_headers: dict) -> None:
+    """Requirement 17: FastAPI does not issue 307 temporary redirects that cause WebKit to strip credentials."""
+    headers = auth_headers["owner"]
+    # Request without trailing slash should return 200 directly, not 307
+    r = client.get("/api/v1/neon/conversations", headers=headers, follow_redirects=False)
+    assert r.status_code == 200
+    assert r.status_code != 307
+
+
+
 

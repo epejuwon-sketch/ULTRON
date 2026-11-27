@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 from fastapi import Depends, Header, Request
@@ -28,11 +29,30 @@ def get_current_principal(
         auth_val = (
             request.headers.get("authorization")
             or request.headers.get("Authorization")
+            or request.headers.get("x-ultron-authorization")
+            or request.headers.get("X-Ultron-Authorization")
             or request.headers.get("x-authorization")
             or request.headers.get("X-Authorization")
             or request.headers.get("x-forwarded-authorization")
             or request.headers.get("X-Forwarded-Authorization")
         )
+
+    if not auth_val or not auth_val.strip():
+        sc_headers = request.headers.get("x-vercel-sc-headers")
+        if sc_headers:
+            try:
+                parsed_sc = json.loads(sc_headers)
+                if isinstance(parsed_sc, dict):
+                    auth_val = (
+                        parsed_sc.get("authorization")
+                        or parsed_sc.get("Authorization")
+                        or parsed_sc.get("x-ultron-authorization")
+                        or parsed_sc.get("X-Ultron-Authorization")
+                        or parsed_sc.get("x-authorization")
+                        or parsed_sc.get("X-Authorization")
+                    )
+            except Exception:
+                pass
 
     if not auth_val or not auth_val.strip():
         raise AuthenticationError("Missing Authorization Bearer token.")

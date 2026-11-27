@@ -84,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application = FastAPI(
         title=cfg.app_name,
         version=cfg.app_version,
+        redirect_slashes=False,
         description=(
             "Unified autonomous multi-agent intelligence operating system backend: "
             "NEON intelligence engine (Gemini primary), ARGON orchestration & ApprovalGate governance, "
@@ -107,7 +108,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=[
             "Authorization",
             "X-Authorization",
+            "X-Ultron-Authorization",
+            "x-ultron-authorization",
             "X-Forwarded-Authorization",
+            "x-vercel-sc-headers",
             "Content-Type",
             "Accept",
             "X-Requested-With",

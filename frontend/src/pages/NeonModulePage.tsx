@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  AUTH_STATE_EVENT,
   apiFetch,
   clearSession,
   getStoredToken,
@@ -63,9 +64,6 @@ import {
   ProductDiscoveryShowcase,
   type ProductIntelligenceData,
 } from "../components/ui/ProductDiscoveryShowcase";
-
-const AUTH_ERROR_REGEX =
-  /authorization|bearer|token|unauthorized|401|403|forbidden|session expired|reauth_required|authentication required|session required|sign in/i;
 
 function renderInlineLinksAndText(text: string) {
   const tokens = text.split(/(\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)]+)/g);
@@ -245,17 +243,12 @@ export default function NeonModulePage({
       // 1. Core conversational data
       const [cRes, aRes] = await Promise.all([
         apiFetch<any>("/api/v1/neon/conversations").catch((err: any) => {
-          const isAuth = AUTH_ERROR_REGEX.test(err?.message || "");
-          if (isAuth) {
-            clearSession("reauth_required");
-          } else {
-            const raw = String(err?.message || "");
-            setError(
-              /load failed|failed to fetch/i.test(raw)
-                ? "Network connection issue loading conversations. Tap Retry to reconnect."
-                : (raw || "Failed to load conversation history.")
-            );
-          }
+          const raw = String(err?.message || "");
+          setError(
+            /load failed|failed to fetch/i.test(raw)
+              ? "Network connection issue loading conversations. Tap Retry to reconnect."
+              : (raw || "Failed to load conversation history.")
+          );
           return { conversations: [] };
         }),
         apiFetch<any>("/api/v1/agents").catch(() => ({ agents: [] })),
@@ -282,17 +275,12 @@ export default function NeonModulePage({
         pushToast(`Discovered ${gRes.catalog.models_discovered} live Gemini models (${gRes.catalog.latency_ms}ms).`, "success");
       }
     } catch (e: any) {
-      const isAuth = AUTH_ERROR_REGEX.test(e?.message || "");
-      if (isAuth) {
-        clearSession("reauth_required");
-      } else {
-        const raw = String(e?.message || "");
-        setError(
-          /load failed|failed to fetch/i.test(raw)
-            ? "Network connection issue. Tap Retry to reconnect."
-            : (raw || "Failed to load intelligence workspace.")
-        );
-      }
+      const raw = String(e?.message || "");
+      setError(
+        /load failed|failed to fetch/i.test(raw)
+          ? "Network connection issue. Tap Retry to reconnect."
+          : (raw || "Failed to load intelligence workspace.")
+      );
     } finally {
       setLoading(false);
       if (discoverLive) setDiscoveringModels(false);
@@ -338,19 +326,34 @@ export default function NeonModulePage({
         return next;
       });
     } catch (e: any) {
-      const isAuth = AUTH_ERROR_REGEX.test(e?.message || "");
-      if (isAuth) {
-        clearSession("reauth_required");
-      } else {
-        const raw = String(e?.message || "");
-        setError(
-          /load failed|failed to fetch/i.test(raw)
-            ? "Network connection issue loading messages. Tap Retry to reload."
-            : (raw || "Failed to load messages.")
-        );
-      }
+      const raw = String(e?.message || "");
+      setError(
+        /load failed|failed to fetch/i.test(raw)
+          ? "Network connection issue loading messages. Tap Retry to reload."
+          : (raw || "Failed to load messages.")
+      );
     }
   }
+
+  useEffect(() => {
+    function handleAuthStateChange() {
+      const hasToken = Boolean(getStoredToken());
+      setTokenPresent(hasToken);
+      if (hasToken) {
+        loadBase(false);
+      } else {
+        setConversations([]);
+        setAgents([]);
+        setModels(null);
+        setTiers(null);
+        setUsage(null);
+        setGeminiDiag(null);
+        setMessages([]);
+      }
+    }
+    window.addEventListener(AUTH_STATE_EVENT, handleAuthStateChange);
+    return () => window.removeEventListener(AUTH_STATE_EVENT, handleAuthStateChange);
+  }, []);
 
   useEffect(() => {
     loadBase();
@@ -804,7 +807,7 @@ export default function NeonModulePage({
     await waitForSessionRestoration();
     const token = getStoredToken();
     if (!token) {
-      clearSession("reauth_required");
+      setTokenPresent(false);
       pushToast("Active authenticated session required. Please sign in.", "error");
       return;
     }
@@ -995,18 +998,12 @@ export default function NeonModulePage({
       if (err?.name === "AbortError" || err?.message?.includes("aborted")) {
         pushToast("NEON streaming cancelled.", "info");
       } else {
-        const isAuthError = AUTH_ERROR_REGEX.test(err?.message || "");
-        if (isAuthError) {
-          pushToast("Session expired or authentication required. Please sign in.", "error");
-          clearSession("reauth_required");
-        } else {
-          const raw = String(err?.message || "");
-          const msg = /load failed|failed to fetch/i.test(raw)
-            ? "Message dispatch failed due to a network connection issue. Tap Retry to resend."
-            : (raw || "Message dispatch failed.");
-          setError(msg);
-          pushToast(msg, "error");
-        }
+        const raw = String(err?.message || "");
+        const msg = /load failed|failed to fetch/i.test(raw)
+          ? "Message dispatch failed due to a network connection issue. Tap Retry to resend."
+          : (raw || "Message dispatch failed.");
+        setError(msg);
+        pushToast(msg, "error");
       }
     } finally {
       setSending(false);
@@ -1019,7 +1016,7 @@ export default function NeonModulePage({
     await waitForSessionRestoration();
     const token = getStoredToken();
     if (!token) {
-      clearSession("reauth_required");
+      setTokenPresent(false);
       pushToast("Authentication required to create a new conversation. Please sign in.", "error");
       return;
     }
@@ -1045,13 +1042,7 @@ export default function NeonModulePage({
       onSelectSubPage("chat");
       pushToast(`Started conversation with ${selectedAgent}.`, "success");
     } catch (err: any) {
-      const isAuthError = AUTH_ERROR_REGEX.test(err?.message || "");
-      if (isAuthError) {
-        clearSession("reauth_required");
-        pushToast("Session expired or authentication required. Please sign in.", "error");
-      } else {
-        pushToast(err.message, "error");
-      }
+      pushToast(err.message || "Failed to create conversation.", "error");
     }
   }
 
@@ -1123,12 +1114,12 @@ export default function NeonModulePage({
         }
       />
 
-      {error && !AUTH_ERROR_REGEX.test(error) && (
+      {error && (
         <ErrorState message={error} onRetry={() => loadBase(false)} />
       )}
       {warning && <div className="alert-box alert-warn">{warning}</div>}
 
-      {(!tokenPresent && !getStoredToken()) || AUTH_ERROR_REGEX.test(error) ? (
+      {!tokenPresent && !getStoredToken() ? (
         <div className="card">
           <div className="card-title"><span>NEON Intelligence // {page.label}</span></div>
           <EmptyState
