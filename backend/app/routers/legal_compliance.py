@@ -29,6 +29,7 @@ from app.services.legal_compliance_service import (
     evaluate_professional_review,
     execute_approved_filing,
     generate_statutory_policies,
+    get_company_registration_workflow,
     get_legal_compliance_dashboard,
     get_statutory_research_knowledge,
     populate_regulatory_compliance_calendar,
@@ -107,6 +108,15 @@ def api_get_dashboard(
     # Ensure regulatory calendar has baseline items
     populate_regulatory_compliance_calendar(db, tenant_id=principal.tenant_id)
     return get_legal_compliance_dashboard(db, tenant_id=principal.tenant_id)
+
+
+@router.get("/registration/workflow")
+def api_get_registration_workflow(
+    principal: Principal = Depends(require_perm("legal:read")),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Retrieve full 14-item CAC Company Registration Workflow with canonical statuses and statutory references."""
+    return get_company_registration_workflow(db, tenant_id=principal.tenant_id)
 
 
 @router.get("/research")

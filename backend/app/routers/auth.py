@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AuthenticationError
 from app.core.permissions import Principal
 from app.db.models import User
 from app.db.session import get_db
@@ -50,36 +51,76 @@ def api_bootstrap_owner(
 @router.post("/login")
 def api_login(
     body: LoginRequest,
+    response: Response,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """Authenticate with username & password and receive JWT access + refresh tokens."""
-    return login_user(
+    res = login_user(
         db,
         username=body.username,
         password=body.password,
         settings=settings,
         requested_tenant_id=body.tenant_id,
     )
+    raw_refresh = res.get("refresh_token")
+    if raw_refresh:
+        is_secure = settings.ultron_env == "production" or bool(settings.vercel)
+        response.set_cookie(
+            key="ultron_refresh_token",
+            value=raw_refresh,
+            httponly=True,
+            secure=is_secure,
+            samesite="lax",
+            max_age=int(settings.refresh_token_ttl_days * 86400),
+            path="/api/v1/auth",
+        )
+    return res
 
 
 @router.post("/refresh")
 def api_refresh(
-    body: RefreshRequest,
+    request: Request,
+    response: Response,
+    body: RefreshRequest | None = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """Rotate refresh token and return a new access + refresh token pair."""
-    return refresh_user_session(db, refresh_token=body.refresh_token, settings=settings)
+    token_candidate = ""
+    if body and body.refresh_token:
+        token_candidate = body.refresh_token.strip()
+    if not token_candidate:
+        token_candidate = request.cookies.get("ultron_refresh_token", "").strip()
+
+    if not token_candidate:
+        raise AuthenticationError("Refresh token required.")
+
+    res = refresh_user_session(db, refresh_token=token_candidate, settings=settings)
+    raw_refresh = res.get("refresh_token")
+    if raw_refresh:
+        is_secure = settings.ultron_env == "production" or bool(settings.vercel)
+        response.set_cookie(
+            key="ultron_refresh_token",
+            value=raw_refresh,
+            httponly=True,
+            secure=is_secure,
+            samesite="lax",
+            max_age=int(settings.refresh_token_ttl_days * 86400),
+            path="/api/v1/auth",
+        )
+    return res
 
 
 @router.post("/logout")
 def api_logout(
+    response: Response,
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> dict:
     """Immediately revoke the current Bearer token session."""
     revoke_session(db, principal=principal)
+    response.delete_cookie(key="ultron_refresh_token", path="/api/v1/auth")
     return {"status": "revoked", "jti": principal.jti}
 
 

@@ -33,6 +33,16 @@ def test_refresh_token_rotation_and_logout_revocation(client: TestClient, auth_h
     assert rotated.status_code == 200
     new_access = rotated.json()["access_token"]
     assert new_access != old_access
+    # Check that refresh cookie was set
+    cookie_val = rotated.cookies.get("ultron_refresh_token")
+    assert cookie_val is not None
+    assert cookie_val == rotated.json()["refresh_token"]
+
+    # Cookie-based refresh works when body is empty
+    cookie_rotated = client.post("/api/v1/auth/refresh", json={}, cookies={"ultron_refresh_token": cookie_val})
+    assert cookie_rotated.status_code == 200
+    newest_access = cookie_rotated.json()["access_token"]
+    assert newest_access != new_access
 
     # Old refresh token cannot be reused
     replay = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
@@ -41,10 +51,11 @@ def test_refresh_token_rotation_and_logout_revocation(client: TestClient, auth_h
     # Old access token was revoked on rotation
     assert client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {old_access}"}).status_code == 401
 
-    # New access token works, then logout revokes it immediately
-    new_hdr = {"Authorization": f"Bearer {new_access}"}
+    # New access token works, then logout revokes it immediately and clears cookie
+    new_hdr = {"Authorization": f"Bearer {newest_access}"}
     assert client.get("/api/v1/auth/me", headers=new_hdr).status_code == 200
-    assert client.post("/api/v1/auth/logout", headers=new_hdr).status_code == 200
+    logout_resp = client.post("/api/v1/auth/logout", headers=new_hdr)
+    assert logout_resp.status_code == 200
     assert client.get("/api/v1/auth/me", headers=new_hdr).status_code == 401
 
 

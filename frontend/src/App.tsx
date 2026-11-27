@@ -314,13 +314,17 @@ export default function App() {
     if (!user) return;
     const ensureFreshSession = async () => {
       const token = getStoredToken();
-      if (!token) {
+      const refreshToken = getStoredRefreshToken();
+      if (!token && !refreshToken) {
         setUser(null);
         return;
       }
-      const refreshed = await restoreSession();
-      if (!refreshed) {
-        setUser(null);
+      if (!token || isAccessTokenExpiredOrExpiring(token, 60)) {
+        const refreshed = await restoreSession();
+        if (refreshed) {
+          setUser(refreshed);
+        }
+        // If refresh failed due to offline/network glitch, preserve user state
       }
     };
     const onVisibility = () => {
@@ -406,7 +410,7 @@ export default function App() {
           <div className="auth-orbital">
             <UltronLogo variant="compact" size={30} />
             <EarthGlobe
-              size={device.isMobile ? 210 : 250}
+              size={device.isMobile ? 100 : 250}
               ambient
               status={backendReady === false ? "degraded" : backendReady === null ? "loading" : "ready"}
             />
@@ -431,7 +435,7 @@ export default function App() {
               />
             </div>
 
-            <div className="row">
+            <div className="row auth-mode-row">
               <button
                 id="auth-tab-login"
                 type="button"

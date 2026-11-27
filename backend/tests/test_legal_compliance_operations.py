@@ -390,11 +390,16 @@ def test_api_legal_dashboard_all_8_widgets(
     client: TestClient,
     auth_headers: dict[str, dict[str, str]],
 ):
-    """Verify unified 8-widget dashboard display contract."""
+    """Verify unified 8-widget dashboard display contract and embedded registration workflow."""
     headers = auth_headers["owner"]
     resp = client.get("/api/v1/legal/dashboard", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
+
+    # Verify embedded company registration workflow
+    assert "company_registration_workflow" in data
+    assert len(data["company_registration_workflow"]["items"]) == 14
+    assert data["company_registration_workflow"]["total_estimated_fee_ngn"] == 23000.0
 
     widgets = data["widgets"]
     expected_widgets = [
@@ -417,3 +422,130 @@ def test_api_legal_dashboard_all_8_widgets(
     assert len(widgets["filing_receipts"]) >= 3
     assert len(widgets["regulatory_deadlines"]) >= 3
     assert len(widgets["outstanding_compliance_tasks"]) >= 3
+
+
+def test_api_company_registration_workflow_14_items(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+):
+    """Verify 14-item statutory CAC company registration workflow with 8 canonical statuses."""
+    headers = auth_headers["owner"]
+    resp = client.get("/api/v1/legal/registration/workflow", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["portal_url"] == "https://icrp.cac.gov.ng/"
+    assert data["total_items"] == 14
+    assert data["total_estimated_fee_ngn"] == 23000.0
+    assert "CAC Official Portal (https://icrp.cac.gov.ng/)" in data["fee_schedule_source"]
+
+    canonical_statuses = set(data["canonical_statuses"])
+    expected_statuses = {
+        "NOT_STARTED",
+        "IN_PROGRESS",
+        "AWAITING_INFORMATION",
+        "AWAITING_PROFESSIONAL_REVIEW",
+        "AWAITING_OWNER_APPROVAL",
+        "SUBMITTED",
+        "APPROVED",
+        "REJECTED_QUERIED",
+    }
+    assert canonical_statuses == expected_statuses
+
+    items = data["items"]
+    assert len(items) == 14
+    item_keys = [it["key"] for it in items]
+    expected_keys = [
+        "COMPANY_TYPE_STRUCTURE",
+        "PROPOSED_NAME_RESEARCH",
+        "REGISTERED_OFFICE_INFO",
+        "BUSINESS_ACTIVITIES_OBJECTS",
+        "SHARE_CAPITAL_ALLOCATION",
+        "SHAREHOLDERS_SUBSCRIBERS",
+        "DIRECTORS_AND_SECRETARY",
+        "SUPPORTING_DOCUMENTS",
+        "MEMART_PREPARATION",
+        "FILING_FEE_ESTIMATES",
+        "PROFESSIONAL_REVIEW",
+        "APPLICATION_SUBMISSION_PREP",
+        "CERTIFICATE_STATUS_REPORT",
+        "POST_INCORPORATION_COMPLIANCE",
+    ]
+    assert item_keys == expected_keys
+
+    # Each item must have valid canonical status
+    for it in items:
+        assert it["status"] in canonical_statuses, f"Item {it['key']} has non-canonical status: {it['status']}"
+        assert it["statutory_ref"] != ""
+
+
+def test_cama_section_20_2_minor_subscriber_with_two_adults(
+    client: TestClient,
+    auth_headers: dict[str, dict[str, str]],
+):
+    """Verify CAMA 2020 §20(2): Minor can subscribe without guardian_officer_id if 2 adult subscribers exist."""
+    headers = auth_headers["owner"]
+    incorp = client.get("/api/v1/legal/incorporation", headers=headers).json()
+    draft_id = incorp["draft_id"]
+
+    # Register first adult subscriber
+    resp_adult1 = client.post(
+        "/api/v1/legal/officers",
+        headers=headers,
+        json={
+            "draft_id": draft_id,
+            "officer_type": "SHAREHOLDER",
+            "full_legal_name": "Babatunde Adeleke",
+            "date_of_birth": "1985-05-14",
+            "residential_address": "45 Marina Street, Lagos Island, Lagos, Nigeria",
+            "email": "adeleke@caravan.africa",
+            "phone": "+2348034445566",
+            "nin": "71625348901",
+            "shares_allocated": 150000,
+            "equity_percentage": 15.0,
+        },
+    )
+    assert resp_adult1.status_code == 201
+
+    # Register second adult subscriber
+    resp_adult2 = client.post(
+        "/api/v1/legal/officers",
+        headers=headers,
+        json={
+            "draft_id": draft_id,
+            "officer_type": "SHAREHOLDER",
+            "full_legal_name": "Chidinma Okonkwo",
+            "date_of_birth": "1990-11-20",
+            "residential_address": "88 Awolowo Road, Ikoyi, Lagos, Nigeria",
+            "email": "okonkwo@caravan.africa",
+            "phone": "+2348056667788",
+            "nin": "62534891702",
+            "shares_allocated": 150000,
+            "equity_percentage": 15.0,
+        },
+    )
+    assert resp_adult2.status_code == 201
+
+    # Now register a minor subscriber without guardian_officer_id -> MUST SUCCEED under CAMA 2020 §20(2)
+    resp_minor = client.post(
+        "/api/v1/legal/officers",
+        headers=headers,
+        json={
+            "draft_id": draft_id,
+            "officer_type": "SHAREHOLDER",
+            "full_legal_name": "Temitope Epejuwon",
+            "date_of_birth": "2010-09-05",  # 16 years old
+            "residential_address": "12 Adeola Odeku Street, Victoria Island, Lagos, Nigeria",
+            "email": "temi@caravan.africa",
+            "phone": "+2348091112233",
+            "nin": "53489172603",
+            "shares_allocated": 50000,
+            "equity_percentage": 5.0,
+            "guardian_officer_id": None,
+        },
+    )
+    assert resp_minor.status_code == 201
+    minor_data = resp_minor.json()
+    assert minor_data["is_under_18"] is True
+    assert minor_data["guardian_officer_id"] is None
+

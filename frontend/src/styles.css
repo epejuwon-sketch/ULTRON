@@ -1180,9 +1180,12 @@ select option {
 /* Auth Screens */
 .auth-wrap {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 24px 16px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .auth-shell {
@@ -1196,6 +1199,7 @@ select option {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 32px;
+  box-sizing: border-box;
 }
 
 .auth-orbital {
@@ -1215,6 +1219,114 @@ select option {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  box-sizing: border-box;
+}
+
+.auth-mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.auth-mode-row .btn {
+  width: 100%;
+  text-align: center;
+  justify-content: center;
+}
+
+/* iPhone XR (414x896), iPhone 12/13/14 (390x844), and all mobile portrait viewports */
+@media (max-width: 768px) {
+  .auth-wrap {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    overflow-x: hidden;
+  }
+
+  .auth-shell {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    padding: 20px 16px;
+    gap: 16px;
+    border-radius: 16px;
+    margin: auto 0;
+  }
+
+  .auth-orbital {
+    gap: 6px;
+  }
+
+  .auth-orbital .eyebrow-mono {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  .auth-orbital h1 {
+    font-size: 18px !important;
+    margin-top: 2px !important;
+    line-height: 1.25;
+  }
+
+  .auth-orbital p {
+    font-size: 12.5px !important;
+    line-height: 1.4 !important;
+    max-width: 290px !important;
+    margin: 4px auto 0 !important;
+  }
+
+  .auth-card {
+    padding: 16px;
+    gap: 12px;
+    border-radius: 12px;
+  }
+
+  .auth-card .brand-title {
+    font-size: 13px;
+  }
+
+  .auth-card .row-between {
+    align-items: center;
+  }
+
+  .auth-mode-row {
+    gap: 6px;
+  }
+
+  .auth-mode-row .btn {
+    min-height: 44px;
+    font-size: 13px;
+    padding: 0 6px;
+  }
+
+  .auth-card input.input {
+    min-height: 48px;
+    font-size: 16px !important; /* Critical: prevents iOS Safari auto-zoom on focus */
+    padding: 0 14px;
+    border-radius: 10px;
+  }
+
+  .auth-card button#auth-submit {
+    min-height: 48px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 10px;
+  }
+
+  .auth-diagnostic {
+    padding: 12px;
+    border-radius: 8px;
+  }
+
+  .auth-diagnostic-text {
+    font-size: 12px;
+    line-height: 1.4;
+  }
 }
 
 /* ==================== MOBILE & IPHONE RESPONSIVENESS ==================== */

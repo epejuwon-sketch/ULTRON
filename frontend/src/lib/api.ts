@@ -169,10 +169,7 @@ export async function waitForSessionRestoration(): Promise<AuthUser | null> {
     if (refreshToken) {
       return restoreSession();
     }
-    if (token) {
-      clearSession("session_expired");
-    }
-    return null;
+    return getStoredUser();
   }
   return getStoredUser();
 }
@@ -180,6 +177,8 @@ export async function waitForSessionRestoration(): Promise<AuthUser | null> {
 /**
  * Coordinate asynchronous session restoration and token rotation on startup or foreground resume.
  * Ensures concurrent requests await valid token resolution rather than firing with stale or missing credentials.
+ * Resilient to temporary network interruptions (offline/reconnect/backgrounding) so users are never
+ * prematurely kicked out of valid sessions.
  */
 export async function restoreSession(): Promise<AuthUser | null> {
   if (sessionRestorationPromise) {
@@ -194,29 +193,32 @@ export async function restoreSession(): Promise<AuthUser | null> {
     return null;
   }
 
-  // If token is missing or expired, attempt refresh if refresh token exists
-  if (!token || isAccessTokenExpiredOrExpiring(token, 45)) {
-    if (refreshToken) {
-      sessionRestorationPromise = (async () => {
-        try {
-          const refreshedToken = await refreshAccessTokenSingleFlight();
-          if (refreshedToken) {
-            return getStoredUser();
-          }
-          clearSession("session_expired");
-          return null;
-        } catch {
-          clearSession("session_expired");
-          return null;
-        } finally {
-          sessionRestorationPromise = null;
+  // If access token is still fresh, immediately return stored user
+  if (token && !isAccessTokenExpiredOrExpiring(token, 45)) {
+    return user;
+  }
+
+  // If token is missing or expired, attempt single-flight refresh
+  if (refreshToken) {
+    sessionRestorationPromise = (async () => {
+      try {
+        const refreshedToken = await refreshAccessTokenSingleFlight();
+        if (refreshedToken) {
+          return getStoredUser();
         }
-      })();
-      return sessionRestorationPromise;
-    } else {
-      clearSession("session_expired");
-      return null;
-    }
+        // If refresh failed due to offline/network outage but refresh credentials remain intact,
+        // do NOT clear session! Return current stored user to preserve state while offline.
+        if (getStoredRefreshToken() && user) {
+          return user;
+        }
+        return null;
+      } catch {
+        return user;
+      } finally {
+        sessionRestorationPromise = null;
+      }
+    })();
+    return sessionRestorationPromise;
   }
 
   return user;
@@ -226,6 +228,10 @@ export async function restoreSession(): Promise<AuthUser | null> {
  * Single-flight refresh token rotation via `POST /api/v1/auth/refresh`.
  * Because the backend immediately revokes a rotated refresh token, all concurrent
  * callers share this single promise so parallel requests never race to rotate the same token.
+ * 
+ * Security & Reliability Guarantee:
+ * - Only genuine server-side revocation (HTTP 401 or 403) clears the local session.
+ * - Network failures, server cold-starts (5xx), or temporary connectivity drops preserve the session.
  */
 export async function refreshAccessTokenSingleFlight(): Promise<string | null> {
   if (inflightRefreshPromise) {
@@ -233,9 +239,6 @@ export async function refreshAccessTokenSingleFlight(): Promise<string | null> {
   }
 
   const refreshToken = getStoredRefreshToken();
-  if (!refreshToken) {
-    return null;
-  }
 
   inflightRefreshPromise = (async () => {
     try {
@@ -243,27 +246,30 @@ export async function refreshAccessTokenSingleFlight(): Promise<string | null> {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
+        body: JSON.stringify({ refresh_token: refreshToken || "" }),
       });
       if (!resp.ok) {
-        clearSession("session_expired");
+        // ONLY clear session if server explicitly invalidated or revoked the token (HTTP 401/403)
+        // If server returned 5xx or is temporarily degraded, keep session intact
+        if (resp.status === 401 || resp.status === 403) {
+          clearSession("session_expired");
+        }
         return null;
       }
-      const data = await resp.json();
+      const data = await resp.json().catch(() => null);
       if (!data?.access_token) {
-        clearSession("session_expired");
         return null;
       }
       const existingUser = getStoredUser();
       const updatedUser: AuthUser | null = data.user || existingUser;
       if (!updatedUser) {
-        clearSession("session_expired");
         return null;
       }
       saveSession(data.access_token, updatedUser, data.refresh_token || refreshToken, data.expires_at || null);
       return data.access_token as string;
     } catch {
-      clearSession("session_expired");
+      // Network failure, app backgrounded, or offline:
+      // DO NOT clear session! The session credentials remain valid once network is restored.
       return null;
     } finally {
       inflightRefreshPromise = null;
@@ -271,6 +277,15 @@ export async function refreshAccessTokenSingleFlight(): Promise<string | null> {
   })();
 
   return inflightRefreshPromise;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === TOKEN_KEY || e.key === REFRESH_TOKEN_KEY || e.key === USER_KEY) {
+      const u = getStoredUser();
+      emitAuthStateChanged(u, "storage_sync");
+    }
+  });
 }
 
 function isAuthPublicEndpoint(path: string): boolean {
