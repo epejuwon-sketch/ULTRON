@@ -225,7 +225,7 @@ export function TopBar({
 }) {
   return (
     <header className="topbar">
-      <div className="row">
+      <div className="row" style={{ minWidth: 0, flex: "1 1 auto", overflow: "hidden", flexWrap: "nowrap" }}>
         {!device.isDesktop && (
           <button
             id="mobile-drawer-open"
@@ -238,10 +238,10 @@ export function TopBar({
           </button>
         )}
         {device.isMobile && <UltronLogo variant="mark" size={24} />}
-        <span className="topbar-title">{title}</span>
+        <span className="topbar-title" style={{ minWidth: 0, flex: 1, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }}>{title}</span>
       </div>
 
-      <div className="row">
+      <div className="row" style={{ flexShrink: 0, flexWrap: "nowrap", gap: 6 }}>
         <button
           id="topbar-command-palette"
           type="button"

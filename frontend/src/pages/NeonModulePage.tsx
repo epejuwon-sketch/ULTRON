@@ -1142,11 +1142,11 @@ export default function NeonModulePage({
           {page.id === "chat" && (
         <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="row-between">
-            <div className="row">
+            <div className="row" style={{ flex: "1 1 280px", minWidth: 0, flexWrap: "wrap", gap: 8 }}>
               <select
                 aria-label="Select NEON conversation"
                 className="select"
-                style={{ width: 220 }}
+                style={{ flex: 1, minWidth: 140, maxWidth: "100%" }}
                 value={activeId}
                 onChange={(e) => setActiveId(e.target.value)}
               >
@@ -1160,7 +1160,7 @@ export default function NeonModulePage({
               <select
                 aria-label="Select specialist agent handoff"
                 className="select"
-                style={{ width: 190 }}
+                style={{ flex: 1, minWidth: 140, maxWidth: "100%" }}
                 value={selectedAgent}
                 onChange={(e) => setSelectedAgent(e.target.value)}
               >
