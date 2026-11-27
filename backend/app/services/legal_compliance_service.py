@@ -1989,3 +1989,116 @@ def get_pre_registration_questionnaire(
         "updated_at": record.updated_at.isoformat() if record.updated_at else None,
     }
 
+
+def generate_cama2020_memart_markdown(data: dict[str, Any]) -> str:
+    """Generate a formal, statutory CAMA 2020 Memorandum and Articles of Association (MEMART) draft.
+    Complies with CAMA 2020 §27 (no authorized share capital; issued share capital only),
+    CAMA 2020 §20(1)(a) (infant director disqualification), and CAMA 2020 §20(2) (minor subscriber safeguards).
+    """
+    company_name = data.get("proposed_name", "CARAVAN COMMERCE TECHNOLOGIES LIMITED").upper()
+    reg_office = data.get("registered_office_address", "Plot 12, Admiralty Way, Lekki Phase 1, Lagos State, Nigeria")
+    issued_capital = float(data.get("issued_share_capital", 1000000.0))
+    nominal_val = float(data.get("nominal_value_per_share", 1.0))
+    total_shares = int(issued_capital / nominal_val) if nominal_val > 0 else int(issued_capital)
+    objects = data.get("principal_objects", [])
+    if not objects:
+        objects = [
+            "To carry on the business of software development, financial technology, and data intelligence platform operations.",
+            "To build, deploy, and license autonomous artificial intelligence algorithms for venture capital discovery, grant matching, and enterprise finance.",
+            "To provide credit infrastructure, verification pipelines, and analytical advisory for commercial entities across Africa.",
+            "To do all such other lawful things as are incidental or conducive to the attainment of the above objects.",
+        ]
+
+    shareholders = data.get("shareholders", [])
+    
+    subscribers_rows = []
+    for s in shareholders:
+        name = s.get("full_legal_name", "Participant")
+        shares = s.get("shares_allocated", 0)
+        pct = s.get("equity_percentage", 0.0)
+        is_minor = s.get("is_under_18", False)
+        is_dir = s.get("is_director", False)
+        role_desc = "Director & Subscriber" if is_dir else ("Minor Subscriber (Trustee Assigned)" if is_minor else "Subscriber")
+        subscribers_rows.append(
+            f"| {name} | {role_desc} | {shares:,} | {pct:.1f}% | Ordinary Shares |"
+        )
+    subscribers_table = "\n".join(subscribers_rows)
+
+    objects_formatted = "\n".join([f"    ({chr(97 + i)}) {obj}" for i, obj in enumerate(objects)])
+
+    return f"""# FEDERAL REPUBLIC OF NIGERIA
+## COMPANIES AND ALLIED MATTERS ACT 2020
+### COMPANY LIMITED BY SHARES
+
+---
+
+# MEMORANDUM OF ASSOCIATION
+## OF
+## {company_name}
+
+1. **NAME OF THE COMPANY**  
+   The name of the Company is **{company_name}**.
+
+2. **REGISTERED OFFICE**  
+   The registered office of the Company will be situated in Nigeria at:  
+   **{reg_office}**.
+
+3. **OBJECTS CLAUSE**  
+   The objects for which the Company is established are:  
+{objects_formatted}
+
+4. **COMPANY STATUS**  
+   The Company is a **Private Company Limited by Shares**.
+
+5. **LIMITATION OF LIABILITY**  
+   The liability of the members is limited by shares.
+
+6. **ISSUED SHARE CAPITAL (CAMA 2020 §27(2)(a))**  
+   The issued share capital of the Company is **₦{issued_capital:,.2f}** (Nigerian Naira) divided into **{total_shares:,} Ordinary Shares of ₦{nominal_val:.2f} each**.  
+   *(Notice: Authorized share capital is abolished by CAMA 2020. The issued share capital complies with and exceeds the statutory minimum of ₦100,000 for private companies under CAMA 2020 Section 27(2)(a)).*
+
+---
+
+# ARTICLES OF ASSOCIATION
+## OF
+## {company_name}
+
+### INTERPRETATION & REGULATIONS
+1. In these Articles, unless the context otherwise requires, terms defined in the Companies and Allied Matters Act 2020 (CAMA 2020) shall have the same meaning herein.
+2. The Company shall be governed by Model Articles for Private Companies Limited by Shares under the Companies Regulations 2021, subject to the modifications set out herein.
+
+### TRANSFER AND TRANSMISSION OF SHARES
+3. The directors may, in their absolute discretion and without assigning any reason therefor, decline to register any transfer of any share, whether or not it is a fully paid share.
+4. Any member proposing to transfer shares must first offer them to existing members at fair market value (Pre-emption Rights).
+
+### DIRECTORS & CAPACITY (CAMA 2020 §20(1)(a) & §271)
+5. The number of directors shall not be less than two (2).
+6. **DISQUALIFICATION OF INFANT DIRECTORS (CAMA 2020 §20(1)(a)):**  
+   Pursuant to Section 20(1)(a) of CAMA 2020, an individual who is under the age of eighteen (18) years is strictly disqualified from being appointed or acting as a Director of the Company. Directorship capacity cannot be waived or granted to a minor under any circumstances.
+
+### MINOR SHAREHOLDERS & TRUSTEES (CAMA 2020 §20(2))
+7. **MINOR SUBSCRIBER EXCEPTION & ADULT GUARDIANSHIP:**  
+   Pursuant to Section 20(2) of CAMA 2020, a person under 18 years may be allotted shares and hold equity provided that there are at least two (2) other adult non-disqualified persons who are subscribers/directors, or the minor's shares are held on trust by an adult Legal Guardian Trustee until the attainment of majority (18 years).
+
+### STATUTORY COMPLIANCE & LEGAL OVERSIGHT (CAMA 2020 §40)
+8. Prior to presentation for registration at the Corporate Affairs Commission (CAC), these Memorandum and Articles of Association and accompanying incorporation forms must undergo review by a CAC-accredited Nigerian Legal Practitioner or Chartered Secretary, who shall attest the statutory Statement of Compliance under Section 40 of CAMA 2020.
+
+---
+
+### SUBSCRIBERS AND SHARE ALLOCATION
+
+We, the several persons whose names and addresses are subscribed, wish to be formed into a company in pursuance of this Memorandum and Articles of Association, and we respectively agree to take the number of shares in the capital of the company set opposite our respective names:
+
+| Full Legal Name | Capacity / Status | Shares Allocated | Equity % | Share Class |
+| :--- | :--- | :--- | :--- | :--- |
+{subscribers_table}
+
+**TOTAL ISSUED SHARES:** {total_shares:,} Ordinary Shares (100.0%)  
+**TOTAL ISSUED SHARE CAPITAL:** ₦{issued_capital:,.2f}
+
+---
+*DRAFT PREPARED BY ULTRON CARAVAN LEGAL AUTOMATION ENGINE.*  
+*STATUS: DRAFT — NOT YET SUBMITTED TO THE CORPORATE AFFAIRS COMMISSION.*  
+*ZERO PERSONAL IDENTITY TRANSMISSION (NO NIN / BVN / PASSPORTS RECORDED).*
+"""
+

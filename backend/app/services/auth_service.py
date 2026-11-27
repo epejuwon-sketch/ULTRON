@@ -226,6 +226,7 @@ def login_user(
         "refresh_token": raw_refresh,
         "token_type": "Bearer",
         "expires_at": access_exp.isoformat(),
+        "session_expires_at": refresh_exp.isoformat(),
         "user": {
             "user_id": user.user_id,
             "username": user.username,
@@ -310,6 +311,7 @@ def refresh_user_session(db: Session, *, refresh_token: str, settings: Settings)
         "refresh_token": raw_refresh,
         "token_type": "Bearer",
         "expires_at": access_exp.isoformat(),
+        "session_expires_at": new_refresh_exp.isoformat(),
         "user": {
             "user_id": user.user_id,
             "username": user.username,

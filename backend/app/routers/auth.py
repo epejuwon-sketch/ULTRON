@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -66,13 +68,21 @@ def api_login(
     raw_refresh = res.get("refresh_token")
     if raw_refresh:
         is_secure = settings.ultron_env == "production" or bool(settings.vercel)
+        remaining_seconds = settings.session_duration_seconds
+        session_exp_iso = res.get("session_expires_at")
+        if session_exp_iso:
+            try:
+                exp_dt = datetime.fromisoformat(session_exp_iso)
+                remaining_seconds = max(0, int((exp_dt - datetime.now(timezone.utc)).total_seconds()))
+            except Exception:
+                remaining_seconds = settings.session_duration_seconds
         response.set_cookie(
             key="ultron_refresh_token",
             value=raw_refresh,
             httponly=True,
             secure=is_secure,
             samesite="lax",
-            max_age=settings.session_duration_seconds,
+            max_age=remaining_seconds,
             path="/api/v1/auth",
         )
     return res
@@ -100,13 +110,21 @@ def api_refresh(
     raw_refresh = res.get("refresh_token")
     if raw_refresh:
         is_secure = settings.ultron_env == "production" or bool(settings.vercel)
+        remaining_seconds = settings.session_duration_seconds
+        session_exp_iso = res.get("session_expires_at")
+        if session_exp_iso:
+            try:
+                exp_dt = datetime.fromisoformat(session_exp_iso)
+                remaining_seconds = max(0, int((exp_dt - datetime.now(timezone.utc)).total_seconds()))
+            except Exception:
+                remaining_seconds = settings.session_duration_seconds
         response.set_cookie(
             key="ultron_refresh_token",
             value=raw_refresh,
             httponly=True,
             secure=is_secure,
             samesite="lax",
-            max_age=settings.session_duration_seconds,
+            max_age=remaining_seconds,
             path="/api/v1/auth",
         )
     return res
