@@ -101,17 +101,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origin_list,
+        allow_origin_regex=cfg.cors_origin_regex,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=[
-            "Authorization",
-            "Content-Type",
-            "X-Tenant-ID",
-            "X-Request-ID",
-            "Idempotency-Key",
-            "X-Device-Token",
-            "X-Reauth-Token",
-        ],
+        allow_headers=["*"],
     )
 
     @application.middleware("http")

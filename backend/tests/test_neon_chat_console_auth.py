@@ -413,3 +413,76 @@ def test_12_chat_send_request_header_and_query_fallbacks(client: TestClient, aut
     assert "bearer" in _get_err(r2).lower()
 
 
+def test_13_production_vercel_cors_preflight_and_headers(client: TestClient) -> None:
+    """Requirement 13: CORS preflight allows production Vercel domains and handles non-safelisted headers."""
+    # 1. Production domain preflight
+    r1 = client.options(
+        "/api/v1/neon/conversations",
+        headers={
+            "Origin": "https://ultron-juwon2.vercel.app",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization, content-type, cache-control",
+        },
+    )
+    assert r1.status_code == 200
+    assert r1.headers.get("access-control-allow-origin") == "https://ultron-juwon2.vercel.app"
+    assert "authorization" in r1.headers.get("access-control-allow-headers", "").lower()
+    assert r1.headers.get("access-control-allow-credentials") == "true"
+
+    # 2. Preview branch domain matching regex
+    r2 = client.options(
+        "/api/v1/neon/conversations",
+        headers={
+            "Origin": "https://ultron-juwon2-git-main-epejuwon.vercel.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization, content-type",
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.headers.get("access-control-allow-origin") == "https://ultron-juwon2-git-main-epejuwon.vercel.app"
+
+    # 3. Disallowed external origin rejected
+    r3 = client.options(
+        "/api/v1/neon/conversations",
+        headers={
+            "Origin": "https://malicious-attacker.com",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert r3.status_code == 400
+
+
+def test_14_chat_lifecycle_with_unconfigured_or_failing_gemini_diagnostics(
+    client: TestClient, auth_headers: dict
+) -> None:
+    """Requirement 14: Chat lifecycle succeeds even when Gemini diagnostics report unconfigured or degraded."""
+    headers = auth_headers["owner"]
+
+    # Diagnostics show honest unconfigured / degraded status without raising 500
+    r_diag = client.get("/api/v1/neon/gemini/diagnostics?discover=false", headers=headers)
+    assert r_diag.status_code == 200
+    diag_data = r_diag.json()
+    assert "configured" in diag_data
+
+    # Chat conversation creation works regardless of external diagnostics state
+    r_conv = client.post(
+        "/api/v1/neon/conversations",
+        json={"title": "Resilient Session Thread", "agent_id": "AGT-01"},
+        headers=headers,
+    )
+    assert r_conv.status_code == 201
+    cid = r_conv.json()["conversation_id"]
+
+    # Message sending succeeds with deterministic local fallback
+    r_msg = client.post(
+        f"/api/v1/neon/conversations/{cid}/messages",
+        json={"content": "Diagnose storage utilization and suggest cleanup directives."},
+        headers=headers,
+    )
+    assert r_msg.status_code == 200
+    data = r_msg.json()
+    assert "assistant_message" in data or "message" in data or "reply" in data
+
+
+

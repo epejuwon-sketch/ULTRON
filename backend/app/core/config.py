@@ -252,8 +252,12 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, alias="ULTRON_PORT")
     log_level: str = Field(default="INFO", alias="ULTRON_LOG_LEVEL")
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:5173",
+        default="http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173,https://ultron-juwon2.vercel.app,https://caravan-juwon2.vercel.app",
         alias="ULTRON_CORS_ORIGINS",
+    )
+    cors_origin_regex: str = Field(
+        default=r"^https://([a-zA-Z0-9_-]+\.)*vercel\.app$",
+        alias="ULTRON_CORS_ORIGIN_REGEX",
     )
 
     # --- Rate Limiting & Orchestration Limits ---

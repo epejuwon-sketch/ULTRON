@@ -226,6 +226,7 @@ export async function refreshAccessTokenSingleFlight(): Promise<string | null> {
     try {
       const resp = await fetch("/api/v1/auth/refresh", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
@@ -313,10 +314,19 @@ async function fetchWithAutoRefresh(
     return h;
   };
 
-  let resp = await fetch(path, {
-    ...init,
-    headers: buildHeaders(token),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(path, {
+      ...init,
+      credentials: "same-origin",
+      headers: buildHeaders(token),
+    });
+  } catch (netErr: any) {
+    if (netErr?.name === "TypeError" && /load failed|failed to fetch/i.test(netErr?.message || "")) {
+      throw new Error(`Network request failed (${netErr.message}). Check connection or deployment access.`);
+    }
+    throw netErr;
+  }
 
   // Reactive 401 recovery: attempt single-flight refresh or reuse token refreshed by a sibling request
   if (resp.status === 401 && !publicEndpoint) {
@@ -330,10 +340,18 @@ async function fetchWithAutoRefresh(
     }
 
     if (retryToken) {
-      resp = await fetch(path, {
-        ...init,
-        headers: buildHeaders(retryToken),
-      });
+      try {
+        resp = await fetch(path, {
+          ...init,
+          credentials: "same-origin",
+          headers: buildHeaders(retryToken),
+        });
+      } catch (netErr: any) {
+        if (netErr?.name === "TypeError" && /load failed|failed to fetch/i.test(netErr?.message || "")) {
+          throw new Error(`Network request failed (${netErr.message}). Check connection or deployment access.`);
+        }
+        throw netErr;
+      }
     }
 
     if (resp.status === 401) {

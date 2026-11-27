@@ -238,36 +238,43 @@ export default function NeonModulePage({
       return;
     }
 
-    const authErrors: string[] = [];
-    const trackErr = <T,>(fallback: T) => (err: any): T => {
-      if (err?.message) authErrors.push(String(err.message));
-      return fallback;
-    };
     try {
-      const [cRes, aRes, mRes, tRes, uRes, gRes] = await Promise.all([
-        apiFetch<any>("/api/v1/neon/conversations").catch(trackErr({ conversations: [] })),
-        apiFetch<any>("/api/v1/agents").catch(trackErr({ agents: [] })),
-        apiFetch<any>("/api/v1/neon/models").catch(trackErr(null)),
-        apiFetch<any>("/api/v1/neon/tiers").catch(trackErr(null)),
-        apiFetch<any>("/api/v1/neon/usage").catch(trackErr(null)),
-        apiFetch<any>(`/api/v1/neon/gemini/diagnostics?discover=${discoverLive ? "true" : "false"}`).catch(trackErr(null)),
+      // 1. Core conversational data
+      const [cRes, aRes] = await Promise.all([
+        apiFetch<any>("/api/v1/neon/conversations").catch((err: any) => {
+          const isAuth = /authorization|bearer|token|unauthorized|401|session expired/i.test(err?.message || "");
+          if (isAuth) {
+            clearSession("reauth_required");
+          } else {
+            const raw = String(err?.message || "");
+            setError(
+              /load failed|failed to fetch/i.test(raw)
+                ? "Network connection issue loading conversations. Tap Retry to reconnect."
+                : (raw || "Failed to load conversation history.")
+            );
+          }
+          return { conversations: [] };
+        }),
+        apiFetch<any>("/api/v1/agents").catch(() => ({ agents: [] })),
       ]);
+
       const list = cRes.conversations || [];
       setConversations(list);
       if (!activeId && list.length > 0) setActiveId(list[0].conversation_id);
       setAgents(aRes.agents || []);
+
+      // 2. Auxiliary diagnostics & telemetry — isolated so individual diagnostic errors never prevent chat from loading
+      const [mRes, tRes, uRes, gRes] = await Promise.all([
+        apiFetch<any>("/api/v1/neon/models").catch(() => null),
+        apiFetch<any>("/api/v1/neon/tiers").catch(() => null),
+        apiFetch<any>("/api/v1/neon/usage").catch(() => null),
+        apiFetch<any>(`/api/v1/neon/gemini/diagnostics?discover=${discoverLive ? "true" : "false"}`).catch(() => null),
+      ]);
       setModels(mRes);
       setTiers(tRes);
       setUsage(uRes);
       setGeminiDiag(gRes);
-      if (authErrors.length >= 3) {
-        const isAuth = authErrors.some((e) => /authorization|bearer|token|unauthorized|401|session expired/i.test(e));
-        if (isAuth) {
-          clearSession("reauth_required");
-        } else {
-          setError(authErrors[0]);
-        }
-      }
+
       if (discoverLive && gRes?.catalog?.catalog_verified) {
         pushToast(`Discovered ${gRes.catalog.models_discovered} live Gemini models (${gRes.catalog.latency_ms}ms).`, "success");
       }
@@ -276,7 +283,12 @@ export default function NeonModulePage({
       if (isAuth) {
         clearSession("reauth_required");
       } else {
-        setError(e.message);
+        const raw = String(e?.message || "");
+        setError(
+          /load failed|failed to fetch/i.test(raw)
+            ? "Network connection issue. Tap Retry to reconnect."
+            : (raw || "Failed to load intelligence workspace.")
+        );
       }
     } finally {
       setLoading(false);
@@ -327,7 +339,12 @@ export default function NeonModulePage({
       if (isAuth) {
         clearSession("reauth_required");
       } else {
-        setError(e.message);
+        const raw = String(e?.message || "");
+        setError(
+          /load failed|failed to fetch/i.test(raw)
+            ? "Network connection issue loading messages. Tap Retry to reload."
+            : (raw || "Failed to load messages.")
+        );
       }
     }
   }
@@ -980,8 +997,12 @@ export default function NeonModulePage({
           pushToast("Session expired or authentication required. Please sign in.", "error");
           clearSession("reauth_required");
         } else {
-          setError(err.message);
-          pushToast(err.message, "error");
+          const raw = String(err?.message || "");
+          const msg = /load failed|failed to fetch/i.test(raw)
+            ? "Message dispatch failed due to a network connection issue. Tap Retry to resend."
+            : (raw || "Message dispatch failed.");
+          setError(msg);
+          pushToast(msg, "error");
         }
       }
     } finally {
